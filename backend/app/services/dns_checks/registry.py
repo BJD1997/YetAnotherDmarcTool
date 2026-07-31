@@ -1,0 +1,16 @@
+"""Orchestrates running every Phase 3 checker for one domain and normalizes
+the results into a dict keyed by CheckType, ready for the caller (see
+app/routers/dns_checks.py) to persist as dns_check_results rows."""
+
+from app.models.enums import CheckType
+from app.services.dns_checks import dkim, dmarc, mx, spf
+from app.services.dns_checks.base import Finding
+
+
+async def run_all(domain_name: str, dkim_selectors: list[str]) -> dict[CheckType, list[Finding]]:
+    return {
+        CheckType.spf: await spf.check(domain_name),
+        CheckType.dkim: await dkim.check(domain_name, dkim_selectors),
+        CheckType.dmarc: await dmarc.check(domain_name),
+        CheckType.mx: await mx.check(domain_name),
+    }
