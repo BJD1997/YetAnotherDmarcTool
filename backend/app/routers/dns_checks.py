@@ -12,6 +12,7 @@ from app.models.dns_check import DnsCheckResult
 from app.models.domain import Domain
 from app.models.enums import CheckStatus, CheckType, DomainVerificationStatus
 from app.models.user import User
+from app.services.dns_checks.inbound_view import build_inbound_hosts
 from app.services.dns_checks.registry import run_all
 
 router = APIRouter(tags=["dns-checks"])
@@ -62,6 +63,26 @@ async def list_latest_checks(
         .order_by(DnsCheckResult.check_type, DnsCheckResult.subject.nulls_first())
     )
     return [_result_out(r) for r in result.scalars().all()]
+
+
+@router.get("/domains/{domain_id}/dmarc/inbound")
+async def inbound_hosts(
+    domain_id: uuid.UUID, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
+) -> list[dict]:
+    await _get_owned_domain(db, domain_id, user.organization_id)
+    rows = await build_inbound_hosts(db, domain_id)
+    return [
+        {
+            "host": r.host,
+            "priority": r.priority,
+            "provider_label": r.provider_label,
+            "mx_status": r.mx_status,
+            "starttls_status": r.starttls_status,
+            "dane_status": r.dane_status,
+            "mta_sts_status": r.mta_sts_status,
+        }
+        for r in rows
+    ]
 
 
 @router.post("/domains/{domain_id}/checks/recheck")

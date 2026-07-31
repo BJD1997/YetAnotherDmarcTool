@@ -3,7 +3,7 @@ the results into a dict keyed by CheckType, ready for the caller (see
 app/routers/dns_checks.py) to persist as dns_check_results rows."""
 
 from app.models.enums import CheckType
-from app.services.dns_checks import dane, dkim, dmarc, dmarcbis, mta_sts, mx, spf, tls_rpt_check
+from app.services.dns_checks import dane, dkim, dmarc, dmarcbis, mta_sts, mx, spf, starttls, tls_rpt_check
 from app.services.dns_checks.base import Finding
 
 
@@ -17,4 +17,5 @@ async def run_all(domain_name: str, dkim_selectors: list[str]) -> dict[CheckType
         CheckType.mta_sts: await mta_sts.check(domain_name),
         CheckType.dane: await dane.check(domain_name),
         CheckType.tls_rpt: await tls_rpt_check.check(domain_name),
+        CheckType.starttls: await starttls.check(domain_name),
     }

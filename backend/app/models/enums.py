@@ -32,6 +32,7 @@ class CheckType(str, enum.Enum):
     tls_rpt = "tls_rpt"
     dane = "dane"
     mx = "mx"
+    starttls = "starttls"
 
 
 class CheckStatus(str, enum.Enum):
@@ -77,3 +78,9 @@ class JobStatus(str, enum.Enum):
     running = "running"
     success = "success"
     failure = "failure"
+
+
+class SourceMatchMethod(str, enum.Enum):
+    pattern = "pattern"
+    ptr_domain = "ptr_domain"
+    ip_fallback = "ip_fallback"

@@ -6,10 +6,27 @@ export interface DmarcSummary {
   report_count: number;
 }
 
-export interface DmarcSource {
-  source_ip: string;
-  header_from: string;
-  count: number;
+export interface DmarcOutboundService {
+  service_label: string;
+  match_method: "pattern" | "ptr_domain" | "ip_fallback";
+  volume: number;
+  source_ip_count: number;
+  spf_aligned_pct: number | null;
+  dkim_aligned_pct: number | null;
+  dmarc_pass_pct: number | null;
+  accepted: number;
+  quarantined: number;
+  rejected: number;
+}
+
+export interface InboundHostRow {
+  host: string;
+  priority: number | null;
+  provider_label: string;
+  mx_status: "pass" | "warn" | "fail" | "error" | null;
+  starttls_status: "pass" | "warn" | "fail" | "error" | null;
+  dane_status: "pass" | "warn" | "fail" | "error" | null;
+  mta_sts_status: "pass" | "not_covered" | "not_configured";
 }
 
 export interface DmarcReportListItem {

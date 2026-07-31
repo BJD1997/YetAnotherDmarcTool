@@ -1,4 +1,4 @@
-export type CheckType = "spf" | "dkim" | "dmarc" | "dmarcbis" | "mta_sts" | "tls_rpt" | "dane" | "mx";
+export type CheckType = "spf" | "dkim" | "dmarc" | "dmarcbis" | "mta_sts" | "tls_rpt" | "dane" | "mx" | "starttls";
 export type CheckStatus = "pass" | "warn" | "fail" | "error";
 
 export interface CheckResult {

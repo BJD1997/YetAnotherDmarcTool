@@ -9,9 +9,10 @@ from app.middleware.tenant_context import get_current_user
 from app.models.dmarc_aggregate import DmarcAggregateRecord, DmarcAggregateReport
 from app.models.dmarc_forensic import DmarcForensicReport
 from app.models.domain import Domain
-from app.models.enums import AuthResult
+from app.models.enums import AuthResult, Disposition
 from app.models.tls_rpt import TlsRptReport
 from app.models.user import User
+from app.services.source_identification.service_identifier import identify_many
 
 router = APIRouter(tags=["dmarc-reports"])
 
@@ -67,24 +68,100 @@ async def dmarc_summary(
 
 @router.get("/domains/{domain_id}/dmarc/sources")
 async def dmarc_sources(
-    domain_id: uuid.UUID,
-    limit: int = Query(10, ge=1, le=100),
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    domain_id: uuid.UUID, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
 ) -> list[dict]:
+    """Per-sending-service breakdown (not per raw source_ip — header_from is
+    constant per domain so grouping by it, as this endpoint used to, added
+    nothing; source_ip alone is the real grouping key, further rolled up by
+    identified sending service). Volume/alignment/disposition are aggregated
+    per-IP in SQL, then grouped by service label in Python (simpler and more
+    testable than an awkward GROUP BY over a value that only exists after a
+    DNS lookup)."""
     await _get_owned_domain(db, domain_id, user.organization_id)
 
-    result = await db.execute(
-        select(DmarcAggregateRecord.source_ip, DmarcAggregateRecord.header_from, func.sum(DmarcAggregateRecord.count))
-        .where(DmarcAggregateRecord.domain_id == domain_id)
-        .group_by(DmarcAggregateRecord.source_ip, DmarcAggregateRecord.header_from)
-        .order_by(func.sum(DmarcAggregateRecord.count).desc())
-        .limit(limit)
+    dmarc_pass = (DmarcAggregateRecord.dkim_result == AuthResult.pass_) | (
+        DmarcAggregateRecord.spf_result == AuthResult.pass_
     )
-    return [
-        {"source_ip": str(ip), "header_from": header_from, "count": int(count)}
-        for ip, header_from, count in result.all()
+
+    def _sum_where(condition):
+        return func.sum(case((condition, DmarcAggregateRecord.count), else_=0))
+
+    result = await db.execute(
+        select(
+            DmarcAggregateRecord.source_ip,
+            func.sum(DmarcAggregateRecord.count),
+            _sum_where(DmarcAggregateRecord.spf_result == AuthResult.pass_),
+            _sum_where(DmarcAggregateRecord.dkim_result == AuthResult.pass_),
+            _sum_where(dmarc_pass),
+            _sum_where(DmarcAggregateRecord.disposition == Disposition.none),
+            _sum_where(DmarcAggregateRecord.disposition == Disposition.quarantine),
+            _sum_where(DmarcAggregateRecord.disposition == Disposition.reject),
+        )
+        .where(DmarcAggregateRecord.domain_id == domain_id)
+        .group_by(DmarcAggregateRecord.source_ip)
+    )
+    per_ip = [
+        {
+            "source_ip": str(ip),
+            "volume": int(volume),
+            "spf_pass": int(spf_pass),
+            "dkim_pass": int(dkim_pass),
+            "dmarc_pass": int(dmarc_pass_count),
+            "accepted": int(accepted),
+            "quarantined": int(quarantined),
+            "rejected": int(rejected),
+        }
+        for ip, volume, spf_pass, dkim_pass, dmarc_pass_count, accepted, quarantined, rejected in result.all()
     ]
+    if not per_ip:
+        return []
+
+    identities = await identify_many(db, [row["source_ip"] for row in per_ip])
+    await db.commit()  # persists any newly-resolved source_ip_identities cache rows
+
+    def _pct(n: int, d: int) -> float | None:
+        return round(n / d * 100, 1) if d else None
+
+    by_service: dict[str, dict] = {}
+    for row in per_ip:
+        identity = identities[row["source_ip"]]
+        bucket = by_service.setdefault(
+            identity.service_label,
+            {
+                "service_label": identity.service_label,
+                "match_method": identity.match_method.value,
+                "volume": 0,
+                "source_ip_count": 0,
+                "spf_pass": 0,
+                "dkim_pass": 0,
+                "dmarc_pass": 0,
+                "accepted": 0,
+                "quarantined": 0,
+                "rejected": 0,
+            },
+        )
+        bucket["volume"] += row["volume"]
+        bucket["source_ip_count"] += 1
+        for key in ("spf_pass", "dkim_pass", "dmarc_pass", "accepted", "quarantined", "rejected"):
+            bucket[key] += row[key]
+
+    services = [
+        {
+            "service_label": b["service_label"],
+            "match_method": b["match_method"],
+            "volume": b["volume"],
+            "source_ip_count": b["source_ip_count"],
+            "spf_aligned_pct": _pct(b["spf_pass"], b["volume"]),
+            "dkim_aligned_pct": _pct(b["dkim_pass"], b["volume"]),
+            "dmarc_pass_pct": _pct(b["dmarc_pass"], b["volume"]),
+            "accepted": b["accepted"],
+            "quarantined": b["quarantined"],
+            "rejected": b["rejected"],
+        }
+        for b in by_service.values()
+    ]
+    services.sort(key=lambda s: -s["volume"])
+    return services
 
 
 @router.get("/domains/{domain_id}/dmarc/reports")

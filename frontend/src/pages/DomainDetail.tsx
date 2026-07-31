@@ -3,9 +3,12 @@ import { useParams, Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "../api/client";
 import type { Domain } from "../api/types";
-import type { DmarcReportListItem, DmarcSource, DmarcSummary } from "../api/dmarc";
+import type { DmarcOutboundService, DmarcReportListItem, DmarcSummary, InboundHostRow } from "../api/dmarc";
 import type { CheckResult, CheckStatus, CheckType, DkimSelectorItem } from "../api/dnsChecks";
 import { useAuth } from "../auth/AuthContext";
+import { Stat, StatusBadge } from "../components/domain/shared";
+import OutboundTable from "../components/domain/OutboundTable";
+import InboundTable from "../components/domain/InboundTable";
 
 const CHECK_LABELS: Record<CheckType, string> = {
   spf: "SPF",
@@ -16,9 +19,10 @@ const CHECK_LABELS: Record<CheckType, string> = {
   tls_rpt: "TLS-RPT",
   dane: "DANE",
   mx: "MX",
+  starttls: "STARTTLS",
 };
 
-const CHECK_ORDER: CheckType[] = ["spf", "dkim", "dmarc", "mx", "mta_sts", "dane", "dmarcbis", "tls_rpt"];
+const CHECK_ORDER: CheckType[] = ["spf", "dkim", "dmarc", "mx", "starttls", "mta_sts", "dane", "dmarcbis", "tls_rpt"];
 
 export default function DomainDetail() {
   const { domainId } = useParams<{ domainId: string }>();
@@ -37,12 +41,18 @@ export default function DomainDetail() {
 
   const { data: sources } = useQuery({
     queryKey: ["dmarc-sources", domainId],
-    queryFn: () => api.get<DmarcSource[]>(`/domains/${domainId}/dmarc/sources`),
+    queryFn: () => api.get<DmarcOutboundService[]>(`/domains/${domainId}/dmarc/sources`),
   });
 
   const { data: reports } = useQuery({
     queryKey: ["dmarc-reports-list", domainId],
     queryFn: () => api.get<DmarcReportListItem[]>(`/domains/${domainId}/dmarc/reports`),
+  });
+
+  const { data: inboundHosts } = useQuery({
+    queryKey: ["dmarc-inbound", domainId],
+    queryFn: () => api.get<InboundHostRow[]>(`/domains/${domainId}/dmarc/inbound`),
+    enabled: domain?.verification_status === "verified",
   });
 
   const passRate =
@@ -75,27 +85,23 @@ export default function DomainDetail() {
         </div>
       )}
 
-      {sources && sources.length > 0 && (
+      {summary && summary.report_count > 0 && (
         <>
-          <h3>Top sources</h3>
-          <table style={{ borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ textAlign: "left" }}>
-                <th style={{ paddingRight: "1.5rem" }}>Source IP</th>
-                <th style={{ paddingRight: "1.5rem" }}>Header From</th>
-                <th>Volume</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sources.map((s) => (
-                <tr key={s.source_ip + s.header_from}>
-                  <td style={{ paddingRight: "1.5rem" }}>{s.source_ip}</td>
-                  <td style={{ paddingRight: "1.5rem" }}>{s.header_from}</td>
-                  <td>{s.count}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <h3>Outbound email</h3>
+          <p style={{ color: "#6b7280", fontSize: "0.9rem", marginTop: "-0.5rem" }}>
+            Services sending email as this domain, per aggregate reports received.
+          </p>
+          <OutboundTable services={sources ?? []} />
+        </>
+      )}
+
+      {domain?.verification_status === "verified" && (
+        <>
+          <h3>Inbound email</h3>
+          <p style={{ color: "#6b7280", fontSize: "0.9rem", marginTop: "-0.5rem" }}>
+            Hosts that process email for this domain, and whether they enforce TLS.
+          </p>
+          <InboundTable hosts={inboundHosts ?? []} />
         </>
       )}
 
@@ -130,42 +136,6 @@ export default function DomainDetail() {
         </>
       )}
     </section>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div>
-      <div style={{ fontSize: "1.5rem", fontWeight: 600 }}>{value}</div>
-      <div style={{ color: "#6b7280", fontSize: "0.85rem" }}>{label}</div>
-    </div>
-  );
-}
-
-function StatusBadge({ status }: { status: CheckStatus }) {
-  const colors: Record<CheckStatus, [string, string]> = {
-    pass: ["#dcfce7", "#166534"],
-    warn: ["#fef3c7", "#92400e"],
-    fail: ["#fee2e2", "#991b1b"],
-    error: ["#f3f4f6", "#4b5563"],
-  };
-  const [background, color] = colors[status];
-  return (
-    <span
-      style={{
-        display: "inline-block",
-        fontSize: "0.7rem",
-        fontWeight: 600,
-        textTransform: "uppercase",
-        padding: "0.1rem 0.5rem",
-        borderRadius: 999,
-        background,
-        color,
-        marginRight: "0.5rem",
-      }}
-    >
-      {status}
-    </span>
   );
 }
 

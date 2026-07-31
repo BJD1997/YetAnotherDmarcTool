@@ -11,6 +11,7 @@ import dns.asyncresolver
 import dns.exception
 import dns.flags
 import dns.resolver
+import dns.reversename
 
 from app.config import settings
 
@@ -111,6 +112,21 @@ async def resolve_tlsa(name: str) -> tuple[list[tuple[int, int, int, str]], bool
     dnssec_validated = bool(answer.response.flags & dns.flags.AD)
     records = [(rdata.usage, rdata.selector, rdata.mtype, rdata.cert.hex()) for rdata in answer]
     return records, dnssec_validated
+
+
+async def resolve_ptr(ip: str) -> str | None:
+    """Reverse-DNS hostname for `ip`, or None if it has no PTR record.
+    Used for source-IP sending-service identification (see
+    app/services/source_identification/), not by any DNS checker."""
+    resolver = _get_resolver()
+    rev_name = dns.reversename.from_address(ip)
+    try:
+        answer = await resolver.resolve(rev_name, "PTR")
+    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+        return None
+    except (dns.resolver.NoNameservers, dns.exception.Timeout) as exc:
+        raise DnsLookupError(f"PTR lookup for {ip} failed: {exc}") from exc
+    return str(answer[0].target).rstrip(".")
 
 
 async def resolve_address(name: str) -> list[str]:

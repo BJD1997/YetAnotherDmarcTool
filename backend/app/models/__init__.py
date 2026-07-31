@@ -13,6 +13,7 @@ from app.models.organization import Organization
 from app.models.platform_admin import PlatformAdmin
 from app.models.platform_admin_session import PlatformAdminSession
 from app.models.session import UserSession
+from app.models.source_ip_identity import SourceIpIdentity
 from app.models.tls_rpt import TlsRptReport
 from app.models.user import User
 
@@ -29,6 +30,7 @@ __all__ = [
     "PlatformAdmin",
     "PlatformAdminSession",
     "UserSession",
+    "SourceIpIdentity",
     "TlsRptReport",
     "User",
 ]
