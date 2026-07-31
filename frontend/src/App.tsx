@@ -5,6 +5,7 @@ import AdminOrganizations from "./pages/AdminOrganizations";
 import AdminJobRuns from "./pages/AdminJobRuns";
 import Domains from "./pages/Domains";
 import DomainDetail from "./pages/DomainDetail";
+import DomainReports from "./pages/DomainReports";
 import Team from "./pages/Team";
 import Shell from "./components/Shell";
 import RequireAuth from "./components/RequireAuth";
@@ -47,6 +48,16 @@ export default function App() {
           <RequireAuth>
             <Shell>
               <DomainDetail />
+            </Shell>
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/domains/:domainId/reports"
+        element={
+          <RequireAuth>
+            <Shell>
+              <DomainReports />
             </Shell>
           </RequireAuth>
         }

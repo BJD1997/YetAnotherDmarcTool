@@ -3,7 +3,7 @@ import { useParams, Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "../api/client";
 import type { Domain } from "../api/types";
-import type { DmarcOutboundService, DmarcReportListItem, DmarcSummary, InboundHostRow } from "../api/dmarc";
+import type { DmarcOutboundService, DmarcSummary, InboundHostRow } from "../api/dmarc";
 import type { CheckResult, CheckStatus, CheckType, DkimSelectorItem } from "../api/dnsChecks";
 import { useAuth } from "../auth/AuthContext";
 import { Stat, StatusBadge } from "../components/domain/shared";
@@ -42,11 +42,6 @@ export default function DomainDetail() {
   const { data: sources } = useQuery({
     queryKey: ["dmarc-sources", domainId],
     queryFn: () => api.get<DmarcOutboundService[]>(`/domains/${domainId}/dmarc/sources`),
-  });
-
-  const { data: reports } = useQuery({
-    queryKey: ["dmarc-reports-list", domainId],
-    queryFn: () => api.get<DmarcReportListItem[]>(`/domains/${domainId}/dmarc/reports`),
   });
 
   const { data: inboundHosts } = useQuery({
@@ -105,35 +100,10 @@ export default function DomainDetail() {
         </>
       )}
 
-      {reports && reports.length > 0 && (
-        <>
-          <h3>Recent reports</h3>
-          <table style={{ borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ textAlign: "left" }}>
-                <th style={{ paddingRight: "1.5rem" }}>Reporter</th>
-                <th style={{ paddingRight: "1.5rem" }}>Period</th>
-                <th style={{ paddingRight: "1.5rem" }}>Policy</th>
-                <th>Received</th>
-              </tr>
-            </thead>
-            <tbody>
-              {reports.map((r) => (
-                <tr key={r.id}>
-                  <td style={{ paddingRight: "1.5rem" }}>{r.org_name}</td>
-                  <td style={{ paddingRight: "1.5rem" }}>
-                    {new Date(r.date_range_begin).toLocaleDateString()} &ndash;{" "}
-                    {new Date(r.date_range_end).toLocaleDateString()}
-                  </td>
-                  <td style={{ paddingRight: "1.5rem" }}>
-                    p={r.policy_p ?? "?"} pct={r.policy_pct ?? "?"}
-                  </td>
-                  <td>{new Date(r.received_at).toLocaleString()}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </>
+      {summary && summary.report_count > 0 && (
+        <p>
+          <Link to={`/domains/${domainId}/reports`}>View all reports &rarr;</Link>
+        </p>
       )}
     </section>
   );

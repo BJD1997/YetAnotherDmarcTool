@@ -29,15 +29,63 @@ export interface InboundHostRow {
   mta_sts_status: "pass" | "not_covered" | "not_configured";
 }
 
-export interface DmarcReportListItem {
-  id: string;
+export interface DmarcDayRow {
+  record_id: string;
   org_name: string;
-  report_id: string;
-  date_range_begin: string;
-  date_range_end: string;
-  policy_p: string | null;
-  policy_pct: number | null;
-  received_at: string;
+  source_ip: string;
+  count: number;
+  disposition: "none" | "quarantine" | "reject";
+  spf_result: "pass" | "fail";
+  dkim_result: "pass" | "fail";
+}
+
+export interface DmarcDayGroup {
+  date: string;
+  report_count: number;
+  message_count: number;
+  accepted: number;
+  quarantined: number;
+  rejected: number;
+  rows: DmarcDayRow[];
+}
+
+export interface DmarcReportsByDay {
+  days: DmarcDayGroup[];
+  has_more: boolean;
+}
+
+export interface DmarcRecordDetail {
+  id: string;
+  report: {
+    id: string;
+    report_id: string;
+    org_name: string;
+    email: string | null;
+    date_range_begin: string;
+    date_range_end: string;
+    policy_p: string | null;
+    policy_sp: string | null;
+    policy_pct: number | null;
+    policy_adkim: string | null;
+    policy_aspf: string | null;
+  };
+  source_ip: string;
+  count: number;
+  disposition: "none" | "quarantine" | "reject";
+  spf_result: "pass" | "fail";
+  dkim_result: "pass" | "fail";
+  header_from: string;
+  envelope_from: string | null;
+  envelope_to: string | null;
+  auth_results: Record<string, unknown>;
+  spf_narrative: string[];
+  dkim_narrative: string[];
+  verdict: {
+    spf_aligned: boolean;
+    dkim_aligned: boolean;
+    dmarc_aligned: boolean;
+    disposition_applied: string;
+  };
 }
 
 export interface MailboxConnectionStatus {

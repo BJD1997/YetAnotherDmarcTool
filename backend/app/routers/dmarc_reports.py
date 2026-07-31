@@ -1,7 +1,8 @@
+import itertools
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
@@ -12,6 +13,7 @@ from app.models.domain import Domain
 from app.models.enums import AuthResult, Disposition
 from app.models.tls_rpt import TlsRptReport
 from app.models.user import User
+from app.services.dmarc_narrative import dkim_narratives, spf_narratives
 from app.services.source_identification.service_identifier import identify_many
 
 router = APIRouter(tags=["dmarc-reports"])
@@ -164,34 +166,134 @@ async def dmarc_sources(
     return services
 
 
-@router.get("/domains/{domain_id}/dmarc/reports")
-async def dmarc_reports(
+@router.get("/domains/{domain_id}/dmarc/reports/by-day")
+async def dmarc_reports_by_day(
     domain_id: uuid.UUID,
-    limit: int = Query(25, ge=1, le=100),
+    limit: int = Query(300, ge=1, le=1000),
+    before_id: uuid.UUID | None = Query(None),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
-) -> list[dict]:
+) -> dict:
+    """Row granularity is one DmarcAggregateRecord (one sending host within
+    one report), not one whole report — a report with several source IPs
+    shows as several rows on its day. Keyset-paginated on
+    (date_range_begin, record id) rather than offset, so pages stay stable
+    as new reports keep arriving between requests."""
     await _get_owned_domain(db, domain_id, user.organization_id)
 
-    result = await db.execute(
-        select(DmarcAggregateReport)
-        .where(DmarcAggregateReport.domain_id == domain_id)
-        .order_by(DmarcAggregateReport.date_range_begin.desc())
-        .limit(limit)
+    query = (
+        select(
+            DmarcAggregateRecord.id,
+            DmarcAggregateReport.id.label("report_pk"),
+            DmarcAggregateReport.org_name,
+            DmarcAggregateReport.date_range_begin,
+            DmarcAggregateRecord.source_ip,
+            DmarcAggregateRecord.count,
+            DmarcAggregateRecord.disposition,
+            DmarcAggregateRecord.spf_result,
+            DmarcAggregateRecord.dkim_result,
+        )
+        .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
+        .where(DmarcAggregateRecord.domain_id == domain_id)
     )
-    return [
-        {
-            "id": str(r.id),
-            "org_name": r.org_name,
-            "report_id": r.report_id,
-            "date_range_begin": r.date_range_begin.isoformat(),
-            "date_range_end": r.date_range_end.isoformat(),
-            "policy_p": r.policy_p,
-            "policy_pct": r.policy_pct,
-            "received_at": r.received_at.isoformat(),
-        }
-        for r in result.scalars().all()
-    ]
+
+    if before_id is not None:
+        anchor = (
+            await db.execute(
+                select(DmarcAggregateReport.date_range_begin, DmarcAggregateRecord.id)
+                .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
+                .where(DmarcAggregateRecord.id == before_id, DmarcAggregateRecord.domain_id == domain_id)
+            )
+        ).first()
+        if anchor is not None:
+            query = query.where(tuple_(DmarcAggregateReport.date_range_begin, DmarcAggregateRecord.id) < anchor)
+
+    query = query.order_by(DmarcAggregateReport.date_range_begin.desc(), DmarcAggregateRecord.id.desc()).limit(limit)
+    rows = (await db.execute(query)).all()
+
+    days = []
+    for date, group_iter in itertools.groupby(rows, key=lambda r: r.date_range_begin.date()):
+        group = list(group_iter)
+        report_ids = {r.report_pk for r in group}
+        days.append(
+            {
+                "date": date.isoformat(),
+                "report_count": len(report_ids),
+                "message_count": sum(r.count for r in group),
+                "accepted": sum(r.count for r in group if r.disposition == Disposition.none),
+                "quarantined": sum(r.count for r in group if r.disposition == Disposition.quarantine),
+                "rejected": sum(r.count for r in group if r.disposition == Disposition.reject),
+                "rows": [
+                    {
+                        "record_id": str(r.id),
+                        "org_name": r.org_name,
+                        "source_ip": str(r.source_ip),
+                        "count": r.count,
+                        "disposition": r.disposition.value,
+                        "spf_result": r.spf_result.value,
+                        "dkim_result": r.dkim_result.value,
+                    }
+                    for r in group
+                ],
+            }
+        )
+
+    return {"days": days, "has_more": len(rows) == limit}
+
+
+@router.get("/domains/{domain_id}/dmarc/records/{record_id}")
+async def dmarc_record_detail(
+    domain_id: uuid.UUID,
+    record_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    await _get_owned_domain(db, domain_id, user.organization_id)
+
+    row = (
+        await db.execute(
+            select(DmarcAggregateRecord, DmarcAggregateReport)
+            .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
+            .where(DmarcAggregateRecord.id == record_id, DmarcAggregateRecord.domain_id == domain_id)
+        )
+    ).first()
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "record not found")
+    record, report = row
+
+    return {
+        "id": str(record.id),
+        "report": {
+            "id": str(report.id),
+            "report_id": report.report_id,
+            "org_name": report.org_name,
+            "email": report.email,
+            "date_range_begin": report.date_range_begin.isoformat(),
+            "date_range_end": report.date_range_end.isoformat(),
+            "policy_p": report.policy_p,
+            "policy_sp": report.policy_sp,
+            "policy_pct": report.policy_pct,
+            "policy_adkim": report.policy_adkim,
+            "policy_aspf": report.policy_aspf,
+        },
+        "source_ip": str(record.source_ip),
+        "count": record.count,
+        "disposition": record.disposition.value,
+        "spf_result": record.spf_result.value,
+        "dkim_result": record.dkim_result.value,
+        "header_from": record.header_from,
+        "envelope_from": record.envelope_from,
+        "envelope_to": record.envelope_to,
+        "auth_results": record.auth_results,
+        "spf_narrative": spf_narratives(record.auth_results, str(record.source_ip), record.header_from),
+        "dkim_narrative": dkim_narratives(record.auth_results, record.header_from),
+        "verdict": {
+            "spf_aligned": record.spf_result == AuthResult.pass_,
+            "dkim_aligned": record.dkim_result == AuthResult.pass_,
+            "dmarc_aligned": record.spf_result == AuthResult.pass_ or record.dkim_result == AuthResult.pass_,
+            "disposition_applied": record.disposition.value,
+        },
+    }
 
 
 @router.get("/dmarc/unmatched")
