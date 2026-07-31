@@ -2,6 +2,7 @@ import { Route, Routes } from "react-router-dom";
 import Login from "./pages/Login";
 import AdminLogin from "./pages/AdminLogin";
 import AdminOrganizations from "./pages/AdminOrganizations";
+import AdminJobRuns from "./pages/AdminJobRuns";
 import Domains from "./pages/Domains";
 import DomainDetail from "./pages/DomainDetail";
 import Team from "./pages/Team";
@@ -19,6 +20,14 @@ export default function App() {
         element={
           <RequireAdminAuth>
             <AdminOrganizations />
+          </RequireAdminAuth>
+        }
+      />
+      <Route
+        path="/admin/job-runs"
+        element={
+          <RequireAdminAuth>
+            <AdminJobRuns />
           </RequireAdminAuth>
         }
       />

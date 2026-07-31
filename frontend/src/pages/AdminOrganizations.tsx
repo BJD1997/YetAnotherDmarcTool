@@ -68,6 +68,9 @@ export default function AdminOrganizations() {
       <div style={{ display: "flex", justifyContent: "space-between" }}>
         <h1>Organizations</h1>
         <div>
+          <Link to="/admin/job-runs" style={{ marginRight: "1rem" }}>
+            Job runs
+          </Link>
           <span style={{ marginRight: "1rem" }}>
             {admin?.email}
             {admin?.auth_type === "operator_org" && (
