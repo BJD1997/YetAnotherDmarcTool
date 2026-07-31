@@ -2,10 +2,9 @@
 strength, pct rollout, rua/ruf presence, and the RFC 7489 §7.1 external
 destination verification for report addresses on a different domain.
 
-DMARCbis (the IETF draft updating RFC 7489 — np= tag, PSD handling, tighter
-reporting-address rules) is deliberately NOT checked here; it's still a
-moving draft and gets its own versioned module in Phase 4 rather than being
-folded into this RFC-7489-only checker.
+DMARCbis (RFC 9989, published May 2026 — np=/psd=/t= tags, pct= removal)
+is deliberately NOT checked here; it gets its own module (dmarcbis.py) that
+only covers what's new/changed, rather than being folded into this checker.
 """
 
 import re

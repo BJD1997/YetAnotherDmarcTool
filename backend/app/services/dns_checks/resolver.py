@@ -9,6 +9,7 @@ import socket
 
 import dns.asyncresolver
 import dns.exception
+import dns.flags
 import dns.resolver
 
 from app.config import settings
@@ -33,6 +34,12 @@ def _get_resolver() -> dns.asyncresolver.Resolver:
         r.nameservers = [resolver_ip]
         r.timeout = 5
         r.lifetime = 5
+        # Confirmed against this exact unbound container (via `drill` inside
+        # it): it only copies the AD bit into its reply when the query's
+        # EDNS DO ("DNSSEC OK") bit is set — without it, a fully
+        # DNSSEC-validated answer comes back with no AD flag at all, which
+        # would make resolve_tlsa's dnssec_validated always read False.
+        r.use_edns(edns=0, ednsflags=dns.flags.DO)
         _resolver = r
     return _resolver
 
@@ -83,6 +90,27 @@ async def resolve_cname(name: str) -> str | None:
     except (dns.resolver.NoNameservers, dns.exception.Timeout) as exc:
         raise DnsLookupError(f"CNAME lookup for {name} failed: {exc}") from exc
     return str(answer[0].target).rstrip(".")
+
+
+async def resolve_tlsa(name: str) -> tuple[list[tuple[int, int, int, str]], bool]:
+    """([(usage, selector, matching_type, cert_hex), ...], dnssec_validated)
+    at `name` (e.g. _25._tcp.mail.example.com). dnssec_validated reflects the
+    resolver's AD flag on the response — DANE is only meaningful when the
+    resolver has cryptographically validated the chain (see the `resolver`
+    container's DNSSEC-validating unbound config, and the module docstring
+    above); an unset AD flag means the TLSA answer can't be trusted even
+    though records were returned, since nothing proves an on-path attacker
+    didn't inject them."""
+    resolver = _get_resolver()
+    try:
+        answer = await resolver.resolve(name, "TLSA")
+    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+        return [], False
+    except (dns.resolver.NoNameservers, dns.exception.Timeout) as exc:
+        raise DnsLookupError(f"TLSA lookup for {name} failed: {exc}") from exc
+    dnssec_validated = bool(answer.response.flags & dns.flags.AD)
+    records = [(rdata.usage, rdata.selector, rdata.mtype, rdata.cert.hex()) for rdata in answer]
+    return records, dnssec_validated
 
 
 async def resolve_address(name: str) -> list[str]:

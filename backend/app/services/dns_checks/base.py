@@ -1,7 +1,7 @@
-"""Every checker (spf.py, dkim.py, dmarc.py, mx.py, and Phase 4's
-mta_sts.py/dane.py/dmarcbis.py) returns a list of these — a common shape is
-what lets dns_check_results stay one generic table despite very different
-per-check-type payloads (see the model's docstring)."""
+"""Every checker (spf.py, dkim.py, dmarc.py, dmarcbis.py, mx.py, mta_sts.py,
+dane.py) returns a list of these — a common shape is what lets
+dns_check_results stay one generic table despite very different per-check-
+type payloads (see the model's docstring)."""
 
 from dataclasses import dataclass, field
 from typing import Any, Literal
