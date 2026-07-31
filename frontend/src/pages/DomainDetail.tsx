@@ -3,12 +3,13 @@ import { useParams, Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "../api/client";
 import type { Domain } from "../api/types";
-import type { DmarcOutboundService, DmarcSummary, InboundHostRow } from "../api/dmarc";
+import type { DmarcOutboundService, DmarcSummary, DomainRating, InboundHostRow } from "../api/dmarc";
 import type { CheckResult, CheckStatus, CheckType, DkimSelectorItem } from "../api/dnsChecks";
 import { useAuth } from "../auth/AuthContext";
 import { Stat, StatusBadge } from "../components/domain/shared";
 import OutboundTable from "../components/domain/OutboundTable";
 import InboundTable from "../components/domain/InboundTable";
+import DomainRatingCard from "../components/domain/DomainRatingCard";
 
 const CHECK_LABELS: Record<CheckType, string> = {
   spf: "SPF",
@@ -50,6 +51,11 @@ export default function DomainDetail() {
     enabled: domain?.verification_status === "verified",
   });
 
+  const { data: rating } = useQuery({
+    queryKey: ["domain-rating", domainId],
+    queryFn: () => api.get<DomainRating>(`/domains/${domainId}/rating`),
+  });
+
   const passRate =
     summary && summary.total_message_count > 0
       ? Math.round((summary.dmarc_pass_count / summary.total_message_count) * 100)
@@ -63,6 +69,8 @@ export default function DomainDetail() {
         <Link to="/">&larr; Domains</Link>
       </p>
       <h2>{domain?.name ?? "…"}</h2>
+
+      <DomainRatingCard rating={rating} />
 
       {domain && <BestPractices domainId={domainId} domain={domain} canManage={canManage} />}
 

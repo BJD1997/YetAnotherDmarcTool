@@ -9,11 +9,13 @@ from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user
 from app.models.dmarc_aggregate import DmarcAggregateRecord, DmarcAggregateReport
 from app.models.dmarc_forensic import DmarcForensicReport
+from app.models.dns_check import DnsCheckResult
 from app.models.domain import Domain
-from app.models.enums import AuthResult, Disposition
+from app.models.enums import AuthResult, CheckType, Disposition, DomainVerificationStatus
 from app.models.tls_rpt import TlsRptReport
 from app.models.user import User
 from app.services.dmarc_narrative import dkim_narratives, spf_narratives
+from app.services.rating.score import compute_rating
 from app.services.source_identification.service_identifier import identify_many
 
 router = APIRouter(tags=["dmarc-reports"])
@@ -65,6 +67,57 @@ async def dmarc_summary(
         "dmarc_fail_count": int(total_count) - int(pass_count),
         "by_disposition": by_disposition,
         "report_count": report_count.scalar_one(),
+    }
+
+
+@router.get("/domains/{domain_id}/rating")
+async def domain_rating(
+    domain_id: uuid.UUID, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
+) -> dict:
+    domain = await _get_owned_domain(db, domain_id, user.organization_id)
+
+    if domain.verification_status != DomainVerificationStatus.verified:
+        return {"not_verified": True, "insufficient_data": True, "score": None, "grade": None, "factors": []}
+
+    dmarc_pass = (DmarcAggregateRecord.dkim_result == AuthResult.pass_) | (
+        DmarcAggregateRecord.spf_result == AuthResult.pass_
+    )
+    total_count, pass_count = (
+        await db.execute(
+            select(
+                func.coalesce(func.sum(DmarcAggregateRecord.count), 0),
+                func.coalesce(func.sum(case((dmarc_pass, DmarcAggregateRecord.count), else_=0)), 0),
+            ).where(DmarcAggregateRecord.domain_id == domain_id)
+        )
+    ).one()
+
+    latest_ts = (
+        select(func.max(DnsCheckResult.checked_at)).where(DnsCheckResult.domain_id == domain_id).scalar_subquery()
+    )
+    check_rows = (
+        (
+            await db.execute(
+                select(DnsCheckResult).where(DnsCheckResult.domain_id == domain_id, DnsCheckResult.checked_at == latest_ts)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    findings_by_type: dict[CheckType, list] = {}
+    for row in check_rows:
+        findings_by_type.setdefault(row.check_type, []).append(row)
+
+    rating = compute_rating(
+        findings_by_type=findings_by_type, dmarc_pass_count=int(pass_count), total_message_count=int(total_count)
+    )
+    return {
+        "not_verified": False,
+        "insufficient_data": rating.insufficient_data,
+        "score": rating.score,
+        "grade": rating.grade,
+        "factors": [
+            {"factor": f.factor, "weight": f.weight, "score_pct": f.score_pct, "detail": f.detail} for f in rating.factors
+        ],
     }
 
 

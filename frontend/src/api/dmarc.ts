@@ -88,6 +88,21 @@ export interface DmarcRecordDetail {
   };
 }
 
+export interface RatingFactor {
+  factor: string;
+  weight: number;
+  score_pct: number;
+  detail: string;
+}
+
+export interface DomainRating {
+  not_verified: boolean;
+  insufficient_data: boolean;
+  score: number | null;
+  grade: string | null;
+  factors: RatingFactor[];
+}
+
 export interface MailboxConnectionStatus {
   id: string;
   mailbox_address: string;
