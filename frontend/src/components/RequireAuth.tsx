@@ -5,7 +5,7 @@ import { useAuth } from "../auth/AuthContext";
 export default function RequireAuth({ children }: { children: ReactNode }) {
   const { user, isLoading } = useAuth();
 
-  if (isLoading) return <p style={{ padding: "2rem" }}>Loading…</p>;
+  if (isLoading) return <p className="muted" style={{ padding: "2rem" }}>Loading…</p>;
   if (!user) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }

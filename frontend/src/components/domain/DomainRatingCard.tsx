@@ -12,10 +12,10 @@ const FACTOR_LABELS: Record<string, string> = {
   tls_rpt: "TLS-RPT",
 };
 
-function gradeColor(grade: string): [string, string] {
-  if (grade === "A" || grade === "B") return ["#dcfce7", "#166534"];
-  if (grade === "C") return ["#fef3c7", "#92400e"];
-  return ["#fee2e2", "#991b1b"];
+function gradeRole(grade: string): "good" | "warning" | "critical" {
+  if (grade === "A" || grade === "B") return "good";
+  if (grade === "C") return "warning";
+  return "critical";
 }
 
 export default function DomainRatingCard({ rating }: { rating: DomainRating | undefined }) {
@@ -23,22 +23,22 @@ export default function DomainRatingCard({ rating }: { rating: DomainRating | un
 
   if (rating.not_verified) {
     return (
-      <div style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "1rem", marginBottom: "1.5rem" }}>
-        <p style={{ color: "#92400e", margin: 0 }}>Verify this domain to see a rating.</p>
+      <div className="card">
+        <p className="muted" style={{ margin: 0 }}>Verify this domain to see a rating.</p>
       </div>
     );
   }
 
   if (rating.insufficient_data || rating.score === null || rating.grade === null) {
     return (
-      <div style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "1rem", marginBottom: "1.5rem" }}>
-        <p style={{ color: "#6b7280", margin: 0 }}>
+      <div className="card">
+        <p className="muted" style={{ margin: 0 }}>
           Not yet rated — no aggregate reports received yet, so a DMARC pass rate can't be computed.
         </p>
         {rating.factors.length > 0 && (
-          <div style={{ marginTop: "0.75rem", fontSize: "0.85rem" }}>
+          <div style={{ marginTop: "0.75rem", fontSize: "0.85rem", display: "grid", gap: "0.25rem" }}>
             {rating.factors.map((f) => (
-              <div key={f.factor} style={{ color: "#4b5563" }}>
+              <div key={f.factor} className="secondary-text">
                 {FACTOR_LABELS[f.factor] ?? f.factor}: {f.detail}
               </div>
             ))}
@@ -48,20 +48,10 @@ export default function DomainRatingCard({ rating }: { rating: DomainRating | un
     );
   }
 
-  const [background, color] = gradeColor(rating.grade);
+  const role = gradeRole(rating.grade);
 
   return (
-    <div
-      style={{
-        display: "flex",
-        gap: "1.5rem",
-        alignItems: "flex-start",
-        border: "1px solid #e5e7eb",
-        borderRadius: 8,
-        padding: "1rem",
-        marginBottom: "1.5rem",
-      }}
-    >
+    <div className="card" style={{ display: "flex", gap: "1.75rem", alignItems: "flex-start" }}>
       <div
         style={{
           display: "flex",
@@ -71,19 +61,21 @@ export default function DomainRatingCard({ rating }: { rating: DomainRating | un
           width: "4.5rem",
           height: "4.5rem",
           borderRadius: "50%",
-          background,
-          color,
+          background: `var(--${role}-wash)`,
+          color: `var(--${role}-text)`,
           flexShrink: 0,
         }}
       >
         <div style={{ fontSize: "1.5rem", fontWeight: 700, lineHeight: 1 }}>{rating.grade}</div>
-        <div style={{ fontSize: "0.7rem" }}>{rating.score}/100</div>
+        <div style={{ fontSize: "0.68rem" }} className="num">
+          {rating.score}/100
+        </div>
       </div>
-      <div style={{ flex: 1, display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.35rem 1.5rem", fontSize: "0.85rem" }}>
+      <div style={{ flex: 1, display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.4rem 1.5rem", fontSize: "0.85rem" }}>
         {rating.factors.map((f) => (
-          <div key={f.factor} style={{ display: "flex", justifyContent: "space-between" }}>
-            <span style={{ color: "#4b5563" }}>{FACTOR_LABELS[f.factor] ?? f.factor}</span>
-            <span style={{ color: "#111827" }}>{f.detail}</span>
+          <div key={f.factor} style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem" }}>
+            <span className="secondary-text">{FACTOR_LABELS[f.factor] ?? f.factor}</span>
+            <span className="num">{f.detail}</span>
           </div>
         ))}
       </div>

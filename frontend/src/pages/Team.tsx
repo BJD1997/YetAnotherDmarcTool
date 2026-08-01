@@ -1,5 +1,7 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft } from "lucide-react";
 import { api, ApiError } from "../api/client";
 import type { TeamMember } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
@@ -27,79 +29,93 @@ export default function Team() {
 
   return (
     <section>
-      <p>
-        <a href="/">&larr; Domains</a>
-      </p>
-      <h2>Team</h2>
-      <p style={{ color: "#4b5563", maxWidth: 640 }}>
-        The first person to sign in to a new organization automatically becomes an org admin.
-        Everyone after that starts as a member — promote them here if they need to manage domains,
-        the mailbox connection, or other team members.
-      </p>
+      <Link to="/" className="back-link">
+        <ArrowLeft size={14} />
+        Domains
+      </Link>
+      <div className="page-header">
+        <div>
+          <h1>Team</h1>
+          <p className="page-subtitle">
+            The first person to sign in to a new organization automatically becomes an org admin. Everyone after
+            that starts as a member — promote them here if they need to manage domains, the mailbox connection, or
+            other team members.
+          </p>
+        </div>
+      </div>
 
-      {error && <p style={{ color: "#b91c1c" }}>{error}</p>}
-      {isLoading && <p>Loading…</p>}
+      {error && <div className="alert alert--critical">{error}</div>}
+      {isLoading && <p className="muted">Loading…</p>}
 
-      <table style={{ borderCollapse: "collapse", marginTop: "1rem" }}>
-        <thead>
-          <tr style={{ textAlign: "left" }}>
-            <th style={{ paddingRight: "1.5rem" }}>Email</th>
-            <th style={{ paddingRight: "1.5rem" }}>Role</th>
-            <th style={{ paddingRight: "1.5rem" }}>Status</th>
-            <th style={{ paddingRight: "1.5rem" }}>Last login</th>
-            {canManage && <th></th>}
-          </tr>
-        </thead>
-        <tbody>
-          {(members ?? []).map((member) => {
-            const isSelf = member.id === user?.id;
-            return (
-              <tr key={member.id} style={{ borderTop: "1px solid #f3f4f6" }}>
-                <td style={{ paddingRight: "1.5rem" }}>
-                  {member.email}
-                  {isSelf && " (you)"}
-                </td>
-                <td style={{ paddingRight: "1.5rem" }}>{member.role}</td>
-                <td style={{ paddingRight: "1.5rem" }}>{member.status}</td>
-                <td style={{ paddingRight: "1.5rem" }}>
-                  {member.last_login_at ? new Date(member.last_login_at).toLocaleString() : "never"}
-                </td>
-                {canManage && (
-                  <td>
-                    {!isSelf && (
-                      <>
-                        <button
-                          onClick={() =>
-                            updateMember.mutate({
-                              id: member.id,
-                              body: { role: member.role === "org_admin" ? "member" : "org_admin" },
-                            })
-                          }
-                          disabled={updateMember.isPending}
-                        >
-                          {member.role === "org_admin" ? "Demote to member" : "Promote to org admin"}
-                        </button>
-                        <button
-                          style={{ marginLeft: "0.5rem" }}
-                          onClick={() =>
-                            updateMember.mutate({
-                              id: member.id,
-                              body: { status: member.status === "active" ? "disabled" : "active" },
-                            })
-                          }
-                          disabled={updateMember.isPending}
-                        >
-                          {member.status === "active" ? "Disable" : "Re-enable"}
-                        </button>
-                      </>
-                    )}
-                  </td>
-                )}
+      <div className="card">
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Email</th>
+                <th>Role</th>
+                <th>Status</th>
+                <th>Last login</th>
+                {canManage && <th></th>}
               </tr>
-            );
-          })}
-        </tbody>
-      </table>
+            </thead>
+            <tbody>
+              {(members ?? []).map((member) => {
+                const isSelf = member.id === user?.id;
+                return (
+                  <tr key={member.id}>
+                    <td>
+                      {member.email}
+                      {isSelf && <span className="muted"> (you)</span>}
+                    </td>
+                    <td>
+                      <span className={`badge ${member.role === "org_admin" ? "badge--good" : "badge--neutral"}`}>
+                        {member.role === "org_admin" ? "org admin" : "member"}
+                      </span>
+                    </td>
+                    <td>
+                      <span className={`badge ${member.status === "active" ? "badge--good" : "badge--neutral"}`}>{member.status}</span>
+                    </td>
+                    <td className="muted">{member.last_login_at ? new Date(member.last_login_at).toLocaleString() : "never"}</td>
+                    {canManage && (
+                      <td>
+                        {!isSelf && (
+                          <div className="chip-row">
+                            <button
+                              className="btn btn--ghost btn--sm"
+                              onClick={() =>
+                                updateMember.mutate({
+                                  id: member.id,
+                                  body: { role: member.role === "org_admin" ? "member" : "org_admin" },
+                                })
+                              }
+                              disabled={updateMember.isPending}
+                            >
+                              {member.role === "org_admin" ? "Demote to member" : "Promote to org admin"}
+                            </button>
+                            <button
+                              className="btn btn--ghost btn--sm"
+                              onClick={() =>
+                                updateMember.mutate({
+                                  id: member.id,
+                                  body: { status: member.status === "active" ? "disabled" : "active" },
+                                })
+                              }
+                              disabled={updateMember.isPending}
+                            >
+                              {member.status === "active" ? "Disable" : "Re-enable"}
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    )}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </section>
   );
 }

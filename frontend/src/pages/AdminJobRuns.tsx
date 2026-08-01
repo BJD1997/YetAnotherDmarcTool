@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import { ArrowLeft, RefreshCw } from "lucide-react";
 import { api } from "../api/client";
 
 interface JobRun {
@@ -35,78 +36,83 @@ export default function AdminJobRuns() {
   });
 
   return (
-    <main style={{ fontFamily: "system-ui, sans-serif", padding: "2rem", maxWidth: 1100, margin: "0 auto" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h1>Job Runs</h1>
-        <Link to="/admin">&larr; Back to organizations</Link>
+    <main style={{ maxWidth: 1100, margin: "0 auto", padding: "2rem" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem" }}>
+        <h1 style={{ margin: 0 }}>Job runs</h1>
+        <Link to="/admin" className="back-link" style={{ marginBottom: 0 }}>
+          <ArrowLeft size={14} />
+          Back to organizations
+        </Link>
       </div>
 
-      <div style={{ display: "flex", gap: "0.75rem", alignItems: "center", margin: "1rem 0" }}>
-        <label style={{ fontSize: "0.85rem", color: "#6b7280" }}>
-          Show last{" "}
-          <select value={limit} onChange={(e) => setLimit(Number(e.target.value))}>
+      <div className="field-row" style={{ marginBottom: "1.25rem" }}>
+        <label className="muted" style={{ fontSize: "0.85rem", display: "flex", alignItems: "center", gap: "0.4rem" }}>
+          Show last
+          <select className="input" value={limit} onChange={(e) => setLimit(Number(e.target.value))}>
             <option value={20}>20</option>
             <option value={50}>50</option>
             <option value={100}>100</option>
             <option value={200}>200</option>
           </select>
         </label>
-        <button onClick={() => refetch()} disabled={isFetching}>
+        <button className="btn btn--secondary btn--sm" onClick={() => refetch()} disabled={isFetching}>
+          <RefreshCw />
           {isFetching ? "Refreshing…" : "Refresh"}
         </button>
       </div>
 
-      {isLoading && <p>Loading…</p>}
-
-      {runs && runs.length === 0 && <p style={{ color: "#6b7280" }}>No job runs recorded yet.</p>}
+      {isLoading && <p className="muted">Loading…</p>}
+      {runs && runs.length === 0 && <p className="empty-state">No job runs recorded yet.</p>}
 
       {runs && runs.length > 0 && (
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.9rem" }}>
-          <thead>
-            <tr style={{ textAlign: "left", borderBottom: "2px solid #e5e7eb" }}>
-              <th style={{ padding: "0.5rem" }}>Job</th>
-              <th style={{ padding: "0.5rem" }}>Organization</th>
-              <th style={{ padding: "0.5rem" }}>Status</th>
-              <th style={{ padding: "0.5rem" }}>Started</th>
-              <th style={{ padding: "0.5rem" }}>Duration</th>
-              <th style={{ padding: "0.5rem" }}>Details</th>
-            </tr>
-          </thead>
-          <tbody>
-            {runs.map((run) => (
-              <tr key={run.id} style={{ borderBottom: "1px solid #f3f4f6" }}>
-                <td style={{ padding: "0.5rem" }}>{run.job_type}</td>
-                <td style={{ padding: "0.5rem" }}>
-                  {run.organization_id ? (orgNameById.get(run.organization_id) ?? run.organization_id) : "—"}
-                </td>
-                <td style={{ padding: "0.5rem" }}>
-                  <span style={{ color: run.status === "success" ? "#166534" : "#991b1b", fontWeight: 600 }}>
-                    {run.status}
-                  </span>
-                </td>
-                <td style={{ padding: "0.5rem", whiteSpace: "nowrap" }}>{new Date(run.started_at).toLocaleString()}</td>
-                <td style={{ padding: "0.5rem", whiteSpace: "nowrap" }}>
-                  {run.finished_at
-                    ? `${((new Date(run.finished_at).getTime() - new Date(run.started_at).getTime()) / 1000).toFixed(1)}s`
-                    : "—"}
-                </td>
-                <td style={{ padding: "0.5rem" }}>
-                  {run.status === "failure" && run.error_message ? (
-                    <span style={{ color: "#b91c1c" }}>{run.error_message}</span>
-                  ) : run.stats && Object.keys(run.stats).length > 0 ? (
-                    <span style={{ color: "#6b7280" }}>
-                      {Object.entries(run.stats)
-                        .map(([k, v]) => `${k}=${v}`)
-                        .join(", ")}
-                    </span>
-                  ) : (
-                    "—"
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="card" style={{ padding: 0 }}>
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Job</th>
+                  <th>Organization</th>
+                  <th>Status</th>
+                  <th>Started</th>
+                  <th>Duration</th>
+                  <th>Details</th>
+                </tr>
+              </thead>
+              <tbody>
+                {runs.map((run) => (
+                  <tr key={run.id}>
+                    <td>{run.job_type}</td>
+                    <td>{run.organization_id ? (orgNameById.get(run.organization_id) ?? run.organization_id) : "—"}</td>
+                    <td>
+                      <span className={`badge ${run.status === "success" ? "badge--good" : "badge--critical"}`}>{run.status}</span>
+                    </td>
+                    <td style={{ whiteSpace: "nowrap" }} className="num">
+                      {new Date(run.started_at).toLocaleString()}
+                    </td>
+                    <td style={{ whiteSpace: "nowrap" }} className="num">
+                      {run.finished_at
+                        ? `${((new Date(run.finished_at).getTime() - new Date(run.started_at).getTime()) / 1000).toFixed(1)}s`
+                        : "—"}
+                    </td>
+                    <td>
+                      {run.status === "failure" && run.error_message ? (
+                        <span style={{ color: "var(--critical-text)" }}>{run.error_message}</span>
+                      ) : run.stats && Object.keys(run.stats).length > 0 ? (
+                        <span className="muted">
+                          {Object.entries(run.stats)
+                            .map(([k, v]) => `${k}=${v}`)
+                            .join(", ")}
+                        </span>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
       )}
     </main>
   );

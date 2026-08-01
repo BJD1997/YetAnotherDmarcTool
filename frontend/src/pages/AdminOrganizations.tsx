@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Plus, ListChecks, LogOut, ArrowLeft } from "lucide-react";
 import { api, ApiError } from "../api/client";
 import { useAdminAuth } from "../auth/AdminAuthContext";
 
@@ -28,6 +29,12 @@ interface AdminOrganization {
   mailbox_connection: MailboxConnectionInfo | null;
   entra_consent_urls: EntraConsentUrls | null;
 }
+
+const STATUS_ROLE: Record<AdminOrganization["status"], "good" | "warning" | "serious"> = {
+  active: "good",
+  pending_setup: "warning",
+  suspended: "serious",
+};
 
 export default function AdminOrganizations() {
   const { admin, refetch: refetchAdmin } = useAdminAuth();
@@ -64,54 +71,69 @@ export default function AdminOrganizations() {
   }
 
   return (
-    <main style={{ fontFamily: "system-ui, sans-serif", padding: "2rem", maxWidth: 1000, margin: "0 auto" }}>
-      <div style={{ display: "flex", justifyContent: "space-between" }}>
-        <h1>Organizations</h1>
-        <div>
-          <Link to="/admin/job-runs" style={{ marginRight: "1rem" }}>
+    <main style={{ maxWidth: 1000, margin: "0 auto", padding: "2rem" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.5rem" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+          <span className="sidebar-brand-mark">D</span>
+          <h1 style={{ margin: 0 }}>Organizations</h1>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+          <Link to="/admin/job-runs" className="btn btn--ghost btn--sm">
+            <ListChecks />
             Job runs
           </Link>
-          <span style={{ marginRight: "1rem" }}>
+          <span className="muted" style={{ fontSize: "0.85rem" }}>
             {admin?.email}
-            {admin?.auth_type === "operator_org" && (
-              <span style={{ color: "#6b7280", fontSize: "0.8rem" }}> (via your org login)</span>
-            )}
+            {admin?.auth_type === "operator_org" && <span> (via your org login)</span>}
           </span>
           {admin?.auth_type === "local" ? (
-            <button onClick={handleLogout}>Sign out</button>
+            <button className="icon-btn" onClick={handleLogout} title="Sign out">
+              <LogOut />
+            </button>
           ) : (
-            <Link to="/">&larr; Back to dashboard</Link>
+            <Link to="/" className="back-link" style={{ marginBottom: 0 }}>
+              <ArrowLeft size={14} />
+              Back to dashboard
+            </Link>
           )}
         </div>
       </div>
 
       {admin?.auth_type === "local" && <ChangePassword />}
 
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          createOrg.mutate();
-        }}
-        style={{ display: "flex", gap: "0.5rem", margin: "1rem 0" }}
-      >
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Organization name" required />
-        <input
-          value={tenantId}
-          onChange={(e) => setTenantId(e.target.value)}
-          placeholder="Entra tenant ID (optional)"
-          style={{ width: "260px" }}
-        />
-        <button type="submit" disabled={createOrg.isPending}>
-          Create organization
-        </button>
-      </form>
-      <p style={{ color: "#6b7280", fontSize: "0.85rem", marginTop: "-0.5rem" }}>
-        Providing the tenant ID now activates the org immediately — the client can then sign in, approve
-        consent, and set their own mailbox from inside their dashboard, no further steps needed here.
-      </p>
-      {error && <p style={{ color: "#b91c1c" }}>{error}</p>}
+      <div className="card">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            createOrg.mutate();
+          }}
+          className="field-row"
+        >
+          <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Organization name" required />
+          <input
+            className="input"
+            value={tenantId}
+            onChange={(e) => setTenantId(e.target.value)}
+            placeholder="Entra tenant ID (optional)"
+            style={{ width: "260px" }}
+          />
+          <button type="submit" className="btn btn--primary" disabled={createOrg.isPending}>
+            <Plus />
+            Create organization
+          </button>
+        </form>
+        <p className="section-hint" style={{ marginBottom: 0 }}>
+          Providing the tenant ID now activates the org immediately — the client can then sign in, approve consent,
+          and set their own mailbox from inside their dashboard, no further steps needed here.
+        </p>
+        {error && (
+          <div className="alert alert--critical" style={{ marginTop: "0.75rem", marginBottom: 0 }}>
+            {error}
+          </div>
+        )}
+      </div>
 
-      {isLoading && <p>Loading…</p>}
+      {isLoading && <p className="muted">Loading…</p>}
       {(orgs ?? []).map((org) => (
         <OrgCard key={org.id} org={org} />
       ))}
@@ -137,42 +159,53 @@ function OrgCard({ org }: { org: AdminOrganization }) {
   });
 
   const connection = org.mailbox_connection;
+  const consentRole = connection
+    ? connection.consent_status === "granted"
+      ? "good"
+      : connection.consent_status === "revoked"
+        ? "critical"
+        : "warning"
+    : "neutral";
 
   return (
-    <div style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "1rem", marginBottom: "1rem" }}>
+    <div className="card">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <strong style={{ fontSize: "1.1rem" }}>{org.name}</strong>
-        <select value={org.status} onChange={(e) => updateOrg.mutate({ status: e.target.value as AdminOrganization["status"] })}>
+        <strong style={{ fontSize: "1.05rem" }}>{org.name}</strong>
+        <select
+          className="input"
+          value={org.status}
+          onChange={(e) => updateOrg.mutate({ status: e.target.value as AdminOrganization["status"] })}
+        >
           <option value="pending_setup">pending_setup</option>
           <option value="active">active</option>
           <option value="suspended">suspended</option>
         </select>
       </div>
+      <div style={{ marginTop: "0.4rem" }}>
+        <span className={`badge badge--${STATUS_ROLE[org.status]}`}>{org.status.replace("_", " ")}</span>
+      </div>
 
-      <div style={{ display: "flex", gap: "3rem", marginTop: "0.75rem" }}>
+      <div style={{ display: "flex", gap: "3rem", marginTop: "1rem", flexWrap: "wrap" }}>
         <div>
-          <div style={{ fontSize: "0.8rem", color: "#6b7280" }}>Entra tenant ID</div>
-          <div style={{ display: "flex", gap: "0.4rem", marginTop: "0.25rem" }}>
-            <input
-              value={tenantId}
-              onChange={(e) => setTenantId(e.target.value)}
-              placeholder="tenant GUID"
-              style={{ width: "260px" }}
-            />
-            <button onClick={() => updateOrg.mutate({ entra_tenant_id: tenantId || null })}>Save</button>
+          <div className="muted" style={{ fontSize: "0.78rem" }}>
+            Entra tenant ID
+          </div>
+          <div className="field-row" style={{ marginTop: "0.3rem" }}>
+            <input className="input" value={tenantId} onChange={(e) => setTenantId(e.target.value)} placeholder="tenant GUID" style={{ width: "260px" }} />
+            <button className="btn btn--secondary btn--sm" onClick={() => updateOrg.mutate({ entra_tenant_id: tenantId || null })}>
+              Save
+            </button>
           </div>
         </div>
 
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: "0.8rem", color: "#6b7280" }}>Mailbox</div>
-          <div style={{ display: "flex", gap: "0.4rem", marginTop: "0.25rem" }}>
-            <input
-              value={mailbox}
-              onChange={(e) => setMailbox(e.target.value)}
-              placeholder="dmarc-reports@org.com"
-              style={{ width: "220px" }}
-            />
+        <div style={{ flex: 1, minWidth: 260 }}>
+          <div className="muted" style={{ fontSize: "0.78rem" }}>
+            Mailbox
+          </div>
+          <div className="field-row" style={{ marginTop: "0.3rem" }}>
+            <input className="input" value={mailbox} onChange={(e) => setMailbox(e.target.value)} placeholder="dmarc-reports@org.com" style={{ width: "220px" }} />
             <button
+              className="btn btn--secondary btn--sm"
               onClick={() => setMailboxConnection.mutate({ mailbox_address: mailbox })}
               disabled={!mailbox || setMailboxConnection.isPending}
             >
@@ -180,46 +213,31 @@ function OrgCard({ org }: { org: AdminOrganization }) {
             </button>
           </div>
           {connection && (
-            <div style={{ marginTop: "0.4rem", fontSize: "0.85rem" }}>
-              Consent:{" "}
-              <span
-                style={{
-                  color:
-                    connection.consent_status === "granted"
-                      ? "#166534"
-                      : connection.consent_status === "revoked"
-                        ? "#991b1b"
-                        : "#92400e",
-                  fontWeight: 600,
-                }}
-              >
-                {connection.consent_status}
-              </span>
+            <div style={{ marginTop: "0.5rem", fontSize: "0.85rem" }}>
+              <span className={`badge badge--${consentRole}`}>{connection.consent_status}</span>
               {connection.consent_status !== "granted" ? (
                 <button
+                  className="btn btn--ghost btn--sm"
                   style={{ marginLeft: "0.5rem" }}
-                  onClick={() =>
-                    setMailboxConnection.mutate({ mailbox_address: connection.mailbox_address, consent_status: "granted" })
-                  }
+                  onClick={() => setMailboxConnection.mutate({ mailbox_address: connection.mailbox_address, consent_status: "granted" })}
                 >
                   Mark granted
                 </button>
               ) : (
                 <button
+                  className="btn btn--ghost btn--sm"
                   style={{ marginLeft: "0.5rem" }}
-                  onClick={() =>
-                    setMailboxConnection.mutate({ mailbox_address: connection.mailbox_address, consent_status: "revoked" })
-                  }
+                  onClick={() => setMailboxConnection.mutate({ mailbox_address: connection.mailbox_address, consent_status: "revoked" })}
                 >
                   Revoke
                 </button>
               )}
-              <div style={{ color: "#6b7280", marginTop: "0.15rem" }}>
+              <div className="muted" style={{ marginTop: "0.3rem" }}>
                 {connection.last_sync_at
                   ? `Last synced ${new Date(connection.last_sync_at).toLocaleString()} (${connection.last_sync_status})`
                   : "Never synced yet"}
                 {connection.last_sync_status === "error" && connection.last_sync_error && (
-                  <div style={{ color: "#b91c1c" }}>{connection.last_sync_error}</div>
+                  <div style={{ color: "var(--critical-text)" }}>{connection.last_sync_error}</div>
                 )}
               </div>
             </div>
@@ -261,7 +279,9 @@ function ChangePassword() {
   if (!open) {
     return (
       <p>
-        <button onClick={() => setOpen(true)}>Change password</button>
+        <button className="btn btn--ghost btn--sm" onClick={() => setOpen(true)}>
+          Change password
+        </button>
       </p>
     );
   }
@@ -272,9 +292,11 @@ function ChangePassword() {
         e.preventDefault();
         change.mutate();
       }}
-      style={{ display: "flex", gap: "0.5rem", alignItems: "center", margin: "0.5rem 0 1rem" }}
+      className="field-row"
+      style={{ margin: "0.5rem 0 1.25rem" }}
     >
       <input
+        className="input"
         type="password"
         placeholder="current password"
         value={currentPassword}
@@ -282,6 +304,7 @@ function ChangePassword() {
         required
       />
       <input
+        className="input"
         type="password"
         placeholder="new password (12+ chars)"
         value={newPassword}
@@ -289,14 +312,14 @@ function ChangePassword() {
         required
         minLength={12}
       />
-      <button type="submit" disabled={change.isPending}>
+      <button type="submit" className="btn btn--primary btn--sm" disabled={change.isPending}>
         Save
       </button>
-      <button type="button" onClick={() => setOpen(false)}>
+      <button type="button" className="btn btn--ghost btn--sm" onClick={() => setOpen(false)}>
         Cancel
       </button>
-      {error && <span style={{ color: "#b91c1c" }}>{error}</span>}
-      {success && <span style={{ color: "#166534" }}>Password changed.</span>}
+      {error && <span style={{ color: "var(--critical-text)" }}>{error}</span>}
+      {success && <span style={{ color: "var(--good-text)" }}>Password changed.</span>}
     </form>
   );
 }

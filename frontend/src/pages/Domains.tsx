@@ -1,6 +1,7 @@
-import { useState, type CSSProperties } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Plus, RefreshCw, Trash2, Archive, ArchiveRestore, Mail, ChevronDown, ChevronUp } from "lucide-react";
 import { api, ApiError } from "../api/client";
 import type { DetectedDomain, Domain, Organization, VerifyDomainResponse } from "../api/types";
 import type { MailboxConnectionStatus } from "../api/dmarc";
@@ -63,60 +64,73 @@ export default function Domains() {
   return (
     <section>
       <MailboxConnectionStatusBanner />
-      <h2>Domains</h2>
-      <p style={{ color: "#4b5563", maxWidth: 640 }}>
-        A domain must be verified (proof you control its DNS) before any best-practice checks run
-        against it. Adding a subdomain of an already-verified domain verifies it automatically.
-      </p>
+
+      <div className="page-header">
+        <div>
+          <h1>Domains</h1>
+          <p className="page-subtitle">
+            A domain must be verified (proof you control its DNS) before any best-practice checks run against it.
+            Adding a subdomain of an already-verified domain verifies it automatically.
+          </p>
+        </div>
+      </div>
 
       {canManage && (
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            createDomain.mutate();
-          }}
-          style={{ display: "flex", gap: "0.5rem", alignItems: "center", margin: "1rem 0" }}
-        >
-          <select value={parentId} onChange={(e) => setParentId(e.target.value)}>
-            <option value="">apex domain</option>
-            {apexDomains.map((d) => (
-              <option key={d.id} value={d.id}>
-                subdomain of {d.name}
-              </option>
-            ))}
-          </select>
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder={selectedParent ? "mail" : "example.com"}
-            required
-          />
-          {selectedParent && <span style={{ color: "#6b7280" }}>.{selectedParent.name}</span>}
-          <button type="submit" disabled={createDomain.isPending}>
-            Add
-          </button>
-        </form>
-      )}
-      {formError && <p style={{ color: "#b91c1c" }}>{formError}</p>}
-      {formNotice && <p style={{ color: "#166534" }}>{formNotice}</p>}
-
-      {isLoading && <p>Loading…</p>}
-      {!isLoading && apexDomains.length === 0 && <p>No domains yet.</p>}
-
-      <ul style={{ listStyle: "none", padding: 0 }}>
-        {apexDomains.map((domain) => (
-          <li key={domain.id} style={{ marginBottom: "1rem" }}>
-            <DomainRow domain={domain} canManage={canManage} />
-            <ul style={{ marginTop: "0.5rem" }}>
-              {(subdomainsByParent.get(domain.id) ?? []).map((sub) => (
-                <li key={sub.id} style={{ marginBottom: "0.5rem" }}>
-                  <DomainRow domain={sub} canManage={canManage} />
-                </li>
+        <div className="card">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              createDomain.mutate();
+            }}
+            className="field-row"
+          >
+            <select className="input" value={parentId} onChange={(e) => setParentId(e.target.value)}>
+              <option value="">apex domain</option>
+              {apexDomains.map((d) => (
+                <option key={d.id} value={d.id}>
+                  subdomain of {d.name}
+                </option>
               ))}
-            </ul>
-          </li>
-        ))}
-      </ul>
+            </select>
+            <input
+              className="input"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder={selectedParent ? "mail" : "example.com"}
+              required
+            />
+            {selectedParent && <span className="muted">.{selectedParent.name}</span>}
+            <button type="submit" className="btn btn--primary" disabled={createDomain.isPending}>
+              <Plus />
+              Add
+            </button>
+          </form>
+          {formError && (
+            <div className="alert alert--critical" style={{ marginTop: "0.75rem", marginBottom: 0 }}>
+              {formError}
+            </div>
+          )}
+          {formNotice && (
+            <div className="alert alert--good" style={{ marginTop: "0.75rem", marginBottom: 0 }}>
+              {formNotice}
+            </div>
+          )}
+        </div>
+      )}
+
+      {isLoading && <p className="muted">Loading…</p>}
+      {!isLoading && apexDomains.length === 0 && <p className="empty-state">No domains yet.</p>}
+
+      {apexDomains.map((domain) => (
+        <div key={domain.id}>
+          <DomainRow domain={domain} canManage={canManage} />
+          {(subdomainsByParent.get(domain.id) ?? []).map((sub) => (
+            <div key={sub.id} style={{ marginLeft: "1.5rem" }}>
+              <DomainRow domain={sub} canManage={canManage} />
+            </div>
+          ))}
+        </div>
+      ))}
 
       {canManage && <DetectedDomains />}
     </section>
@@ -148,61 +162,56 @@ function DetectedDomains() {
   if (isLoading || !detected || detected.length === 0) return null;
 
   return (
-    <div style={{ marginTop: "2rem", paddingTop: "1.5rem", borderTop: "1px solid #e5e7eb" }}>
-      <h3>Detected domains</h3>
-      <p style={{ color: "#4b5563", maxWidth: 640 }}>
+    <div style={{ marginTop: "2rem" }}>
+      <h3 className="section-title">Detected domains</h3>
+      <p className="section-hint">
         Your mailbox is receiving DMARC/TLS reports for these domains, but none of them are added yet.
       </p>
-      {error && <p style={{ color: "#b91c1c" }}>{error}</p>}
-      <ul style={{ listStyle: "none", padding: 0 }}>
-        {detected.map((item) => (
-          <li key={item.name} style={{ marginBottom: "0.5rem" }}>
-            <strong>{item.name}</strong>
-            <span style={{ color: "#6b7280", marginLeft: "0.5rem", fontSize: "0.85rem" }}>
-              {item.report_count} report{item.report_count === 1 ? "" : "s"}
-              {item.message_volume > 0 && `, ${item.message_volume} messages`}
-            </span>
-            {item.relationship === "subdomain_of_registered" && (
-              <span style={{ marginLeft: "0.5rem", fontSize: "0.75rem", color: "#166534" }}>
-                subdomain of {item.suggested_parent_name} (already added)
+      {error && <div className="alert alert--critical">{error}</div>}
+      <div className="card" style={{ padding: 0 }}>
+        {detected.map((item, i) => (
+          <div
+            key={item.name}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "0.75rem",
+              padding: "0.75rem 1rem",
+              borderBottom: i < detected.length - 1 ? "1px solid var(--border)" : "none",
+            }}
+          >
+            <div>
+              <strong>{item.name}</strong>
+              <span className="muted" style={{ marginLeft: "0.5rem", fontSize: "0.8rem" }}>
+                {item.report_count} report{item.report_count === 1 ? "" : "s"}
+                {item.message_volume > 0 && `, ${item.message_volume} messages`}
               </span>
-            )}
-            {item.relationship === "subdomain_of_detected" && (
-              <span style={{ marginLeft: "0.5rem", fontSize: "0.75rem", color: "#92400e" }}>
-                looks like a subdomain of {item.suggested_parent_name}, which is also detected but not yet
-                added — consider adding that one first
-              </span>
-            )}
-            <button
-              style={{ marginLeft: "0.75rem" }}
-              onClick={() => addDetected.mutate(item)}
-              disabled={addDetected.isPending}
-            >
+              {item.relationship === "subdomain_of_registered" && (
+                <span className="badge badge--good" style={{ marginLeft: "0.5rem" }}>
+                  subdomain of {item.suggested_parent_name}
+                </span>
+              )}
+              {item.relationship === "subdomain_of_detected" && (
+                <div className="section-hint" style={{ margin: "0.15rem 0 0" }}>
+                  looks like a subdomain of {item.suggested_parent_name}, which is also detected but not yet added —
+                  consider adding that one first
+                </div>
+              )}
+            </div>
+            <button className="btn btn--secondary btn--sm" onClick={() => addDetected.mutate(item)} disabled={addDetected.isPending}>
               Add &amp; verify
             </button>
-          </li>
+          </div>
         ))}
-      </ul>
+      </div>
     </div>
   );
 }
 
 function VerificationBadge({ status }: { status: Domain["verification_status"] }) {
   const verified = status === "verified";
-  return (
-    <span
-      style={{
-        marginLeft: "0.5rem",
-        fontSize: "0.75rem",
-        padding: "0.1rem 0.5rem",
-        borderRadius: 999,
-        background: verified ? "#dcfce7" : "#fef3c7",
-        color: verified ? "#166534" : "#92400e",
-      }}
-    >
-      {verified ? "verified" : "unverified"}
-    </span>
-  );
+  return <span className={`badge ${verified ? "badge--good" : "badge--warning"}`}>{verified ? "verified" : "unverified"}</span>;
 }
 
 function DomainRow({ domain, canManage }: { domain: Domain; canManage: boolean }) {
@@ -247,53 +256,56 @@ function DomainRow({ domain, canManage }: { domain: Domain; canManage: boolean }
   const isPending = domain.verification_status === "pending";
 
   return (
-    <div>
-      <Link to={`/domains/${domain.id}`}>
-        <strong>{domain.name}</strong>
-      </Link>
-      {!domain.is_active && <span style={{ color: "#92400e" }}> (archived)</span>}
-      <VerificationBadge status={domain.verification_status} />
-      {canManage && isPending && (
-        <>
-          <button style={{ marginLeft: "0.75rem" }} onClick={() => setShowInstructions((v) => !v)}>
-            {showInstructions ? "Hide" : "How to verify"}
-          </button>
-          <button
-            style={{ marginLeft: "0.5rem" }}
-            onClick={() => verifyDomain.mutate()}
-            disabled={verifyDomain.isPending}
-          >
-            Check now
-          </button>
-        </>
-      )}
-      {canManage && (
-        <>
-          <button style={{ marginLeft: "0.5rem" }} onClick={() => toggleActive.mutate()} disabled={toggleActive.isPending}>
-            {domain.is_active ? "Archive" : "Unarchive"}
-          </button>
-          <button style={{ marginLeft: "0.5rem" }} onClick={handleRemove} disabled={deleteDomain.isPending}>
-            Remove
-          </button>
-        </>
-      )}
+    <div className="card" style={{ marginBottom: "0.6rem", opacity: domain.is_active ? 1 : 0.65 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <Link to={`/domains/${domain.id}`}>
+            <strong>{domain.name}</strong>
+          </Link>
+          {!domain.is_active && <span className="badge badge--neutral">archived</span>}
+          <VerificationBadge status={domain.verification_status} />
+        </div>
+
+        {canManage && (
+          <div className="chip-row">
+            {isPending && (
+              <>
+                <button className="btn btn--ghost btn--sm" onClick={() => setShowInstructions((v) => !v)}>
+                  {showInstructions ? "Hide" : "How to verify"}
+                </button>
+                <button className="btn btn--secondary btn--sm" onClick={() => verifyDomain.mutate()} disabled={verifyDomain.isPending}>
+                  <RefreshCw />
+                  Check now
+                </button>
+              </>
+            )}
+            <button className="icon-btn" onClick={() => toggleActive.mutate()} disabled={toggleActive.isPending} title={domain.is_active ? "Archive" : "Unarchive"}>
+              {domain.is_active ? <Archive /> : <ArchiveRestore />}
+            </button>
+            <button className="icon-btn" onClick={handleRemove} disabled={deleteDomain.isPending} title="Remove">
+              <Trash2 />
+            </button>
+          </div>
+        )}
+      </div>
+
       {actionError && (
-        <div style={{ color: "#b91c1c", fontSize: "0.85rem", marginTop: "0.25rem" }}>
+        <div className="alert alert--critical" style={{ marginTop: "0.6rem", marginBottom: 0 }}>
           {actionError}
           {actionError.includes("report history") && " (use Archive instead)"}
         </div>
       )}
+
       {isPending && showInstructions && (
         <div
           style={{
-            marginTop: "0.4rem",
-            padding: "0.6rem 0.8rem",
-            background: "#f9fafb",
-            border: "1px solid #e5e7eb",
-            borderRadius: 6,
+            marginTop: "0.75rem",
+            padding: "0.75rem 0.9rem",
+            background: "var(--plane)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius-sm)",
             fontFamily: "monospace",
-            fontSize: "0.85rem",
-            maxWidth: 640,
+            fontSize: "0.83rem",
           }}
         >
           Add this DNS TXT record, then click "Check now":
@@ -302,7 +314,7 @@ function DomainRow({ domain, canManage }: { domain: Domain; canManage: boolean }
           <br />
           TXT value: <strong>{domain.verification_token}</strong>
           {verifyDomain.isSuccess && !verifyDomain.data.verified && (
-            <p style={{ color: "#b91c1c", fontFamily: "system-ui, sans-serif" }}>
+            <p style={{ color: "var(--critical-text)", fontFamily: "var(--font-sans)", marginTop: "0.5rem" }}>
               Not found yet — DNS changes can take a few minutes to propagate.
             </p>
           )}
@@ -355,7 +367,7 @@ function MailboxConnectionStatusBanner() {
 
   const consentLinks = org?.entra_consent_urls;
   const consentGuidance = consentLinks && (
-    <div style={{ fontSize: "0.85rem", marginTop: "0.4rem" }}>
+    <div style={{ fontSize: "0.85rem", marginTop: "0.5rem" }}>
       Make sure your Global Admin has approved{" "}
       <a href={consentLinks.mail_access_consent_url} target="_blank" rel="noreferrer">
         mail access
@@ -373,34 +385,40 @@ function MailboxConnectionStatusBanner() {
   if (noConnectionYet) {
     if (!canManage) {
       return (
-        <div style={bannerStyle("#fef3c7", "#92400e")}>
+        <div className="alert alert--warning">
+          <Mail size={15} style={{ verticalAlign: "-2px", marginRight: "0.4rem" }} />
           No mailbox connection configured yet — ask your org admin to set one up.
         </div>
       );
     }
     return (
-      <div style={bannerStyle("#fef3c7", "#92400e")}>
-        <div>No mailbox connection configured yet.</div>
+      <div className="alert alert--warning">
+        <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+          <Mail size={15} />
+          No mailbox connection configured yet.
+        </div>
         {consentGuidance}
         <form
           onSubmit={(e) => {
             e.preventDefault();
             setConnection.mutate();
           }}
-          style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}
+          className="field-row"
+          style={{ marginTop: "0.6rem" }}
         >
           <input
+            className="input"
             value={mailbox}
             onChange={(e) => setMailbox(e.target.value)}
             placeholder="dmarc-reports@yourdomain.com"
             style={{ width: "260px" }}
             required
           />
-          <button type="submit" disabled={setConnection.isPending}>
+          <button type="submit" className="btn btn--primary btn--sm" disabled={setConnection.isPending}>
             Save &amp; start syncing
           </button>
         </form>
-        {saveError && <div style={{ color: "#b91c1c" }}>{saveError}</div>}
+        {saveError && <div style={{ marginTop: "0.5rem" }}>{saveError}</div>}
       </div>
     );
   }
@@ -408,29 +426,35 @@ function MailboxConnectionStatusBanner() {
 
   const ok = connection.consent_status === "granted" && connection.last_sync_status !== "error";
   return (
-    <div style={bannerStyle(ok ? "#dcfce7" : "#fef3c7", ok ? "#166534" : "#92400e")}>
+    <div className={`alert ${ok ? "alert--good" : "alert--warning"}`}>
       {editing ? (
         <form
           onSubmit={(e) => {
             e.preventDefault();
             setConnection.mutate();
           }}
-          style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}
+          className="field-row"
         >
-          <input value={mailbox} onChange={(e) => setMailbox(e.target.value)} style={{ width: "260px" }} required />
-          <button type="submit" disabled={setConnection.isPending}>
+          <input className="input" value={mailbox} onChange={(e) => setMailbox(e.target.value)} style={{ width: "260px" }} required />
+          <button type="submit" className="btn btn--primary btn--sm" disabled={setConnection.isPending}>
             Save
           </button>
-          <button type="button" onClick={() => setEditing(false)}>
+          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setEditing(false)}>
             Cancel
           </button>
         </form>
       ) : (
         <>
-          Mailbox: <strong>{connection.mailbox_address}</strong> — consent {connection.consent_status}
-          {connection.last_sync_at && `, last synced ${new Date(connection.last_sync_at).toLocaleString()}`}
+          <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}>
+            <Mail size={15} />
+            Mailbox: <strong>{connection.mailbox_address}</strong>
+            <span className="muted">— consent {connection.consent_status}</span>
+            {connection.last_sync_at && (
+              <span className="muted">, last synced {new Date(connection.last_sync_at).toLocaleString()}</span>
+            )}
+          </div>
           {connection.last_sync_status === "error" && connection.last_sync_error && (
-            <> — error: {connection.last_sync_error}</>
+            <div style={{ marginTop: "0.35rem" }}>— error: {connection.last_sync_error}</div>
           )}
           {/* Setting the mailbox is self-attested, not verified — a sync
               error very often just means the Entra consent steps were never
@@ -439,12 +463,13 @@ function MailboxConnectionStatusBanner() {
               was first configured. */}
           {canManage && connection.last_sync_status === "error" && consentGuidance}
           {canManage && (
-            <>
-              <button style={{ marginLeft: "1rem" }} onClick={() => resync.mutate()} disabled={resync.isPending}>
+            <div className="chip-row" style={{ marginTop: "0.6rem" }}>
+              <button className="btn btn--secondary btn--sm" onClick={() => resync.mutate()} disabled={resync.isPending}>
+                <RefreshCw />
                 {resync.isPending || resync.isSuccess ? "Syncing…" : "Resync now"}
               </button>
               <button
-                style={{ marginLeft: "0.5rem" }}
+                className="btn btn--ghost btn--sm"
                 onClick={() => {
                   setMailbox(connection.mailbox_address);
                   setEditing(true);
@@ -453,20 +478,17 @@ function MailboxConnectionStatusBanner() {
                 Change mailbox
               </button>
               {connection.last_sync_status !== "error" && (
-                <button style={{ marginLeft: "0.5rem" }} onClick={() => setShowLinks((v) => !v)}>
-                  {showLinks ? "Hide Entra links" : "Entra links"}
+                <button className="btn btn--ghost btn--sm" onClick={() => setShowLinks((v) => !v)}>
+                  {showLinks ? <ChevronUp /> : <ChevronDown />}
+                  Entra links
                 </button>
               )}
-              {showLinks && connection.last_sync_status !== "error" && consentGuidance}
-            </>
+            </div>
           )}
+          {showLinks && connection.last_sync_status !== "error" && consentGuidance}
         </>
       )}
-      {saveError && <div style={{ color: "#b91c1c" }}>{saveError}</div>}
+      {saveError && <div style={{ marginTop: "0.5rem" }}>{saveError}</div>}
     </div>
   );
-}
-
-function bannerStyle(background: string, color: string): CSSProperties {
-  return { background, color, padding: "0.6rem 1rem", borderRadius: 6, marginBottom: "1rem" };
 }

@@ -1,0 +1,155 @@
+/* Design tokens — colors sourced from the dataviz skill's validated
+   reference palette (references/palette.md): pre-checked for WCAG contrast
+   and colorblind-safe adjacent-pair separation, not picked by eye.
+
+   Badge text colors are darker/lighter derivatives of the skill's raw
+   status hues, not the raw hues themselves — palette.md notes warning/
+   serious fall under 3:1 on the light surface at their raw value, so text
+   needs its own step (the skill does the same for "good", giving a
+   separate #006300 success-text distinct from the #0ca30c status fill). */
+
+:root {
+  color-scheme: light;
+
+  --plane: #f9f9f7;
+  --surface: #fcfcfb;
+  --surface-raised: #ffffff;
+
+  --ink-primary: #0b0b0b;
+  --ink-secondary: #52514e;
+  --ink-muted: #898781;
+
+  --border: #e1e0d9;
+  --border-strong: #c3c2b7;
+  --ring: rgba(11, 11, 11, 0.1);
+
+  --accent: #2a78d6;
+  --accent-hover: #1c5cab;
+  --accent-ink: #ffffff;
+  --accent-wash: #eaf2fc;
+
+  --good: #0ca30c;
+  --good-wash: #e3f7e3;
+  --good-text: #006300;
+  --warning: #fab219;
+  --warning-wash: #fff3d9;
+  --warning-text: #92400e;
+  --serious: #ec835a;
+  --serious-wash: #fdeae1;
+  --serious-text: #9a3412;
+  --critical: #d03b3b;
+  --critical-wash: #fbe4e4;
+  --critical-text: #991b1b;
+
+  --cat-1: #2a78d6;
+  --cat-2: #eb6834;
+  --cat-3: #1baf7a;
+  --cat-4: #eda100;
+  --cat-5: #e87ba4;
+  --cat-6: #008300;
+  --cat-7: #4a3aa7;
+  --cat-8: #e34948;
+
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --shadow-sm: 0 1px 2px rgba(11, 11, 11, 0.04), 0 1px 1px rgba(11, 11, 11, 0.03);
+  --shadow: 0 4px 16px rgba(11, 11, 11, 0.07), 0 1px 2px rgba(11, 11, 11, 0.04);
+
+  --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --sidebar-width: 232px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+
+    --plane: #0d0d0d;
+    --surface: #1a1a19;
+    --surface-raised: #221f1e;
+
+    --ink-primary: #ffffff;
+    --ink-secondary: #c3c2b7;
+    --ink-muted: #898781;
+
+    --border: #2c2c2a;
+    --border-strong: #383835;
+    --ring: rgba(255, 255, 255, 0.1);
+
+    --accent: #3987e5;
+    --accent-hover: #5a9fec;
+    --accent-ink: #ffffff;
+    --accent-wash: #16233a;
+
+    --good: #0ca30c;
+    --good-wash: #10291a;
+    --good-text: #4ade80;
+    --warning: #fab219;
+    --warning-wash: #382b10;
+    --warning-text: #fbbf24;
+    --serious: #ec835a;
+    --serious-wash: #3a2013;
+    --serious-text: #fb923c;
+    --critical: #e66767;
+    --critical-wash: #3a1414;
+    --critical-text: #f87171;
+
+    --cat-1: #3987e5;
+    --cat-2: #d95926;
+    --cat-3: #199e70;
+    --cat-4: #c98500;
+    --cat-5: #d55181;
+    --cat-6: #22a022;
+    --cat-7: #9085e9;
+    --cat-8: #e66767;
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+    --shadow: 0 4px 20px rgba(0, 0, 0, 0.45), 0 1px 2px rgba(0, 0, 0, 0.3);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --plane: #0d0d0d;
+  --surface: #1a1a19;
+  --surface-raised: #221f1e;
+
+  --ink-primary: #ffffff;
+  --ink-secondary: #c3c2b7;
+  --ink-muted: #898781;
+
+  --border: #2c2c2a;
+  --border-strong: #383835;
+  --ring: rgba(255, 255, 255, 0.1);
+
+  --accent: #3987e5;
+  --accent-hover: #5a9fec;
+  --accent-ink: #ffffff;
+  --accent-wash: #16233a;
+
+  --good: #0ca30c;
+  --good-wash: #10291a;
+  --good-text: #4ade80;
+  --warning: #fab219;
+  --warning-wash: #382b10;
+  --warning-text: #fbbf24;
+  --serious: #ec835a;
+  --serious-wash: #3a2013;
+  --serious-text: #fb923c;
+  --critical: #e66767;
+  --critical-wash: #3a1414;
+  --critical-text: #f87171;
+
+  --cat-1: #3987e5;
+  --cat-2: #d95926;
+  --cat-3: #199e70;
+  --cat-4: #c98500;
+  --cat-5: #d55181;
+  --cat-6: #22a022;
+  --cat-7: #9085e9;
+  --cat-8: #e66767;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow: 0 4px 20px rgba(0, 0, 0, 0.45), 0 1px 2px rgba(0, 0, 0, 0.3);
+}

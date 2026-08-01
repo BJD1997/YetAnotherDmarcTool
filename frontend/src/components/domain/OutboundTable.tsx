@@ -7,45 +7,49 @@ function pct(value: number | null): string {
 
 export default function OutboundTable({ services }: { services: DmarcOutboundService[] }) {
   if (services.length === 0) {
-    return <p style={{ color: "#6b7280" }}>No aggregate reports received yet for this domain.</p>;
+    return <p className="empty-state">No aggregate reports received yet for this domain.</p>;
   }
 
   return (
-    <table style={{ borderCollapse: "collapse", width: "100%" }}>
-      <thead>
-        <tr style={{ textAlign: "left", borderBottom: "2px solid #e5e7eb" }}>
-          <th style={{ padding: "0.4rem 1rem 0.4rem 0" }}>Service</th>
-          <th style={{ padding: "0.4rem 1rem" }}>Volume</th>
-          <th style={{ padding: "0.4rem 1rem" }}>SPF aligned</th>
-          <th style={{ padding: "0.4rem 1rem" }}>DKIM aligned</th>
-          <th style={{ padding: "0.4rem 1rem" }}>Accepted</th>
-          <th style={{ padding: "0.4rem 1rem" }}>Quarantined</th>
-          <th style={{ padding: "0.4rem 1rem" }}>Rejected</th>
-          <th style={{ padding: "0.4rem 1rem" }}>DMARC pass</th>
-        </tr>
-      </thead>
-      <tbody>
-        {services.map((s) => (
-          <tr key={s.service_label} style={{ borderBottom: "1px solid #f3f4f6" }}>
-            <td style={{ padding: "0.5rem 1rem 0.5rem 0" }}>
-              <ServiceBadge label={s.service_label} />
-              {s.service_label}
-              {s.source_ip_count > 1 && (
-                <span style={{ color: "#6b7280", fontSize: "0.8rem" }}> ({s.source_ip_count} IPs)</span>
-              )}
-            </td>
-            <td style={{ padding: "0.5rem 1rem" }}>{s.volume}</td>
-            <td style={{ padding: "0.5rem 1rem" }}>{pct(s.spf_aligned_pct)}</td>
-            <td style={{ padding: "0.5rem 1rem" }}>{pct(s.dkim_aligned_pct)}</td>
-            <td style={{ padding: "0.5rem 1rem" }}>{s.accepted}</td>
-            <td style={{ padding: "0.5rem 1rem", color: s.quarantined > 0 ? "#92400e" : undefined }}>
-              {s.quarantined}
-            </td>
-            <td style={{ padding: "0.5rem 1rem", color: s.rejected > 0 ? "#991b1b" : undefined }}>{s.rejected}</td>
-            <td style={{ padding: "0.5rem 1rem", fontWeight: 600 }}>{pct(s.dmarc_pass_pct)}</td>
+    <div className="table-wrap">
+      <table className="table">
+        <thead>
+          <tr>
+            <th>Service</th>
+            <th>Volume</th>
+            <th>SPF aligned</th>
+            <th>DKIM aligned</th>
+            <th>Accepted</th>
+            <th>Quarantined</th>
+            <th>Rejected</th>
+            <th>DMARC pass</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {services.map((s) => (
+            <tr key={s.service_label}>
+              <td>
+                <ServiceBadge label={s.service_label} />
+                {s.service_label}
+                {s.source_ip_count > 1 && <span className="muted" style={{ fontSize: "0.8rem" }}> ({s.source_ip_count} IPs)</span>}
+              </td>
+              <td className="num">{s.volume}</td>
+              <td className="num">{pct(s.spf_aligned_pct)}</td>
+              <td className="num">{pct(s.dkim_aligned_pct)}</td>
+              <td className="num">{s.accepted}</td>
+              <td className="num" style={{ color: s.quarantined > 0 ? "var(--warning-text)" : undefined }}>
+                {s.quarantined}
+              </td>
+              <td className="num" style={{ color: s.rejected > 0 ? "var(--critical-text)" : undefined }}>
+                {s.rejected}
+              </td>
+              <td className="num" style={{ fontWeight: 600 }}>
+                {pct(s.dmarc_pass_pct)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft, RefreshCw, Trash2, Plus, ArrowRight } from "lucide-react";
 import { api, ApiError } from "../api/client";
 import type { Domain } from "../api/types";
 import type { DmarcOutboundService, DmarcSummary, DomainRating, InboundHostRow } from "../api/dmarc";
@@ -65,22 +66,23 @@ export default function DomainDetail() {
 
   return (
     <section>
-      <p>
-        <Link to="/">&larr; Domains</Link>
-      </p>
-      <h2>{domain?.name ?? "…"}</h2>
+      <Link to="/" className="back-link">
+        <ArrowLeft size={14} />
+        Domains
+      </Link>
+      <div className="page-header">
+        <h1>{domain?.name ?? "…"}</h1>
+      </div>
 
       <DomainRatingCard rating={rating} />
 
       {domain && <BestPractices domainId={domainId} domain={domain} canManage={canManage} />}
 
-      <h3>DMARC report summary</h3>
-      {summaryLoading && <p>Loading…</p>}
-      {summary && summary.report_count === 0 && (
-        <p style={{ color: "#4b5563" }}>No aggregate reports received yet for this domain.</p>
-      )}
+      <h3 className="section-title">DMARC report summary</h3>
+      {summaryLoading && <p className="muted">Loading…</p>}
+      {summary && summary.report_count === 0 && <p className="empty-state">No aggregate reports received yet for this domain.</p>}
       {summary && summary.report_count > 0 && (
-        <div style={{ display: "flex", gap: "2rem", margin: "1rem 0" }}>
+        <div className="stat-row">
           <Stat label="Reports" value={summary.report_count} />
           <Stat label="Total messages" value={summary.total_message_count} />
           <Stat label="DMARC pass rate" value={passRate !== null ? `${passRate}%` : "—"} />
@@ -89,28 +91,27 @@ export default function DomainDetail() {
       )}
 
       {summary && summary.report_count > 0 && (
-        <>
-          <h3>Outbound email</h3>
-          <p style={{ color: "#6b7280", fontSize: "0.9rem", marginTop: "-0.5rem" }}>
-            Services sending email as this domain, per aggregate reports received.
-          </p>
+        <div className="card">
+          <h3 className="section-title">Outbound email</h3>
+          <p className="section-hint">Services sending email as this domain, per aggregate reports received.</p>
           <OutboundTable services={sources ?? []} />
-        </>
+        </div>
       )}
 
       {domain?.verification_status === "verified" && (
-        <>
-          <h3>Inbound email</h3>
-          <p style={{ color: "#6b7280", fontSize: "0.9rem", marginTop: "-0.5rem" }}>
-            Hosts that process email for this domain, and whether they enforce TLS.
-          </p>
+        <div className="card">
+          <h3 className="section-title">Inbound email</h3>
+          <p className="section-hint">Hosts that process email for this domain, and whether they enforce TLS.</p>
           <InboundTable hosts={inboundHosts ?? []} />
-        </>
+        </div>
       )}
 
       {summary && summary.report_count > 0 && (
         <p>
-          <Link to={`/domains/${domainId}/reports`}>View all reports &rarr;</Link>
+          <Link to={`/domains/${domainId}/reports`} style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem" }}>
+            View all reports
+            <ArrowRight size={14} />
+          </Link>
         </p>
       )}
     </section>
@@ -149,34 +150,45 @@ function BestPractices({ domainId, domain, canManage }: { domainId: string; doma
   };
 
   return (
-    <div style={{ margin: "1.5rem 0", padding: "1rem", border: "1px solid #e5e7eb", borderRadius: 8 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h3 style={{ margin: 0 }}>Best practices</h3>
+    <div className="card">
+      <div className="card-header">
+        <h3 className="section-title" style={{ margin: 0 }}>
+          Best practices
+        </h3>
         {canManage && domain.verification_status === "verified" && (
-          <button onClick={() => recheck.mutate()} disabled={recheck.isPending}>
+          <button className="btn btn--secondary btn--sm" onClick={() => recheck.mutate()} disabled={recheck.isPending}>
+            <RefreshCw />
             {recheck.isPending ? "Checking…" : "Recheck now"}
           </button>
         )}
       </div>
 
       {domain.verification_status !== "verified" && (
-        <p style={{ color: "#92400e" }}>Verify this domain first — checks won't run until ownership is confirmed.</p>
+        <div className="alert alert--warning" style={{ marginBottom: 0 }}>
+          Verify this domain first — checks won't run until ownership is confirmed.
+        </div>
       )}
-      {error && <p style={{ color: "#b91c1c" }}>{error}</p>}
-      {isLoading && <p>Loading…</p>}
+      {error && (
+        <div className="alert alert--critical" style={{ marginBottom: 0 }}>
+          {error}
+        </div>
+      )}
+      {isLoading && <p className="muted">Loading…</p>}
       {domain.verification_status === "verified" && !isLoading && (checks ?? []).length === 0 && (
-        <p style={{ color: "#4b5563" }}>No checks have run yet — click "Recheck now".</p>
+        <p className="empty-state">No checks have run yet — click "Recheck now".</p>
       )}
 
       {CHECK_ORDER.filter((t) => byType.has(t)).map((checkType) => {
         const results = byType.get(checkType)!;
         return (
-          <div key={checkType} style={{ marginTop: "0.75rem" }}>
-            <StatusBadge status={worstStatus(results)} />
-            <strong>{CHECK_LABELS[checkType]}</strong>
-            <ul style={{ margin: "0.25rem 0 0 1.5rem" }}>
+          <div key={checkType} style={{ marginTop: "0.9rem" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+              <StatusBadge status={worstStatus(results)} />
+              <strong style={{ fontSize: "0.88rem" }}>{CHECK_LABELS[checkType]}</strong>
+            </div>
+            <ul style={{ margin: "0.4rem 0 0 1.4rem", padding: 0 }}>
               {results.map((r) => (
-                <li key={r.id} style={{ fontSize: "0.9rem", marginBottom: "0.15rem" }}>
+                <li key={r.id} style={{ fontSize: "0.85rem", marginBottom: "0.3rem", color: "var(--ink-secondary)" }}>
                   <StatusBadge status={r.status} />
                   {r.subject && <code style={{ marginRight: "0.4rem" }}>{r.subject}:</code>}
                   {r.summary}
@@ -217,40 +229,49 @@ function DkimSelectors({ domainId, canManage }: { domainId: string; canManage: b
   });
 
   return (
-    <div style={{ marginTop: "1rem", paddingTop: "0.75rem", borderTop: "1px solid #f3f4f6" }}>
-      <strong style={{ fontSize: "0.9rem" }}>DKIM selectors</strong>
-      <p style={{ color: "#6b7280", fontSize: "0.85rem", margin: "0.25rem 0" }}>
-        DKIM selectors aren't discoverable via DNS — add the ones this domain actually signs with (check a
-        received email's DKIM-Signature header for "s=", or your mail provider's docs).
+    <div style={{ marginTop: "1.25rem", paddingTop: "1rem", borderTop: "1px solid var(--border)" }}>
+      <strong style={{ fontSize: "0.88rem" }}>DKIM selectors</strong>
+      <p className="section-hint">
+        DKIM selectors aren't discoverable via DNS — add the ones this domain actually signs with (check a received
+        email's DKIM-Signature header for "s=", or your mail provider's docs).
       </p>
-      <ul style={{ listStyle: "none", padding: 0, fontSize: "0.9rem" }}>
+      <div className="chip-row" style={{ marginBottom: canManage ? "0.75rem" : 0 }}>
         {(selectorList ?? []).map((s) => (
-          <li key={s.id} style={{ marginBottom: "0.25rem" }}>
+          <span key={s.id} className="badge badge--neutral" style={{ gap: "0.4rem" }}>
             <code>{s.selector}</code>
             {canManage && (
-              <button style={{ marginLeft: "0.5rem" }} onClick={() => deleteSelector.mutate(s.id)}>
-                Remove
+              <button
+                onClick={() => deleteSelector.mutate(s.id)}
+                style={{ background: "none", border: "none", cursor: "pointer", color: "inherit", padding: 0, display: "flex" }}
+                title="Remove"
+              >
+                <Trash2 size={12} />
               </button>
             )}
-          </li>
+          </span>
         ))}
-        {(selectorList ?? []).length === 0 && <li style={{ color: "#6b7280" }}>None added yet.</li>}
-      </ul>
+        {(selectorList ?? []).length === 0 && <span className="muted" style={{ fontSize: "0.85rem" }}>None added yet.</span>}
+      </div>
       {canManage && (
         <form
           onSubmit={(e) => {
             e.preventDefault();
             addSelector.mutate();
           }}
-          style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}
+          className="field-row"
         >
-          <input value={selector} onChange={(e) => setSelector(e.target.value)} placeholder="selector1" required />
-          <button type="submit" disabled={addSelector.isPending}>
+          <input className="input" value={selector} onChange={(e) => setSelector(e.target.value)} placeholder="selector1" required />
+          <button type="submit" className="btn btn--secondary btn--sm" disabled={addSelector.isPending}>
+            <Plus />
             Add selector
           </button>
         </form>
       )}
-      {error && <p style={{ color: "#b91c1c", fontSize: "0.85rem" }}>{error}</p>}
+      {error && (
+        <div className="alert alert--critical" style={{ marginTop: "0.5rem", marginBottom: 0 }}>
+          {error}
+        </div>
+      )}
     </div>
   );
 }
