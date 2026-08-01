@@ -5,6 +5,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   token_invalid: "Microsoft's response could not be verified. Please try again.",
   organization_not_provisioned:
     "Your organization hasn't been set up in this dashboard yet. Contact your administrator.",
+  organization_suspended: "This organization's access has been suspended. Contact your administrator.",
 };
 
 function MicrosoftMark() {

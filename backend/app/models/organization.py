@@ -25,7 +25,7 @@ class Organization(UUIDPkMixin, TimestampMixin, Base):
     status: Mapped[OrganizationStatus] = mapped_column(
         pg_enum(OrganizationStatus, "organization_status"),
         nullable=False,
-        default=OrganizationStatus.pending_setup,
+        default=OrganizationStatus.active,
     )
 
     # At most one organization may have this set (enforced by a partial

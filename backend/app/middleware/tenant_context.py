@@ -41,8 +41,14 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "user not active")
 
     org = await db.get(Organization, session.organization_id)
-    if org is None or org.status != OrganizationStatus.active:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "organization not active")
+    # org is None shouldn't actually be reachable now that orgs can be
+    # deleted: user_sessions.organization_id cascades on delete too, so a
+    # session pointing at a deleted org would already be gone by the time
+    # get_active_user_session ran above. Kept as a defensive fallback.
+    if org is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "organization not found")
+    if org.status == OrganizationStatus.suspended:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "organization suspended")
 
     return user
 

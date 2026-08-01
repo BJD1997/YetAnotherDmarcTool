@@ -66,10 +66,12 @@ async def callback(request: Request, db: AsyncSession = Depends(get_db)) -> Redi
 
     result = await db.execute(select(Organization).where(Organization.entra_tenant_id == tenant_id))
     org = result.scalar_one_or_none()
-    if org is None or org.status != OrganizationStatus.active:
+    if org is None:
         # Deliberate: orgs are provisioned by a platform admin ahead of time,
         # never auto-created just because some Entra tenant signed in.
         return RedirectResponse("/login?error=organization_not_provisioned", status_code=302)
+    if org.status == OrganizationStatus.suspended:
+        return RedirectResponse("/login?error=organization_suspended", status_code=302)
 
     await set_org_context(db, org.id)
 

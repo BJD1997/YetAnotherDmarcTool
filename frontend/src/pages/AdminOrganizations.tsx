@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 import { api, ApiError } from "../api/client";
 import { useAdminAuth } from "../auth/AdminAuthContext";
 
@@ -23,15 +23,15 @@ interface AdminOrganization {
   id: string;
   name: string;
   entra_tenant_id: string | null;
-  status: "pending_setup" | "active" | "suspended";
+  status: "active" | "suspended";
+  is_operator: boolean;
   created_at: string;
   mailbox_connection: MailboxConnectionInfo | null;
   entra_consent_urls: EntraConsentUrls | null;
 }
 
-const STATUS_ROLE: Record<AdminOrganization["status"], "good" | "warning" | "serious"> = {
+const STATUS_ROLE: Record<AdminOrganization["status"], "good" | "serious"> = {
   active: "good",
-  pending_setup: "warning",
   suspended: "serious",
 };
 
@@ -142,13 +142,13 @@ function OrgCard({ org }: { org: AdminOrganization }) {
           value={org.status}
           onChange={(e) => updateOrg.mutate({ status: e.target.value as AdminOrganization["status"] })}
         >
-          <option value="pending_setup">pending_setup</option>
           <option value="active">active</option>
           <option value="suspended">suspended</option>
         </select>
       </div>
       <div style={{ marginTop: "0.4rem" }}>
-        <span className={`badge badge--${STATUS_ROLE[org.status]}`}>{org.status.replace("_", " ")}</span>
+        <span className={`badge badge--${STATUS_ROLE[org.status]}`}>{org.status}</span>
+        {org.is_operator && <span className="badge badge--neutral" style={{ marginLeft: "0.4rem" }}>operator</span>}
       </div>
 
       <div style={{ display: "flex", gap: "3rem", marginTop: "1rem", flexWrap: "wrap" }}>
@@ -217,6 +217,78 @@ function OrgCard({ org }: { org: AdminOrganization }) {
           client's own portal once they're in (see MailboxConnectionStatusBanner
           in Domains.tsx), so there's nothing left for the platform admin to
           relay out-of-band. */}
+
+      <DeleteOrgSection org={org} />
+    </div>
+  );
+}
+
+function DeleteOrgSection({ org }: { org: AdminOrganization }) {
+  const queryClient = useQueryClient();
+  const [confirming, setConfirming] = useState(false);
+  const [confirmText, setConfirmText] = useState("");
+
+  const deleteOrg = useMutation({
+    mutationFn: () => api.delete(`/admin/organizations/${org.id}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-organizations"] }),
+  });
+
+  if (org.is_operator) {
+    return (
+      <p className="muted" style={{ fontSize: "0.78rem", marginTop: "1rem", marginBottom: 0 }}>
+        The operator organization can't be deleted from here.
+      </p>
+    );
+  }
+
+  if (!confirming) {
+    return (
+      <div style={{ marginTop: "1rem", paddingTop: "0.75rem", borderTop: "1px solid var(--border)" }}>
+        <button className="btn btn--danger btn--sm" onClick={() => setConfirming(true)}>
+          <Trash2 />
+          Delete organization
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ marginTop: "1rem", paddingTop: "0.75rem", borderTop: "1px solid var(--border)" }}>
+      <div className="alert alert--critical" style={{ marginBottom: "0.6rem" }}>
+        This permanently deletes <strong>{org.name}</strong> and everything tied to it — mailbox connection,
+        domains, DKIM selectors, every DMARC/TLS-RPT/forensic report, users, and job history. This can't be undone.
+        Type the organization name to confirm.
+      </div>
+      <div className="field-row">
+        <input
+          className="input"
+          value={confirmText}
+          onChange={(e) => setConfirmText(e.target.value)}
+          placeholder={org.name}
+          style={{ width: "260px" }}
+        />
+        <button
+          className="btn btn--danger btn--sm"
+          disabled={confirmText !== org.name || deleteOrg.isPending}
+          onClick={() => deleteOrg.mutate()}
+        >
+          {deleteOrg.isPending ? "Deleting…" : "Confirm delete"}
+        </button>
+        <button
+          className="btn btn--ghost btn--sm"
+          onClick={() => {
+            setConfirming(false);
+            setConfirmText("");
+          }}
+        >
+          Cancel
+        </button>
+      </div>
+      {deleteOrg.isError && (
+        <div className="alert alert--critical" style={{ marginTop: "0.6rem", marginBottom: 0 }}>
+          {deleteOrg.error instanceof ApiError ? deleteOrg.error.message : "failed to delete organization"}
+        </div>
+      )}
     </div>
   );
 }

@@ -75,21 +75,13 @@ async def _mailbox_out(db: AsyncSession, org_id: uuid.UUID) -> dict | None:
     }
 
 
-def _maybe_auto_activate(org: Organization, *, status_explicitly_set: bool) -> None:
-    """Setting a tenant ID is the one meaningful thing provisioning an org
-    requires — auto-flip pending_setup -> active right then instead of
-    making that a separate manual step, unless the caller explicitly set a
-    status themselves (e.g. deliberately provisioning as suspended)."""
-    if not status_explicitly_set and org.entra_tenant_id is not None and org.status == OrganizationStatus.pending_setup:
-        org.status = OrganizationStatus.active
-
-
 async def _org_out(db: AsyncSession, org: Organization) -> dict:
     return {
         "id": str(org.id),
         "name": org.name,
         "entra_tenant_id": str(org.entra_tenant_id) if org.entra_tenant_id else None,
         "status": org.status.value,
+        "is_operator": org.is_operator,
         "created_at": org.created_at.isoformat(),
         "mailbox_connection": await _mailbox_out(db, org.id),
         "entra_consent_urls": entra_consent_urls(org),
@@ -165,16 +157,7 @@ async def create_organization(
     db: AsyncSession = Depends(get_db),
     _admin: AdminPrincipal = Depends(get_current_platform_admin),
 ) -> dict:
-    # Set the initial status directly rather than via _maybe_auto_activate:
-    # that helper checks org.status against pending_setup, but a freshly
-    # constructed (not yet flushed) ORM object hasn't had its column
-    # default applied yet — SQLAlchemy applies Python-side defaults at
-    # flush time, so org.status would read as None here, not pending_setup.
-    org = Organization(
-        name=body.name,
-        entra_tenant_id=body.entra_tenant_id,
-        status=OrganizationStatus.active if body.entra_tenant_id is not None else OrganizationStatus.pending_setup,
-    )
+    org = Organization(name=body.name, entra_tenant_id=body.entra_tenant_id, status=OrganizationStatus.active)
     db.add(org)
     await db.commit()
     await db.refresh(org)
@@ -209,10 +192,42 @@ async def update_organization(
         org.entra_tenant_id = body.entra_tenant_id
     if body.status is not None:
         org.status = body.status
-    _maybe_auto_activate(org, status_explicitly_set=body.status is not None)
     await db.commit()
     await db.refresh(org)
     return await _org_out(db, org)
+
+
+@router.delete("/organizations/{org_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_organization(
+    org_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _admin: AdminPrincipal = Depends(get_current_platform_admin),
+) -> None:
+    org = await db.get(Organization, org_id)
+    if org is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "organization not found")
+    if org.is_operator:
+        # The operator org is what lets its own org_admins reach /admin/*
+        # without the local break-glass login — deleting it out from under
+        # them isn't something to allow by accident. Unset is_operator on
+        # another org first if the operator designation needs to move.
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "cannot delete the operator organization")
+
+    # No ORM-level cascade is configured (Organization has no relationship()s
+    # — see the model), but every child table's FK to organizations.id is
+    # ondelete=CASCADE at the DB level, so this one delete removes the org's
+    # entire history: mailbox connection, domains, DKIM selectors, DNS check
+    # results, DMARC/TLS-RPT/forensic reports, users, sessions, job runs.
+    # Postgres enforces each child table's RLS policy during the cascade,
+    # not just on the top-level DELETE — get_current_platform_admin already
+    # set app.is_platform_admin=true on this transaction (same as every
+    # other route in this file), which is what lets the cascade clear every
+    # child table's policy regardless of organization_id, not an org-scoped
+    # bypass that would need repeating here.
+    # Irreversible by design — the frontend requires typing the org's name
+    # to confirm before this endpoint is ever called.
+    await db.delete(org)
+    await db.commit()
 
 
 @router.post("/organizations/{org_id}/mailbox-connection", status_code=status.HTTP_201_CREATED)

@@ -2,7 +2,6 @@ import enum
 
 
 class OrganizationStatus(str, enum.Enum):
-    pending_setup = "pending_setup"
     active = "active"
     suspended = "suspended"
 
