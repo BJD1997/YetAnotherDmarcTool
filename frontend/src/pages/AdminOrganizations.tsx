@@ -1,7 +1,6 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, ListChecks, LogOut, ArrowLeft } from "lucide-react";
+import { Plus } from "lucide-react";
 import { api, ApiError } from "../api/client";
 import { useAdminAuth } from "../auth/AdminAuthContext";
 
@@ -37,7 +36,7 @@ const STATUS_ROLE: Record<AdminOrganization["status"], "good" | "warning" | "ser
 };
 
 export default function AdminOrganizations() {
-  const { admin, refetch: refetchAdmin } = useAdminAuth();
+  const { admin } = useAdminAuth();
   const queryClient = useQueryClient();
   const { data: orgs, isLoading } = useQuery({
     queryKey: ["admin-organizations"],
@@ -60,43 +59,10 @@ export default function AdminOrganizations() {
     onError: (err) => setError(err instanceof ApiError ? err.message : "failed to create organization"),
   });
 
-  async function handleLogout() {
-    // Only a "local" session has anything for /admin/logout to revoke — an
-    // operator_org admin is really just using their normal dashboard login,
-    // so signing out of *that* belongs on the main Shell header, not here.
-    if (admin?.auth_type === "local") {
-      await api.post("/admin/logout");
-      refetchAdmin();
-    }
-  }
-
   return (
-    <main style={{ maxWidth: 1000, margin: "0 auto", padding: "2rem" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.5rem" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
-          <span className="sidebar-brand-mark">D</span>
-          <h1 style={{ margin: 0 }}>Organizations</h1>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
-          <Link to="/admin/job-runs" className="btn btn--ghost btn--sm">
-            <ListChecks />
-            Job runs
-          </Link>
-          <span className="muted" style={{ fontSize: "0.85rem" }}>
-            {admin?.email}
-            {admin?.auth_type === "operator_org" && <span> (via your org login)</span>}
-          </span>
-          {admin?.auth_type === "local" ? (
-            <button className="icon-btn" onClick={handleLogout} title="Sign out">
-              <LogOut />
-            </button>
-          ) : (
-            <Link to="/" className="back-link" style={{ marginBottom: 0 }}>
-              <ArrowLeft size={14} />
-              Back to dashboard
-            </Link>
-          )}
-        </div>
+    <section>
+      <div className="page-header">
+        <h1>Organizations</h1>
       </div>
 
       {admin?.auth_type === "local" && <ChangePassword />}
@@ -137,7 +103,7 @@ export default function AdminOrganizations() {
       {(orgs ?? []).map((org) => (
         <OrgCard key={org.id} org={org} />
       ))}
-    </main>
+    </section>
   );
 }
 

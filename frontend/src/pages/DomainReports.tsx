@@ -16,6 +16,20 @@ function resultColor(result: string): string {
   return result === "pass" ? "var(--good-text)" : "var(--critical-text)";
 }
 
+function IpLink({ ip }: { ip: string }) {
+  return (
+    <a
+      href={`https://ipinfo.io/${ip}`}
+      target="_blank"
+      rel="noreferrer"
+      onClick={(e) => e.stopPropagation()}
+      style={{ color: "inherit" }}
+    >
+      {ip}
+    </a>
+  );
+}
+
 export default function DomainReports() {
   const { domainId } = useParams<{ domainId: string }>();
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -126,7 +140,7 @@ export default function DomainReports() {
                   {expandedId === row.record_id ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
                   <strong style={{ fontSize: "0.88rem" }}>{row.org_name}</strong>
                   <span className="muted" style={{ fontSize: "0.82rem" }}>
-                    about host {row.source_ip}
+                    about host <IpLink ip={row.source_ip} />
                   </span>
                 </div>
                 <div className="num" style={{ display: "flex", gap: "1rem", alignItems: "center", fontSize: "0.82rem" }}>
@@ -228,7 +242,7 @@ function RecordDetail({ detail }: { detail: DmarcRecordDetail }) {
           Hosts
         </div>
         <div className="secondary-text">
-          {detail.source_ip}, {detail.count} email{detail.count === 1 ? "" : "s"}
+          <IpLink ip={detail.source_ip} />, {detail.count} email{detail.count === 1 ? "" : "s"}
         </div>
       </section>
     </div>

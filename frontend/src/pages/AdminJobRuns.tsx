@@ -1,7 +1,6 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { api } from "../api/client";
 
 interface JobRun {
@@ -36,13 +35,9 @@ export default function AdminJobRuns() {
   });
 
   return (
-    <main style={{ maxWidth: 1100, margin: "0 auto", padding: "2rem" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem" }}>
-        <h1 style={{ margin: 0 }}>Job runs</h1>
-        <Link to="/admin" className="back-link" style={{ marginBottom: 0 }}>
-          <ArrowLeft size={14} />
-          Back to organizations
-        </Link>
+    <section>
+      <div className="page-header">
+        <h1>Job runs</h1>
       </div>
 
       <div className="field-row" style={{ marginBottom: "1.25rem" }}>
@@ -114,6 +109,6 @@ export default function AdminJobRuns() {
           </div>
         </div>
       )}
-    </main>
+    </section>
   );
 }

@@ -1,7 +1,7 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Globe, Users, Building2, LogOut } from "lucide-react";
+import { Globe, Users, Building2, LogOut, Menu, X, Settings } from "lucide-react";
 import { api } from "../api/client";
 import type { Organization } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
@@ -11,6 +11,7 @@ export default function Shell({ children }: { children: ReactNode }) {
   const { user, refetch } = useAuth();
   const location = useLocation();
   const queryClient = useQueryClient();
+  const [mobileOpen, setMobileOpen] = useState(false);
   const { data: org } = useQuery({
     queryKey: ["organization", "current"],
     queryFn: () => api.get<Organization>("/organizations/current"),
@@ -24,27 +25,47 @@ export default function Shell({ children }: { children: ReactNode }) {
   }
 
   const isActive = (path: string) => (path === "/" ? location.pathname === "/" : location.pathname.startsWith(path));
+  const closeMobile = () => setMobileOpen(false);
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <Link to="/" className="sidebar-brand">
-          <span className="sidebar-brand-mark">D</span>
-          <span className="sidebar-brand-text">DMARCwatch</span>
-        </Link>
+      <div className="mobile-topbar">
+        <button className="icon-btn" onClick={() => setMobileOpen(true)} aria-label="Open menu">
+          <Menu />
+        </button>
+        <span className="sidebar-brand-mark">D</span>
+        <span className="sidebar-brand-text">DMARCwatch</span>
+      </div>
+
+      <div className={`sidebar-backdrop ${mobileOpen ? "is-open" : ""}`} onClick={closeMobile} />
+
+      <aside className={`sidebar ${mobileOpen ? "is-open" : ""}`}>
+        <div className="sidebar-brand" style={{ justifyContent: "space-between" }}>
+          <Link to="/" onClick={closeMobile} style={{ display: "flex", alignItems: "center", gap: "0.6rem", color: "inherit" }}>
+            <span className="sidebar-brand-mark">D</span>
+            <span className="sidebar-brand-text">DMARCwatch</span>
+          </Link>
+          <button className="icon-btn" onClick={closeMobile} aria-label="Close menu" style={{ display: mobileOpen ? "inline-flex" : "none" }}>
+            <X />
+          </button>
+        </div>
         {org && <div className="sidebar-org">{org.name}</div>}
 
         <nav className="sidebar-nav">
-          <Link to="/" className={`nav-link ${isActive("/") ? "active" : ""}`}>
+          <Link to="/" onClick={closeMobile} className={`nav-link ${isActive("/") ? "active" : ""}`}>
             <Globe />
             Domains
           </Link>
-          <Link to="/team" className={`nav-link ${isActive("/team") ? "active" : ""}`}>
+          <Link to="/team" onClick={closeMobile} className={`nav-link ${isActive("/team") ? "active" : ""}`}>
             <Users />
             Team
           </Link>
+          <Link to="/settings" onClick={closeMobile} className={`nav-link ${isActive("/settings") ? "active" : ""}`}>
+            <Settings />
+            Settings
+          </Link>
           {org?.is_operator && user?.role === "org_admin" && (
-            <Link to="/admin" className={`nav-link ${isActive("/admin") ? "active" : ""}`}>
+            <Link to="/admin" onClick={closeMobile} className={`nav-link ${isActive("/admin") ? "active" : ""}`}>
               <Building2 />
               Manage organizations
             </Link>

@@ -7,7 +7,9 @@ import Domains from "./pages/Domains";
 import DomainDetail from "./pages/DomainDetail";
 import DomainReports from "./pages/DomainReports";
 import Team from "./pages/Team";
+import Settings from "./pages/Settings";
 import Shell from "./components/Shell";
+import AdminShell from "./components/AdminShell";
 import RequireAuth from "./components/RequireAuth";
 import RequireAdminAuth from "./components/RequireAdminAuth";
 
@@ -20,7 +22,9 @@ export default function App() {
         path="/admin"
         element={
           <RequireAdminAuth>
-            <AdminOrganizations />
+            <AdminShell>
+              <AdminOrganizations />
+            </AdminShell>
           </RequireAdminAuth>
         }
       />
@@ -28,7 +32,9 @@ export default function App() {
         path="/admin/job-runs"
         element={
           <RequireAdminAuth>
-            <AdminJobRuns />
+            <AdminShell>
+              <AdminJobRuns />
+            </AdminShell>
           </RequireAdminAuth>
         }
       />
@@ -68,6 +74,16 @@ export default function App() {
           <RequireAuth>
             <Shell>
               <Team />
+            </Shell>
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/settings"
+        element={
+          <RequireAuth>
+            <Shell>
+              <Settings />
             </Shell>
           </RequireAuth>
         }
