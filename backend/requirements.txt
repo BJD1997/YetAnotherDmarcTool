@@ -30,4 +30,4 @@ httpx==0.27.2
 # Background jobs
 apscheduler==3.10.4
 
-python-multipart==0.0.9
+python-multipart==0.0.31
