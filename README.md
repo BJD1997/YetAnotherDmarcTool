@@ -303,11 +303,16 @@ Open `.env` and fill in, at minimum:
   first login; these two vars can then be left as-is (bootstrap is a no-op
   once an admin already exists).
 
-Everything else in `.env.example` is optional and individually
-feature-gated — Entra app registrations (for organization SSO and/or mailbox
-access), the operator-hosted reporting mailbox, Cloudflare auto-provisioning,
-security.txt. Each one is documented inline; leave any of them blank to
-simply not offer that feature rather than erroring.
+Most of what's left in `.env.example` is optional and individually
+feature-gated — Entra SSO (for organization login), Cloudflare
+auto-provisioning, security.txt: leave any of them blank to simply not
+offer that feature rather than erroring. The one exception is
+`ENTRA_MAIL_CLIENT_ID`/`ENTRA_MAIL_CLIENT_SECRET` (the "Mail Access" Entra
+app) — both ways of actually ingesting reports, an organization connecting
+its own mailbox *and* the operator-hosted mailbox, authenticate to
+Microsoft Graph through this one shared app-only app registration. Leave
+it unset and the dashboard still runs and does DNS best-practice checks
+fine, but no report ever gets ingested by any path.
 
 **3. Start it**
 
@@ -331,12 +336,16 @@ connecting a mailbox, verifying a domain, adding DKIM selectors, and what
 
 Every environment variable is documented inline in
 [`.env.example`](.env.example) — copy it to `.env` and fill in what you need.
-At minimum: `PUBLIC_BASE_URL`, the Postgres and session secrets, and either
-an Entra SSO app registration or nothing (local auth works with zero
-Microsoft-side configuration). Everything else — the mail-access Entra app,
-the operator-hosted mailbox, Cloudflare auto-provisioning — is optional and
-individually feature-gated: unset, that feature simply isn't offered rather
-than erroring.
+At minimum: `PUBLIC_BASE_URL` and the Postgres/Fernet secrets get the
+dashboard itself running, with local email+password+TOTP login and DNS
+best-practice checks. Entra SSO is genuinely optional on top of that (local
+auth works with zero Microsoft-side configuration) — but report ingestion
+itself isn't: both ways of getting reports in, an organization's own
+connected mailbox and the operator-hosted mailbox, go through Microsoft
+Graph via the same `ENTRA_MAIL_CLIENT_ID`/`ENTRA_MAIL_CLIENT_SECRET` app
+registration, so without it you get DNS checks only, no ingested reports at
+all. Cloudflare auto-provisioning and security.txt remain individually
+feature-gated: unset, each one simply isn't offered rather than erroring.
 
 ## Development
 
