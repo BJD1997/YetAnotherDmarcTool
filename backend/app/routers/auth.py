@@ -1,25 +1,32 @@
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Request, Response
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse, RedirectResponse
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.db.rls import set_org_context
+from app.db.rls import set_org_context, set_platform_admin_context
 from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user
-from app.models.enums import OrganizationStatus, UserRole
+from app.models.enums import AuthMethod, OrganizationStatus, UserRole, UserStatus
+from app.models.mfa_pending_challenge import MfaPendingChallenge
 from app.models.organization import Organization
+from app.models.password_setup_token import PasswordSetupToken
 from app.models.user import User
-from app.services.auth import entra_oidc, pkce, session_manager
+from app.models.user_recovery_code import UserRecoveryCode
+from app.services.auth import entra_oidc, pkce, session_manager, totp
+from app.services.auth.password import hash_password, verify_password
 from app.services.auth.session_manager import cookie_kwargs
+from app.services.auth.tokens import hash_token, new_opaque_token
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 _OAUTH_STATE_COOKIE = "oauth_state"
 _OAUTH_VERIFIER_COOKIE = "oauth_verifier"
+_MFA_PENDING_COOKIE = settings.mfa_pending_cookie_name
 
 
 @router.get("/login")
@@ -143,3 +150,210 @@ async def me(user: User = Depends(get_current_user)) -> dict:
         "role": user.role.value,
         "organization_id": str(user.organization_id),
     }
+
+
+# ---------- Local email+password+TOTP login ----------
+# For organizations with no entra_tenant_id set — otherwise their users
+# would simply be locked out, since the Entra callback above only ever
+# matches an org by tid claim. Two-step: password proves identity and
+# opens a short-lived "pending" window (the same one both a returning
+# user's OTP check and a brand-new user's OTP enrollment read from —
+# mandatory TOTP either way, so a leaked password alone never reaches a
+# real session), then either verify-otp or enroll-otp/confirm issues one.
+
+
+class LocalLoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class VerifyOtpRequest(BaseModel):
+    code: str
+
+
+class SetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+
+class EnrollOtpConfirmRequest(BaseModel):
+    secret: str
+    code: str
+
+
+async def _set_mfa_pending(db: AsyncSession, response: Response, user_id) -> None:
+    raw_token, token_hash = new_opaque_token()
+    now = datetime.now(timezone.utc)
+    db.add(
+        MfaPendingChallenge(
+            user_id=user_id,
+            token_hash=token_hash,
+            created_at=now,
+            expires_at=now + timedelta(minutes=settings.mfa_pending_timeout_minutes),
+        )
+    )
+    short_lived = {**cookie_kwargs(), "max_age": settings.mfa_pending_timeout_minutes * 60}
+    response.set_cookie(_MFA_PENDING_COOKIE, raw_token, **short_lived)
+
+
+async def _get_pending_user(request: Request, db: AsyncSession) -> tuple[User, MfaPendingChallenge]:
+    raw_token = request.cookies.get(_MFA_PENDING_COOKIE)
+    if not raw_token:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "no pending login")
+    token_hash = hash_token(raw_token)
+    result = await db.execute(select(MfaPendingChallenge).where(MfaPendingChallenge.token_hash == token_hash))
+    challenge = result.scalar_one_or_none()
+    if challenge is None or challenge.expires_at <= datetime.now(timezone.utc):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "pending login expired — sign in again")
+    # users is RLS-protected and there's no org context yet at this point in
+    # the flow (that's precisely what this lookup is working out) — same
+    # bypass the Entra callback effectively sidesteps by resolving org
+    # first; here there's no org to resolve to ahead of time, so this reads
+    # across all orgs the same way the worker's cross-org sweeps do.
+    await set_platform_admin_context(db, is_admin=True)
+    user = await db.get(User, challenge.user_id)
+    if user is None or user.status != UserStatus.active:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "no pending login")
+    return user, challenge
+
+
+@router.post("/local-login")
+async def local_login(body: LocalLoginRequest, db: AsyncSession = Depends(get_db)) -> JSONResponse:
+    await set_platform_admin_context(db, is_admin=True)
+    result = await db.execute(
+        select(User).where(func.lower(User.email) == body.email.strip().lower(), User.auth_method == AuthMethod.local)
+    )
+    user = result.scalar_one_or_none()
+    if (
+        user is None
+        or user.status != UserStatus.active
+        or user.password_hash is None
+        or not verify_password(body.password, user.password_hash)
+    ):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
+
+    org = await db.get(Organization, user.organization_id)
+    if org is None or org.status == OrganizationStatus.suspended:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "organization access suspended")
+
+    response = JSONResponse({"needs_enrollment": user.otp_enrolled_at is None})
+    await _set_mfa_pending(db, response, user.id)
+    await db.commit()
+    return response
+
+
+@router.post("/verify-otp")
+async def verify_otp(body: VerifyOtpRequest, request: Request, db: AsyncSession = Depends(get_db)) -> Response:
+    user, challenge = await _get_pending_user(request, db)
+    if user.otp_enrolled_at is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "TOTP not enrolled yet")
+
+    code = body.code.strip()
+    if not totp.verify_code(user.otp_secret, code):
+        code_hash = totp.hash_recovery_code_for_lookup(code)
+        result = await db.execute(
+            select(UserRecoveryCode).where(
+                UserRecoveryCode.user_id == user.id,
+                UserRecoveryCode.code_hash == code_hash,
+                UserRecoveryCode.used_at.is_(None),
+            )
+        )
+        recovery = result.scalar_one_or_none()
+        if recovery is None:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid code")
+        recovery.used_at = datetime.now(timezone.utc)
+
+    _, raw_session_token = await session_manager.create_user_session(
+        db,
+        user_id=user.id,
+        organization_id=user.organization_id,
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+    user.last_login_at = datetime.now(timezone.utc)
+    await db.delete(challenge)
+    await db.commit()
+
+    response = Response(status_code=204)
+    response.delete_cookie(_MFA_PENDING_COOKIE, path="/")
+    response.set_cookie(
+        settings.session_cookie_name,
+        raw_session_token,
+        max_age=settings.session_idle_timeout_hours * 3600,
+        **cookie_kwargs(),
+    )
+    return response
+
+
+@router.post("/set-password")
+async def set_password(body: SetPasswordRequest, db: AsyncSession = Depends(get_db)) -> JSONResponse:
+    token_hash = hash_token(body.token)
+    result = await db.execute(select(PasswordSetupToken).where(PasswordSetupToken.token_hash == token_hash))
+    setup_token = result.scalar_one_or_none()
+    now = datetime.now(timezone.utc)
+    if setup_token is None or setup_token.used_at is not None or setup_token.expires_at <= now:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "this link is invalid or has expired")
+
+    # See _get_pending_user's comment — same pre-org-context bypass, needed
+    # here because users is RLS-protected and this endpoint doesn't know
+    # the org until after this lookup.
+    await set_platform_admin_context(db, is_admin=True)
+    user = await db.get(User, setup_token.user_id)
+    if user is None or user.status != UserStatus.active:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "this link is invalid or has expired")
+    if len(body.new_password) < 12:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "password must be at least 12 characters")
+
+    user.password_hash = hash_password(body.new_password)
+    setup_token.used_at = now
+
+    response = JSONResponse({"needs_enrollment": True})
+    await _set_mfa_pending(db, response, user.id)
+    await db.commit()
+    return response
+
+
+@router.post("/enroll-otp")
+async def enroll_otp(request: Request, db: AsyncSession = Depends(get_db)) -> dict:
+    user, _challenge = await _get_pending_user(request, db)
+    secret = totp.generate_secret()
+    uri = totp.provisioning_uri(secret, user.email)
+    return {"secret": secret, "qr_code_data_uri": totp.qr_code_data_uri(uri)}
+
+
+@router.post("/enroll-otp/confirm")
+async def enroll_otp_confirm(
+    body: EnrollOtpConfirmRequest, request: Request, db: AsyncSession = Depends(get_db)
+) -> JSONResponse:
+    user, challenge = await _get_pending_user(request, db)
+    if not totp.verify_code(body.secret, body.code):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "code didn't match — check your authenticator app and try again")
+
+    now = datetime.now(timezone.utc)
+    user.otp_secret = body.secret
+    user.otp_enrolled_at = now
+
+    codes = totp.generate_recovery_codes()
+    for plaintext, code_hash in codes:
+        db.add(UserRecoveryCode(user_id=user.id, code_hash=code_hash, created_at=now))
+
+    _, raw_session_token = await session_manager.create_user_session(
+        db,
+        user_id=user.id,
+        organization_id=user.organization_id,
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+    user.last_login_at = now
+    await db.delete(challenge)
+    await db.commit()
+
+    response = JSONResponse({"recovery_codes": [plaintext for plaintext, _hash in codes]})
+    response.delete_cookie(_MFA_PENDING_COOKIE, path="/")
+    response.set_cookie(
+        settings.session_cookie_name,
+        raw_session_token,
+        max_age=settings.session_idle_timeout_hours * 3600,
+        **cookie_kwargs(),
+    )
+    return response

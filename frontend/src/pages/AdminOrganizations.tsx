@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2 } from "lucide-react";
+import { Check, Copy, Plus, Trash2, UserPlus } from "lucide-react";
 import { api, ApiError } from "../api/client";
 import { useAdminAuth } from "../auth/AdminAuthContext";
+import { ReportFreshnessValue } from "../components/overview/widgets";
 
 interface MailboxConnectionInfo {
   id: string;
@@ -28,6 +29,9 @@ interface AdminOrganization {
   created_at: string;
   mailbox_connection: MailboxConnectionInfo | null;
   entra_consent_urls: EntraConsentUrls | null;
+  domain_count: number;
+  job_error_count_7d: number;
+  last_report_at: string | null;
 }
 
 const STATUS_ROLE: Record<AdminOrganization["status"], "good" | "serious"> = {
@@ -151,6 +155,27 @@ function OrgCard({ org }: { org: AdminOrganization }) {
         {org.is_operator && <span className="badge badge--neutral" style={{ marginLeft: "0.4rem" }}>operator</span>}
       </div>
 
+      <div className="chip-row" style={{ marginTop: "0.6rem", fontSize: "0.8rem" }}>
+        <span className="muted">
+          {org.domain_count} domain{org.domain_count === 1 ? "" : "s"}
+        </span>
+        <span className="muted">
+          last report:{" "}
+          {org.last_report_at ? (
+            <>
+              <ReportFreshnessValue hours={(Date.now() - new Date(org.last_report_at).getTime()) / 3_600_000} /> ago
+            </>
+          ) : (
+            "never"
+          )}
+        </span>
+        {org.job_error_count_7d > 0 && (
+          <span className="badge badge--critical">
+            {org.job_error_count_7d} job error{org.job_error_count_7d === 1 ? "" : "s"} (7d)
+          </span>
+        )}
+      </div>
+
       <div style={{ display: "flex", gap: "3rem", marginTop: "1rem", flexWrap: "wrap" }}>
         <div>
           <div className="muted" style={{ fontSize: "0.78rem" }}>
@@ -218,7 +243,79 @@ function OrgCard({ org }: { org: AdminOrganization }) {
           in Domains.tsx), so there's nothing left for the platform admin to
           relay out-of-band. */}
 
+      {!org.entra_tenant_id && !org.is_operator && <CreateLocalUser orgId={org.id} />}
+
       <DeleteOrgSection org={org} />
+    </div>
+  );
+}
+
+function CreateLocalUser({ orgId }: { orgId: string }) {
+  const [email, setEmail] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [setupLink, setSetupLink] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const createUser = useMutation({
+    mutationFn: () => api.post<{ setup_link: string }>(`/admin/organizations/${orgId}/users`, { email }),
+    onSuccess: (created) => {
+      setEmail("");
+      setError(null);
+      setSetupLink(created.setup_link);
+    },
+    onError: (err) => setError(err instanceof ApiError ? err.message : "failed to create user"),
+  });
+
+  function copy() {
+    if (!setupLink) return;
+    navigator.clipboard.writeText(setupLink).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
+  return (
+    <div style={{ marginTop: "1rem", paddingTop: "0.75rem", borderTop: "1px solid var(--border)" }}>
+      <div className="muted" style={{ fontSize: "0.78rem", marginBottom: "0.3rem" }}>
+        No Entra tenant — bootstrap this org's first user
+      </div>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          createUser.mutate();
+        }}
+        className="field-row"
+      >
+        <input
+          className="input"
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="admin@client.com"
+          style={{ width: "220px" }}
+          required
+        />
+        <button type="submit" className="btn btn--secondary btn--sm" disabled={createUser.isPending}>
+          <UserPlus />
+          Generate setup link
+        </button>
+      </form>
+      {error && (
+        <div className="alert alert--critical" style={{ marginTop: "0.5rem", marginBottom: 0 }}>
+          {error}
+        </div>
+      )}
+      {setupLink && (
+        <div className="field-row" style={{ marginTop: "0.5rem" }}>
+          <code className="input" style={{ display: "inline-block" }}>
+            {setupLink}
+          </code>
+          <button className="btn btn--secondary btn--sm" onClick={copy}>
+            {copied ? <Check /> : <Copy />}
+            {copied ? "Copied" : "Copy link"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

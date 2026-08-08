@@ -1,9 +1,10 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, EmailStr, field_validator
-from sqlalchemy import select
+from sqlalchemy import case, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -13,17 +14,24 @@ from app.middleware.tenant_context import (
     get_current_platform_admin,
     get_current_platform_admin_local,
 )
-from app.models.enums import ConsentStatus, OrganizationStatus
+from app.models.dmarc_aggregate import DmarcAggregateReport
+from app.models.domain import Domain
+from app.models.enums import AuthMethod, ConsentStatus, JobStatus, JobType, OrganizationStatus, UserRole
 from app.models.job_run import JobRun
 from app.models.mailbox_connection import MailboxConnection
 from app.models.organization import Organization
+from app.models.password_setup_token import PasswordSetupToken
 from app.models.platform_admin import PlatformAdmin
+from app.models.user import User
 from app.services.auth import session_manager
 from app.services.auth.entra_links import entra_consent_urls
 from app.services.auth.password import hash_password, verify_password
 from app.services.auth.session_manager import cookie_kwargs
+from app.services.auth.tokens import new_opaque_token
 
 router = APIRouter(prefix="/admin", tags=["platform-admin"])
+
+JOB_ERROR_WINDOW_DAYS = 7
 
 
 class AdminLoginRequest(BaseModel):
@@ -45,6 +53,12 @@ class OrganizationUpdateRequest(BaseModel):
 class MailboxConnectionRequest(BaseModel):
     mailbox_address: str
     consent_status: ConsentStatus | None = None
+
+
+class LocalUserCreateRequest(BaseModel):
+    email: EmailStr
+    display_name: str | None = None
+    role: UserRole = UserRole.org_admin
 
 
 class ChangePasswordRequest(BaseModel):
@@ -75,7 +89,65 @@ async def _mailbox_out(db: AsyncSession, org_id: uuid.UUID) -> dict | None:
     }
 
 
-async def _org_out(db: AsyncSession, org: Organization) -> dict:
+async def _org_aggregates(db: AsyncSession, org_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict]:
+    """Batched per-org rollups for the admin organizations list — one GROUP
+    BY query per metric across every org at once, not N queries per org.
+    RLS is bypassed here the same way it is everywhere else in this router:
+    get_current_platform_admin already set app.is_platform_admin=true on
+    this transaction, which is what lets a query with no organization_id
+    filter of its own see rows across every tenant."""
+    if not org_ids:
+        return {}
+
+    domain_counts = dict(
+        (
+            await db.execute(
+                select(Domain.organization_id, func.count())
+                .where(Domain.organization_id.in_(org_ids))
+                .group_by(Domain.organization_id)
+            )
+        ).all()
+    )
+
+    error_cutoff = datetime.now(timezone.utc) - timedelta(days=JOB_ERROR_WINDOW_DAYS)
+    job_error_counts = dict(
+        (
+            await db.execute(
+                select(JobRun.organization_id, func.count())
+                .where(
+                    JobRun.organization_id.in_(org_ids),
+                    JobRun.status == JobStatus.failure,
+                    JobRun.started_at >= error_cutoff,
+                )
+                .group_by(JobRun.organization_id)
+            )
+        ).all()
+    )
+
+    last_report_ats = dict(
+        (
+            await db.execute(
+                select(DmarcAggregateReport.organization_id, func.max(DmarcAggregateReport.received_at))
+                .where(DmarcAggregateReport.organization_id.in_(org_ids))
+                .group_by(DmarcAggregateReport.organization_id)
+            )
+        ).all()
+    )
+
+    return {
+        org_id: {
+            "domain_count": domain_counts.get(org_id, 0),
+            "job_error_count_7d": job_error_counts.get(org_id, 0),
+            "last_report_at": (last_report_ats[org_id].isoformat() if last_report_ats.get(org_id) else None),
+        }
+        for org_id in org_ids
+    }
+
+
+async def _org_out(db: AsyncSession, org: Organization, aggregates: dict | None = None) -> dict:
+    agg = aggregates if aggregates is not None else (await _org_aggregates(db, [org.id])).get(
+        org.id, {"domain_count": 0, "job_error_count_7d": 0, "last_report_at": None}
+    )
     return {
         "id": str(org.id),
         "name": org.name,
@@ -85,6 +157,9 @@ async def _org_out(db: AsyncSession, org: Organization) -> dict:
         "created_at": org.created_at.isoformat(),
         "mailbox_connection": await _mailbox_out(db, org.id),
         "entra_consent_urls": entra_consent_urls(org),
+        "domain_count": agg["domain_count"],
+        "job_error_count_7d": agg["job_error_count_7d"],
+        "last_report_at": agg["last_report_at"],
     }
 
 
@@ -148,7 +223,9 @@ async def list_organizations(
     db: AsyncSession = Depends(get_db), _admin: AdminPrincipal = Depends(get_current_platform_admin)
 ) -> list[dict]:
     result = await db.execute(select(Organization).order_by(Organization.created_at.desc()))
-    return [await _org_out(db, org) for org in result.scalars().all()]
+    orgs = result.scalars().all()
+    aggregates = await _org_aggregates(db, [org.id for org in orgs])
+    return [await _org_out(db, org, aggregates=aggregates.get(org.id)) for org in orgs]
 
 
 @router.post("/organizations", status_code=status.HTTP_201_CREATED)
@@ -230,6 +307,72 @@ async def delete_organization(
     await db.commit()
 
 
+def _local_user_out(user: User) -> dict:
+    return {
+        "id": str(user.id),
+        "email": user.email,
+        "display_name": user.display_name,
+        "role": user.role.value,
+        "auth_method": user.auth_method.value,
+    }
+
+
+@router.post("/organizations/{org_id}/users", status_code=status.HTTP_201_CREATED)
+async def create_local_user(
+    org_id: uuid.UUID,
+    body: LocalUserCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    _admin: AdminPrincipal = Depends(get_current_platform_admin),
+) -> dict:
+    """Bootstraps a local-auth org's first user — mirrors provisioning the
+    organization itself today. Entra orgs keep auto-provisioning their
+    users on first SSO login (see /auth/callback) and don't get a parallel
+    manual path here. Returns a one-time "set your password" link for the
+    admin to share out-of-band (same manual-share philosophy as Team.tsx's
+    ShareSignInLink — no outbound email sending in this app)."""
+    org = await db.get(Organization, org_id)
+    if org is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "organization not found")
+    if org.entra_tenant_id is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "this organization uses Entra SSO — users join by signing in, not manual creation"
+        )
+
+    user = User(
+        organization_id=org_id,
+        auth_method=AuthMethod.local,
+        email=body.email,
+        display_name=body.display_name,
+        role=body.role,
+    )
+    db.add(user)
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, "a user with this email already exists")
+
+    raw_token, token_hash = new_opaque_token()
+    now = datetime.now(timezone.utc)
+    db.add(
+        PasswordSetupToken(
+            user_id=user.id,
+            token_hash=token_hash,
+            created_at=now,
+            expires_at=now + timedelta(hours=settings.password_setup_token_timeout_hours),
+        )
+    )
+    # refresh() must run before commit() — users is RLS-protected, and
+    # commit ends the SET LOCAL app.is_platform_admin context this
+    # transaction needs for the refresh's SELECT to see the row at all
+    # (see app/db/rls.py's own docstring on this exact gotcha).
+    await db.flush()
+    await db.refresh(user)
+    await db.commit()
+
+    return {**_local_user_out(user), "setup_link": f"{settings.public_base_url}/set-password?token={raw_token}"}
+
+
 @router.post("/organizations/{org_id}/mailbox-connection", status_code=status.HTTP_201_CREATED)
 async def upsert_mailbox_connection(
     org_id: uuid.UUID,
@@ -271,11 +414,26 @@ async def upsert_mailbox_connection(
 @router.get("/job-runs")
 async def list_job_runs(
     limit: int = 50,
+    organization_id: uuid.UUID | None = Query(None),
+    job_type: JobType | None = Query(None),
+    status_filter: JobStatus | None = Query(None, alias="status"),
+    since_days: int | None = Query(None, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
     _admin: AdminPrincipal = Depends(get_current_platform_admin),
 ) -> list[dict]:
     limit = max(1, min(limit, 200))
-    result = await db.execute(select(JobRun).order_by(JobRun.started_at.desc()).limit(limit))
+    query = select(JobRun).order_by(JobRun.started_at.desc())
+    if organization_id is not None:
+        query = query.where(JobRun.organization_id == organization_id)
+    if job_type is not None:
+        query = query.where(JobRun.job_type == job_type)
+    if status_filter is not None:
+        query = query.where(JobRun.status == status_filter)
+    if since_days is not None:
+        query = query.where(JobRun.started_at >= datetime.now(timezone.utc) - timedelta(days=since_days))
+    query = query.limit(limit)
+
+    result = await db.execute(query)
     return [
         {
             "id": str(run.id),
@@ -290,3 +448,54 @@ async def list_job_runs(
         }
         for run in result.scalars().all()
     ]
+
+
+@router.get("/job-runs/summary")
+async def job_runs_summary(
+    db: AsyncSession = Depends(get_db), _admin: AdminPrincipal = Depends(get_current_platform_admin)
+) -> dict:
+    """Small dashboard cards for the job-runs page: is anything on fire, how
+    healthy has ingestion been in the last day, is the mailbox poller still
+    actually running, and is data still flowing in today — rather than
+    making the admin infer all of that from scrolling a long table."""
+    last_failure = (
+        await db.execute(select(JobRun).where(JobRun.status == JobStatus.failure).order_by(JobRun.started_at.desc()).limit(1))
+    ).scalar_one_or_none()
+
+    since_24h = datetime.now(timezone.utc) - timedelta(hours=24)
+    total_24h, success_24h = (
+        await db.execute(
+            select(
+                func.count(),
+                func.coalesce(func.sum(case((JobRun.status == JobStatus.success, 1), else_=0)), 0),
+            ).where(JobRun.started_at >= since_24h)
+        )
+    ).one()
+    success_rate_pct_24h = round(success_24h / total_24h * 100, 1) if total_24h else None
+
+    latest_mailbox_poll_at = (
+        await db.execute(select(func.max(JobRun.started_at)).where(JobRun.job_type == JobType.mailbox_poll))
+    ).scalar_one_or_none()
+
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    reports_today = (
+        await db.execute(
+            select(func.count()).select_from(DmarcAggregateReport).where(DmarcAggregateReport.received_at >= today_start)
+        )
+    ).scalar_one()
+
+    return {
+        "last_failure": (
+            {
+                "job_type": last_failure.job_type.value,
+                "organization_id": str(last_failure.organization_id) if last_failure.organization_id else None,
+                "started_at": last_failure.started_at.isoformat(),
+                "error_message": last_failure.error_message,
+            }
+            if last_failure is not None
+            else None
+        ),
+        "success_rate_pct_24h": success_rate_pct_24h,
+        "latest_mailbox_poll_at": latest_mailbox_poll_at.isoformat() if latest_mailbox_poll_at else None,
+        "reports_processed_today": int(reports_today),
+    }

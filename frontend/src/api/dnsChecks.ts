@@ -19,3 +19,26 @@ export interface DkimSelectorItem {
   description: string | null;
   created_at: string;
 }
+
+export interface DetectedSelector {
+  selector: string;
+  report_count: number;
+  message_volume: number;
+}
+
+export type MtaStsMode = "none" | "testing" | "enforce";
+
+export interface MtaStsCurrentPolicy {
+  raw: string;
+  mode: string | null;
+  mx_patterns: string[];
+  max_age: string | null;
+}
+
+export interface MtaStsBuilderData {
+  mx_hosts: string[];
+  current_txt: string | null;
+  current_policy: MtaStsCurrentPolicy | null;
+  current_policy_fetch_error: string | null;
+  recommended_mode: MtaStsMode;
+}

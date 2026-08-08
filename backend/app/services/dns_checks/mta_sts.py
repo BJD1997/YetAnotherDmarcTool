@@ -4,15 +4,43 @@ against the domain's actual MX records — an enforce-mode policy that doesn't
 cover a real MX host causes legitimate mail to be rejected by any sender
 that honors it, which is worse than not having MTA-STS at all."""
 
+import dataclasses
 import re
 
 import httpx
 
-from app.services.dns_checks.base import Finding
+from app.services.dns_checks.base import Finding, is_null_mx
 from app.services.dns_checks.resolver import DnsLookupError, resolve_mx, resolve_txt_strict
 
 _TXT_RE = re.compile(r"(?i)^v=STSv1;\s*id=([A-Za-z0-9]+);?\s*$")
 POLICY_FETCH_TIMEOUT = 10.0
+
+
+@dataclasses.dataclass
+class PolicyFetchResult:
+    body: str | None
+    error: str | None
+
+
+async def fetch_policy_file(domain: str) -> PolicyFetchResult:
+    """GETs the well-known MTA-STS policy file. `error` is a human-readable
+    string on any failure (connection error, non-200, ...); `body` is the
+    raw text on success. Shared by check() (best-practice linting) and the
+    policy builder (GET /domains/{id}/dns/mta-sts-builder, showing the
+    user their current policy to edit) — one implementation of the fetch,
+    not two."""
+    policy_url = f"https://mta-sts.{domain}/.well-known/mta-sts.txt"
+    try:
+        async with httpx.AsyncClient(timeout=POLICY_FETCH_TIMEOUT) as client:
+            response = await client.get(policy_url)
+    except httpx.RequestError as exc:
+        # httpx's own exceptions (ConnectTimeout, ConnectError, ...) often
+        # have an empty str() — the type name carries the actual meaning.
+        error_detail = str(exc) or type(exc).__name__
+        return PolicyFetchResult(body=None, error=f"Could not fetch MTA-STS policy from {policy_url}: {error_detail}")
+    if response.status_code != 200:
+        return PolicyFetchResult(body=None, error=f"MTA-STS policy fetch returned HTTP {response.status_code}")
+    return PolicyFetchResult(body=response.text, error=None)
 
 
 def _parse_policy(body: str) -> dict[str, str | list[str]]:
@@ -35,19 +63,40 @@ def _parse_policy(body: str) -> dict[str, str | list[str]]:
 
 
 def _mx_covered(mx_host: str, patterns: list[str]) -> bool:
+    """RFC 8461 §4.1: a leading '*.' wildcard matches exactly one label, not
+    'one or more' — *.mx.microsoft covers foo.mx.microsoft but NOT
+    foo.bar.mx.microsoft. Confirmed live this session: davids.online's real
+    MX host (davids-online.u-v1.mx.microsoft, two labels ahead of
+    mx.microsoft) is NOT covered by mx: *.mx.microsoft, and Google's own
+    TLS-RPT reports show it correctly rejecting the connection over exactly
+    this mismatch — the previous (mx_host.count(".") > suffix.count("."))
+    check accepted any extra depth and would have silently passed this."""
     mx_host = mx_host.rstrip(".").lower()
     for pattern in patterns:
         pattern = pattern.rstrip(".").lower()
         if pattern.startswith("*."):
-            suffix = pattern[1:]
-            if mx_host.endswith(suffix) and mx_host.count(".") > suffix.count("."):
-                return True
+            suffix = pattern[2:]
+            if mx_host.endswith("." + suffix):
+                remainder = mx_host[: -(len(suffix) + 1)]
+                if remainder and "." not in remainder:
+                    return True
         elif mx_host == pattern:
             return True
     return False
 
 
 async def check(domain: str) -> list[Finding]:
+    try:
+        mx_records = await resolve_mx(domain)
+    except DnsLookupError as exc:
+        return [Finding(status="error", summary=f"Could not look up MX records for MTA-STS check: {exc}")]
+
+    if not mx_records or is_null_mx(mx_records):
+        # No mail is received here — MTA-STS (inbound transport security)
+        # has nothing to protect, same reasoning starttls.py/dane.py
+        # already apply.
+        return []
+
     txt_name = f"_mta-sts.{domain}"
     try:
         txt_records = await resolve_txt_strict(txt_name)
@@ -82,22 +131,12 @@ async def check(domain: str) -> list[Finding]:
 
     findings.append(Finding(status="pass", summary=f"MTA-STS TXT record found (id={match.group(1)})"))
 
-    policy_url = f"https://mta-sts.{domain}/.well-known/mta-sts.txt"
-    try:
-        async with httpx.AsyncClient(timeout=POLICY_FETCH_TIMEOUT) as client:
-            response = await client.get(policy_url)
-    except httpx.RequestError as exc:
-        # httpx's own exceptions (ConnectTimeout, ConnectError, ...) often
-        # have an empty str() — the type name carries the actual meaning.
-        error_detail = str(exc) or type(exc).__name__
-        findings.append(Finding(status="fail", summary=f"Could not fetch MTA-STS policy from {policy_url}: {error_detail}"))
+    fetch_result = await fetch_policy_file(domain)
+    if fetch_result.error is not None:
+        findings.append(Finding(status="fail", summary=fetch_result.error))
         return findings
 
-    if response.status_code != 200:
-        findings.append(Finding(status="fail", summary=f"MTA-STS policy fetch returned HTTP {response.status_code}"))
-        return findings
-
-    policy = _parse_policy(response.text)
+    policy = _parse_policy(fetch_result.body or "")
     version = policy.get("version")
     if version != "STSv1":
         findings.append(Finding(status="fail", summary=f"MTA-STS policy has invalid/missing version: {version!r}"))
@@ -107,9 +146,21 @@ async def check(domain: str) -> list[Finding]:
     if mode == "enforce":
         findings.append(Finding(status="pass", summary="MTA-STS policy mode is 'enforce'"))
     elif mode == "testing":
-        findings.append(Finding(status="warn", summary="MTA-STS policy mode is 'testing' — move to 'enforce' once confident"))
+        findings.append(
+            Finding(
+                status="warn",
+                summary="MTA-STS policy mode is 'testing' — move to 'enforce' once confident",
+                details={"recommendation": "Change mode to 'enforce' in the published policy once you've confirmed it doesn't block legitimate mail."},
+            )
+        )
     elif mode == "none":
-        findings.append(Finding(status="warn", summary="MTA-STS policy mode is 'none' — TLS is not being required"))
+        findings.append(
+            Finding(
+                status="warn",
+                summary="MTA-STS policy mode is 'none' — TLS is not being required",
+                details={"recommendation": "Change mode to 'testing' or 'enforce' to actually require TLS for inbound mail."},
+            )
+        )
     else:
         findings.append(Finding(status="fail", summary=f"MTA-STS policy has invalid/missing mode: {mode!r}"))
 
@@ -122,14 +173,8 @@ async def check(domain: str) -> list[Finding]:
         Finding(status="pass", summary=f"MTA-STS policy covers {len(mx_patterns)} mx pattern(s)", details={"mx_patterns": mx_patterns})
     )
 
-    try:
-        actual_mx = await resolve_mx(domain)
-    except DnsLookupError as exc:
-        findings.append(Finding(status="error", summary=f"Could not cross-check MTA-STS policy against MX records: {exc}"))
-        return findings
-
-    if actual_mx:
-        uncovered = [host for _preference, host in actual_mx if not _mx_covered(host, mx_patterns)]
+    if mx_records:
+        uncovered = [host for _preference, host in mx_records if not _mx_covered(host, mx_patterns)]
         if uncovered:
             findings.append(
                 Finding(

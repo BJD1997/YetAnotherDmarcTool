@@ -12,6 +12,7 @@ lint, which is what actually matters here.
 
 import re
 
+from app.models.enums import DomainMailProfile, SpfAllQualifierMode
 from app.services.dns_checks.base import Finding
 from app.services.dns_checks.resolver import DnsLookupError, resolve_txt_strict
 
@@ -83,7 +84,12 @@ async def _walk(domain: str, state: _State, depth: int) -> list[str] | None:
     return tokens
 
 
-async def check(domain: str) -> list[Finding]:
+async def check(
+    domain: str,
+    mail_profile: DomainMailProfile = DomainMailProfile.sends_mail,
+    dmarc_policy: str | None = None,
+    all_qualifier_mode: SpfAllQualifierMode = SpfAllQualifierMode.strict,
+) -> list[Finding]:
     state = _State()
     try:
         top_tokens = await _walk(domain, state, 0)
@@ -135,18 +141,63 @@ async def check(domain: str) -> list[Finding]:
             )
         )
 
+    # conditional mode only prefers ~all once DMARC is actually the thing
+    # doing enforcement (p=quarantine/reject) for a domain that sends mail —
+    # a sends_mail domain still at p=none, or a domain with no DMARC record
+    # at all (dmarc_policy=None either way), keeps the strict-mode default
+    # of preferring -all, since nothing else is enforcing yet.
+    prefer_softfail = (
+        all_qualifier_mode == SpfAllQualifierMode.conditional
+        and mail_profile == DomainMailProfile.sends_mail
+        and dmarc_policy in ("quarantine", "reject")
+    )
+
     all_qualifier = next((t for t in top_tokens if _ALL_RE.match(t)), None)
     if all_qualifier is None:
         findings.append(
-            Finding(status="warn", summary="No 'all' mechanism at the end of the SPF record (defaults to a weak implicit ?all)")
+            Finding(
+                status="warn",
+                summary="No 'all' mechanism at the end of the SPF record (defaults to a weak implicit ?all)",
+                details={"recommendation": "Add an explicit -all (or ~all while still building confidence) at the end of the record."},
+            )
         )
     elif all_qualifier.startswith("-"):
-        findings.append(Finding(status="pass", summary="SPF ends in -all (hardfail)"))
+        if prefer_softfail:
+            findings.append(
+                Finding(
+                    status="warn",
+                    summary="SPF ends in -all (hardfail) — with DMARC already enforcing, ~all is recommended instead",
+                    details={
+                        "recommendation": (
+                            "Your DMARC policy already rejects/quarantines unaligned mail, so -all adds no extra "
+                            "security — it only risks an SMTP-level bounce on relayed/forwarded mail before DKIM/DMARC "
+                            "get evaluated. Switch to ~all."
+                        )
+                    },
+                )
+            )
+        else:
+            findings.append(Finding(status="pass", summary="SPF ends in -all (hardfail)"))
     elif all_qualifier.startswith("~"):
-        findings.append(
-            Finding(status="warn", summary="SPF ends in ~all (softfail) — consider -all once you're confident in the record")
-        )
+        if prefer_softfail:
+            findings.append(
+                Finding(status="pass", summary="SPF ends in ~all (softfail) — appropriate since DMARC is already enforcing")
+            )
+        else:
+            findings.append(
+                Finding(
+                    status="warn",
+                    summary="SPF ends in ~all (softfail) — consider -all once you're confident in the record",
+                    details={"recommendation": "Once the Outbound email table shows a consistently high pass rate for a few weeks, tighten this to -all."},
+                )
+            )
     else:
-        findings.append(Finding(status="warn", summary=f"SPF ends in a weak '{all_qualifier}' qualifier"))
+        findings.append(
+            Finding(
+                status="warn",
+                summary=f"SPF ends in a weak '{all_qualifier}' qualifier",
+                details={"recommendation": "Use -all (hardfail) or ~all (softfail) instead."},
+            )
+        )
 
     return findings

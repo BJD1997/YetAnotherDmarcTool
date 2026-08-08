@@ -1,14 +1,19 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, RefreshCw, Mail, ChevronDown, ChevronUp } from "lucide-react";
+import { X } from "lucide-react";
 import { api, ApiError } from "../api/client";
-import type { DetectedDomain, Domain, Organization } from "../api/types";
-import type { MailboxConnectionStatus } from "../api/dmarc";
+import type { DetectedDomain, Domain, Organization, SpfAllQualifierMode } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
+import MailboxConnectionSection from "../components/settings/MailboxConnectionSection";
+import AddDomainForm from "../components/settings/AddDomainForm";
 
 export default function Settings() {
   const { user } = useAuth();
   const canManage = user?.role === "org_admin";
+  const { data: org } = useQuery({
+    queryKey: ["organization", "current"],
+    queryFn: () => api.get<Organization>("/organizations/current"),
+  });
 
   return (
     <section>
@@ -16,9 +21,19 @@ export default function Settings() {
         <h1>Settings</h1>
       </div>
 
-      <h3 className="section-title">Mailbox connection</h3>
-      <p className="section-hint">The shared mailbox this organization's DMARC/TLS-RPT reports arrive at.</p>
-      <MailboxConnectionSection canManage={canManage} />
+      {/* Local-auth orgs (no entra_tenant_id) have no Entra tenant to grant
+          Mail Access consent from, so this section is never functional for
+          them — "grant access" has no links to show, and the mailbox-address
+          form is a dead end. They get a hosted address per domain instead
+          (see the "Hosted reporting mailbox" section below), which already
+          explains their situation — no need to also show this. */}
+      {org?.entra_tenant_id && (
+        <>
+          <h3 className="section-title">Mailbox connection</h3>
+          <p className="section-hint">The shared mailbox this organization's DMARC/TLS-RPT reports arrive at.</p>
+          <MailboxConnectionSection canManage={canManage} />
+        </>
+      )}
 
       {canManage && (
         <>
@@ -27,95 +42,140 @@ export default function Settings() {
           <p className="section-hint">Domains and subdomains to monitor. Manage the full list from the Domains page.</p>
           <AddDomainForm />
           <DetectedDomains />
+
+          <hr className="divider" />
+          <h3 className="section-title">SPF "all" recommendation</h3>
+          <p className="section-hint">
+            How the SPF check scores a record ending in -all (hardfail) vs ~all (softfail).
+          </p>
+          <SpfModeSection />
+
+          <hr className="divider" />
+          <h3 className="section-title">Hosted reporting mailbox</h3>
+          <p className="section-hint">A DMARCwatch-hosted rua= address, for domains with no mailbox of their own to dedicate.</p>
+          <HostedMailboxSection />
         </>
       )}
     </section>
   );
 }
 
-function AddDomainForm() {
+const SPF_MODES: { key: SpfAllQualifierMode; label: string; description: string }[] = [
+  {
+    key: "strict",
+    label: "Strict",
+    description: "-all is always recommended. The traditional advice — treats SPF's own hardfail as the goal.",
+  },
+  {
+    key: "conditional",
+    label: "Conditional",
+    description:
+      "~all is recommended instead for a sending domain once its own DMARC policy is quarantine/reject — at that point DMARC " +
+      "is already the enforcement, so -all only risks bouncing relayed mail at the SMTP level before DKIM/DMARC are evaluated.",
+  },
+];
+
+function SpfModeSection() {
   const queryClient = useQueryClient();
-  const { data: domains } = useQuery({
-    queryKey: ["domains"],
-    queryFn: () => api.get<Domain[]>("/domains"),
+  const { data: org } = useQuery({
+    queryKey: ["organization", "current"],
+    queryFn: () => api.get<Organization>("/organizations/current"),
+  });
+  const [error, setError] = useState<string | null>(null);
+
+  const setMode = useMutation({
+    mutationFn: (mode: SpfAllQualifierMode) =>
+      api.patch<Organization>("/organizations/current", { name: org?.name, spf_all_qualifier_mode: mode }),
+    onSuccess: () => {
+      setError(null);
+      queryClient.invalidateQueries({ queryKey: ["organization", "current"] });
+    },
+    onError: (err) => setError(err instanceof ApiError ? err.message : "failed to save"),
   });
 
-  const [name, setName] = useState("");
-  const [parentId, setParentId] = useState<string>("");
-  const [formError, setFormError] = useState<string | null>(null);
-  const [formNotice, setFormNotice] = useState<string | null>(null);
-
-  const apexDomains = (domains ?? []).filter((d) => !d.parent_domain_id);
-  const selectedParent = apexDomains.find((d) => d.id === parentId);
-  // When adding a subdomain, the user only types the label (e.g. "mail") —
-  // the parent's domain is appended automatically rather than requiring the
-  // full FQDN to be retyped, which was silently rejected before (a bare
-  // label like "mail" fails the full-FQDN validation, giving a confusing 422).
-  const fullName = selectedParent ? `${name}.${selectedParent.name}` : name;
-
-  const createDomain = useMutation({
-    mutationFn: () =>
-      api.post<Domain & { reattributed_reports: number }>("/domains", {
-        name: fullName,
-        parent_domain_id: parentId || null,
-      }),
-    onSuccess: (created) => {
-      setName("");
-      setParentId("");
-      setFormError(null);
-      setFormNotice(
-        created.reattributed_reports > 0
-          ? `Linked ${created.reattributed_reports} previously-unmatched report(s) to ${created.name}.`
-          : null,
-      );
-      queryClient.invalidateQueries({ queryKey: ["domains"] });
-    },
-    onError: (err) => {
-      setFormNotice(null);
-      setFormError(err instanceof ApiError ? err.message : "failed to add domain");
-    },
-  });
+  if (!org) return null;
 
   return (
-    <div className="card">
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          createDomain.mutate();
-        }}
-        className="field-row"
-      >
-        <select className="input" value={parentId} onChange={(e) => setParentId(e.target.value)}>
-          <option value="">apex domain</option>
-          {apexDomains.map((d) => (
-            <option key={d.id} value={d.id}>
-              subdomain of {d.name}
-            </option>
-          ))}
-        </select>
-        <input
-          className="input"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder={selectedParent ? "mail" : "example.com"}
-          required
-        />
-        {selectedParent && <span className="muted">.{selectedParent.name}</span>}
-        <button type="submit" className="btn btn--primary" disabled={createDomain.isPending}>
-          <Plus />
-          Add
-        </button>
-      </form>
-      {formError && (
-        <div className="alert alert--critical" style={{ marginTop: "0.75rem", marginBottom: 0 }}>
-          {formError}
-        </div>
-      )}
-      {formNotice && (
-        <div className="alert alert--good" style={{ marginTop: "0.75rem", marginBottom: 0 }}>
-          {formNotice}
-        </div>
-      )}
+    <div className="card" style={{ padding: "1rem" }}>
+      <div className="chip-row">
+        {SPF_MODES.map((m) => (
+          <button
+            key={m.key}
+            className="btn btn--ghost btn--sm"
+            style={org.spf_all_qualifier_mode === m.key ? { background: "var(--accent-wash)", color: "var(--accent)" } : undefined}
+            disabled={setMode.isPending}
+            onClick={() => setMode.mutate(m.key)}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
+      <p className="section-hint" style={{ marginTop: "0.6rem", marginBottom: 0 }}>
+        {SPF_MODES.find((m) => m.key === org.spf_all_qualifier_mode)?.description}
+      </p>
+      {error && <div className="alert alert--critical" style={{ marginTop: "0.5rem" }}>{error}</div>}
+    </div>
+  );
+}
+
+function HostedMailboxSection() {
+  const queryClient = useQueryClient();
+  const { data: org } = useQuery({
+    queryKey: ["organization", "current"],
+    queryFn: () => api.get<Organization>("/organizations/current"),
+  });
+  const [error, setError] = useState<string | null>(null);
+
+  const setOptIn = useMutation({
+    mutationFn: (optIn: boolean) =>
+      api.patch<Organization>("/organizations/current", { name: org?.name, hosted_mailbox_opt_in: optIn }),
+    onSuccess: () => {
+      setError(null);
+      queryClient.invalidateQueries({ queryKey: ["organization", "current"] });
+    },
+    onError: (err) => setError(err instanceof ApiError ? err.message : "failed to save"),
+  });
+
+  if (!org) return null;
+
+  // Local-auth orgs have no Entra tenant to grant Mail Access consent from
+  // — a hosted mailbox is their only way to receive reports at all, so
+  // there's nothing to toggle for them (see _hosted_mailbox_available in
+  // app/routers/domains.py).
+  if (!org.entra_tenant_id) {
+    return (
+      <div className="card" style={{ padding: "1rem" }}>
+        <p className="section-hint" style={{ margin: 0 }}>
+          Always available — your organization signs in without Microsoft Entra, so a DMARCwatch-hosted mailbox is your only
+          reporting option.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card" style={{ padding: "1rem" }}>
+      <div className="chip-row">
+        {[
+          { key: false, label: "Off" },
+          { key: true, label: "On" },
+        ].map((opt) => (
+          <button
+            key={String(opt.key)}
+            className="btn btn--ghost btn--sm"
+            style={org.hosted_mailbox_opt_in === opt.key ? { background: "var(--accent-wash)", color: "var(--accent)" } : undefined}
+            disabled={setOptIn.isPending}
+            onClick={() => setOptIn.mutate(opt.key)}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+      <p className="section-hint" style={{ marginTop: "0.6rem", marginBottom: 0 }}>
+        Off by default since your organization can connect its own mailbox. Turn on to also allow generating
+        DMARCwatch-hosted addresses per domain from the Policy Builder.
+      </p>
+      {error && <div className="alert alert--critical" style={{ marginTop: "0.5rem" }}>{error}</div>}
     </div>
   );
 }
@@ -130,7 +190,7 @@ function DetectedDomains() {
 
   const addDetected = useMutation({
     mutationFn: (item: DetectedDomain) =>
-      api.post<Domain & { reattributed_reports: number }>("/domains", {
+      api.post<Domain & { reattributed_reports: number; reattributed_records: number }>("/domains", {
         name: item.name,
         parent_domain_id: item.suggested_parent_id,
       }),
@@ -140,6 +200,15 @@ function DetectedDomains() {
       queryClient.invalidateQueries({ queryKey: ["detected-domains"] });
     },
     onError: (err) => setError(err instanceof ApiError ? err.message : "failed to add domain"),
+  });
+
+  const dismissDetected = useMutation({
+    mutationFn: (item: DetectedDomain) => api.post<void>(`/dmarc/detected-domains/${encodeURIComponent(item.name)}/dismiss`),
+    onSuccess: () => {
+      setError(null);
+      queryClient.invalidateQueries({ queryKey: ["detected-domains"] });
+    },
+    onError: (err) => setError(err instanceof ApiError ? err.message : "failed to dismiss"),
   });
 
   if (isLoading || !detected || detected.length === 0) return null;
@@ -182,178 +251,22 @@ function DetectedDomains() {
                 </div>
               )}
             </div>
-            <button className="btn btn--secondary btn--sm" onClick={() => addDetected.mutate(item)} disabled={addDetected.isPending}>
-              Add &amp; verify
-            </button>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function MailboxConnectionSection({ canManage }: { canManage: boolean }) {
-  const queryClient = useQueryClient();
-
-  const { data: org } = useQuery({
-    queryKey: ["organization", "current"],
-    queryFn: () => api.get<Organization>("/organizations/current"),
-  });
-
-  const { data: connection, error } = useQuery({
-    queryKey: ["mailbox-connection"],
-    queryFn: () => api.get<MailboxConnectionStatus>("/mailbox-connection"),
-    retry: false,
-  });
-
-  const [mailbox, setMailbox] = useState("");
-  const [editing, setEditing] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [showLinks, setShowLinks] = useState(false);
-
-  const setConnection = useMutation({
-    mutationFn: () => api.put<MailboxConnectionStatus>("/mailbox-connection", { mailbox_address: mailbox }),
-    onSuccess: () => {
-      setSaveError(null);
-      setEditing(false);
-      setMailbox("");
-      queryClient.invalidateQueries({ queryKey: ["mailbox-connection"] });
-      setTimeout(() => queryClient.invalidateQueries({ queryKey: ["mailbox-connection"] }), 4000);
-    },
-    onError: (err) => setSaveError(err instanceof ApiError ? err.message : "failed to save mailbox"),
-  });
-
-  const resync = useMutation({
-    mutationFn: () => api.post("/mailbox-connection/resync"),
-    onSuccess: () => {
-      setTimeout(() => queryClient.invalidateQueries({ queryKey: ["mailbox-connection"] }), 3000);
-    },
-  });
-
-  const consentLinks = org?.entra_consent_urls;
-  const consentGuidance = consentLinks && (
-    <div style={{ fontSize: "0.85rem", marginTop: "0.5rem" }}>
-      Make sure your Global Admin has approved{" "}
-      <a href={consentLinks.mail_access_consent_url} target="_blank" rel="noreferrer">
-        mail access
-      </a>{" "}
-      (required) and, if your tenant blocks user sign-in consent,{" "}
-      <a href={consentLinks.sso_consent_url} target="_blank" rel="noreferrer">
-        dashboard sign-in
-      </a>{" "}
-      too.
-    </div>
-  );
-
-  const noConnectionYet = error instanceof ApiError && error.status === 404;
-
-  if (noConnectionYet) {
-    if (!canManage) {
-      return (
-        <div className="alert alert--warning">
-          <Mail size={15} style={{ verticalAlign: "-2px", marginRight: "0.4rem" }} />
-          No mailbox connection configured yet — ask your org admin to set one up.
-        </div>
-      );
-    }
-    return (
-      <div className="alert alert--warning">
-        <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-          <Mail size={15} />
-          No mailbox connection configured yet.
-        </div>
-        {consentGuidance}
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            setConnection.mutate();
-          }}
-          className="field-row"
-          style={{ marginTop: "0.6rem" }}
-        >
-          <input
-            className="input"
-            value={mailbox}
-            onChange={(e) => setMailbox(e.target.value)}
-            placeholder="dmarc-reports@yourdomain.com"
-            style={{ width: "260px" }}
-            required
-          />
-          <button type="submit" className="btn btn--primary btn--sm" disabled={setConnection.isPending}>
-            Save &amp; start syncing
-          </button>
-        </form>
-        {saveError && <div style={{ marginTop: "0.5rem" }}>{saveError}</div>}
-      </div>
-    );
-  }
-  if (!connection) return null;
-
-  const ok = connection.consent_status === "granted" && connection.last_sync_status !== "error";
-  return (
-    <div className={`alert ${ok ? "alert--good" : "alert--warning"}`}>
-      {editing ? (
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            setConnection.mutate();
-          }}
-          className="field-row"
-        >
-          <input className="input" value={mailbox} onChange={(e) => setMailbox(e.target.value)} style={{ width: "260px" }} required />
-          <button type="submit" className="btn btn--primary btn--sm" disabled={setConnection.isPending}>
-            Save
-          </button>
-          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setEditing(false)}>
-            Cancel
-          </button>
-        </form>
-      ) : (
-        <>
-          <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}>
-            <Mail size={15} />
-            Mailbox: <strong>{connection.mailbox_address}</strong>
-            <span className="muted">— consent {connection.consent_status}</span>
-            {connection.last_sync_at && (
-              <span className="muted">, last synced {new Date(connection.last_sync_at).toLocaleString()}</span>
-            )}
-          </div>
-          {connection.last_sync_status === "error" && connection.last_sync_error && (
-            <div style={{ marginTop: "0.35rem" }}>— error: {connection.last_sync_error}</div>
-          )}
-          {/* Setting the mailbox is self-attested, not verified — a sync
-              error very often just means the Entra consent steps were never
-              actually completed, so the links that matter for fixing that
-              need to stay reachable here too, not just before the mailbox
-              was first configured. */}
-          {canManage && connection.last_sync_status === "error" && consentGuidance}
-          {canManage && (
-            <div className="chip-row" style={{ marginTop: "0.6rem" }}>
-              <button className="btn btn--secondary btn--sm" onClick={() => resync.mutate()} disabled={resync.isPending}>
-                <RefreshCw />
-                {resync.isPending || resync.isSuccess ? "Syncing…" : "Resync now"}
+            <div style={{ display: "flex", gap: "0.4rem", flexShrink: 0 }}>
+              <button className="btn btn--secondary btn--sm" onClick={() => addDetected.mutate(item)} disabled={addDetected.isPending}>
+                Add &amp; verify
               </button>
               <button
                 className="btn btn--ghost btn--sm"
-                onClick={() => {
-                  setMailbox(connection.mailbox_address);
-                  setEditing(true);
-                }}
+                title="Not mine — stop suggesting it"
+                onClick={() => dismissDetected.mutate(item)}
+                disabled={dismissDetected.isPending}
               >
-                Change mailbox
+                <X size={14} />
               </button>
-              {connection.last_sync_status !== "error" && (
-                <button className="btn btn--ghost btn--sm" onClick={() => setShowLinks((v) => !v)}>
-                  {showLinks ? <ChevronUp /> : <ChevronDown />}
-                  Entra links
-                </button>
-              )}
             </div>
-          )}
-          {showLinks && connection.last_sync_status !== "error" && consentGuidance}
-        </>
-      )}
-      {saveError && <div style={{ marginTop: "0.5rem" }}>{saveError}</div>}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

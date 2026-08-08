@@ -6,14 +6,14 @@ import type { AdminMe } from "../api/types";
 interface AdminAuthContextValue {
   admin: AdminMe | null;
   isLoading: boolean;
-  refetch: () => void;
+  refetch: () => Promise<void>;
 }
 
 const AdminAuthContext = createContext<AdminAuthContextValue | undefined>(undefined);
 
 export function AdminAuthProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
-  const { data, isLoading, refetch } = useQuery({
+  const { data, isLoading } = useQuery({
     queryKey: ["admin-me"],
     queryFn: async () => {
       try {
@@ -31,10 +31,9 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
       value={{
         admin: data ?? null,
         isLoading,
-        refetch: () => {
-          queryClient.invalidateQueries({ queryKey: ["admin-me"] });
-          refetch();
-        },
+        // See AuthContext's refetch for why callers that navigate right
+        // after this must await it.
+        refetch: () => queryClient.invalidateQueries({ queryKey: ["admin-me"] }),
       }}
     >
       {children}

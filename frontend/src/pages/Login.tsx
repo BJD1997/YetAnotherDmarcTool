@@ -1,4 +1,10 @@
-import { useSearchParams } from "react-router-dom";
+import { useState, type FormEvent } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { api, ApiError } from "../api/client";
+import type { LocalLoginResponse } from "../api/localAuth";
+import { useAuth } from "../auth/AuthContext";
+import EnrollOtpStep from "../components/auth/EnrollOtpStep";
+import RecoveryCodesStep from "../components/auth/RecoveryCodesStep";
 
 const ERROR_MESSAGES: Record<string, string> = {
   invalid_state: "Login session expired or was tampered with. Please try again.",
@@ -19,9 +25,60 @@ function MicrosoftMark() {
   );
 }
 
+type Phase = "entra" | "password" | "otp" | "enroll" | "recovery";
+
 export default function Login() {
   const [params] = useSearchParams();
   const error = params.get("error");
+  const navigate = useNavigate();
+  const { refetch } = useAuth();
+
+  const [phase, setPhase] = useState<Phase>("entra");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
+  const [formError, setFormError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
+
+  async function handlePasswordSubmit(e: FormEvent) {
+    e.preventDefault();
+    setSubmitting(true);
+    setFormError(null);
+    try {
+      const result = await api.post<LocalLoginResponse>("/auth/local-login", { email, password });
+      setPhase(result.needs_enrollment ? "enroll" : "otp");
+    } catch (err) {
+      setFormError(err instanceof ApiError ? err.message : "sign-in failed");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleOtpSubmit(e: FormEvent) {
+    e.preventDefault();
+    setSubmitting(true);
+    setFormError(null);
+    try {
+      await api.post("/auth/verify-otp", { code });
+      await refetch();
+      navigate("/");
+    } catch (err) {
+      setFormError(err instanceof ApiError ? err.message : "invalid code");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  function handleEnrollComplete(codes: string[]) {
+    setRecoveryCodes(codes);
+    setPhase("recovery");
+  }
+
+  async function handleRecoveryContinue() {
+    await refetch();
+    navigate("/");
+  }
 
   return (
     <main className="auth-page">
@@ -32,20 +89,103 @@ export default function Login() {
             DMARCwatch
           </span>
         </div>
-        <p className="page-subtitle" style={{ marginBottom: 0 }}>
-          Sign in to view your organization's DMARC reports and email-authentication status.
-        </p>
 
-        {error && (
-          <div className="alert alert--critical" style={{ marginTop: "1.25rem", marginBottom: 0 }}>
-            {ERROR_MESSAGES[error] ?? "Sign-in failed. Please try again."}
+        {phase === "entra" && (
+          <>
+            <p className="page-subtitle" style={{ marginBottom: 0 }}>
+              Sign in to view your organization's DMARC reports and email-authentication status.
+            </p>
+
+            {error && (
+              <div className="alert alert--critical" style={{ marginTop: "1.25rem", marginBottom: 0 }}>
+                {ERROR_MESSAGES[error] ?? "Sign-in failed. Please try again."}
+              </div>
+            )}
+
+            <a href="/api/auth/login" className="btn btn--primary" style={{ width: "100%", marginTop: "1.5rem", padding: "0.65rem" }}>
+              <MicrosoftMark />
+              Sign in with Microsoft
+            </a>
+
+            <button
+              className="btn btn--ghost btn--sm"
+              onClick={() => setPhase("password")}
+              style={{ width: "100%", marginTop: "0.75rem", justifyContent: "center" }}
+            >
+              Sign in with email and password instead
+            </button>
+          </>
+        )}
+
+        {phase === "password" && (
+          <form onSubmit={handlePasswordSubmit} className="auth-form" style={{ marginTop: "1rem" }}>
+            <input
+              className="input"
+              type="email"
+              placeholder="Email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              autoFocus
+              required
+            />
+            <input
+              className="input"
+              type="password"
+              placeholder="Password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
+            {formError && (
+              <div className="alert alert--critical" style={{ margin: 0 }}>
+                {formError}
+              </div>
+            )}
+            <button type="submit" className="btn btn--primary" disabled={submitting} style={{ padding: "0.65rem" }}>
+              Continue
+            </button>
+            <button type="button" className="btn btn--ghost btn--sm" onClick={() => setPhase("entra")} style={{ justifyContent: "center" }}>
+              Back
+            </button>
+          </form>
+        )}
+
+        {phase === "otp" && (
+          <form onSubmit={handleOtpSubmit} className="auth-form" style={{ marginTop: "1rem" }}>
+            <p className="section-hint" style={{ marginTop: 0 }}>
+              Enter the code from your authenticator app, or a recovery code.
+            </p>
+            <input
+              className="input"
+              inputMode="numeric"
+              placeholder="6-digit code"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              autoFocus
+              required
+            />
+            {formError && (
+              <div className="alert alert--critical" style={{ margin: 0 }}>
+                {formError}
+              </div>
+            )}
+            <button type="submit" className="btn btn--primary" disabled={submitting} style={{ padding: "0.65rem" }}>
+              Sign in
+            </button>
+          </form>
+        )}
+
+        {phase === "enroll" && (
+          <div style={{ marginTop: "1rem" }}>
+            <EnrollOtpStep onComplete={handleEnrollComplete} />
           </div>
         )}
 
-        <a href="/api/auth/login" className="btn btn--primary" style={{ width: "100%", marginTop: "1.5rem", padding: "0.65rem" }}>
-          <MicrosoftMark />
-          Sign in with Microsoft
-        </a>
+        {phase === "recovery" && (
+          <div style={{ marginTop: "1rem" }}>
+            <RecoveryCodesStep codes={recoveryCodes} onContinue={handleRecoveryContinue} />
+          </div>
+        )}
       </div>
     </main>
   );

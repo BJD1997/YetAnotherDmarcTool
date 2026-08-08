@@ -11,14 +11,20 @@ export interface EntraConsentUrls {
   sso_consent_url: string;
 }
 
+export type SpfAllQualifierMode = "strict" | "conditional";
+
 export interface Organization {
   id: string;
   name: string;
-  status: "pending_setup" | "active" | "suspended";
+  status: "active" | "suspended";
   entra_tenant_id: string | null;
   is_operator: boolean;
+  spf_all_qualifier_mode: SpfAllQualifierMode;
+  hosted_mailbox_opt_in: boolean;
   entra_consent_urls: EntraConsentUrls | null;
 }
+
+export type DomainMailProfile = "sends_mail" | "receive_only" | "parked";
 
 export interface Domain {
   id: string;
@@ -31,6 +37,8 @@ export interface Domain {
   verified_at: string | null;
   verification_token: string;
   verification_record_name: string;
+  mail_profile: DomainMailProfile;
+  hosted_report_address: string | null;
 }
 
 export interface VerifyDomainResponse {
@@ -59,5 +67,6 @@ export interface TeamMember {
   display_name: string | null;
   role: "org_admin" | "member";
   status: "active" | "disabled";
+  auth_method: "entra" | "local";
   last_login_at: string | null;
 }

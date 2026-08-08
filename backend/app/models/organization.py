@@ -5,7 +5,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
-from app.models.enums import OrganizationStatus
+from app.models.enums import OrganizationStatus, SpfAllQualifierMode
 from app.models.mixins import TimestampMixin, UUIDPkMixin
 from app.models.pg_enum import pg_enum
 
@@ -34,3 +34,18 @@ class Organization(UUIDPkMixin, TimestampMixin, Base):
     # session, no separate local-auth login needed. The local platform_admin
     # login (see PlatformAdmin) stays available as a break-glass fallback.
     is_operator: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # Client-configurable via Settings — see app/services/dns_checks/spf.py.
+    spf_all_qualifier_mode: Mapped[SpfAllQualifierMode] = mapped_column(
+        pg_enum(SpfAllQualifierMode, "spf_all_qualifier_mode"),
+        nullable=False,
+        default=SpfAllQualifierMode.strict,
+    )
+
+    # Explicit opt-in for orgs that COULD set up their own MailboxConnection
+    # (entra_tenant_id is set) but want the operator-hosted address instead.
+    # Irrelevant for local-auth orgs (entra_tenant_id is None) — those have
+    # no Entra tenant to grant Mail Access consent from, so hosted mailbox
+    # is always available to them regardless of this flag — see
+    # app/routers/domains.py's _hosted_mailbox_available.
+    hosted_mailbox_opt_in: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

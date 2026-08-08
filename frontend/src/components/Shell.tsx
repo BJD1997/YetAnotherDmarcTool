@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Globe, Users, Building2, LogOut, Menu, X, Settings } from "lucide-react";
+import { LayoutDashboard, Globe, Users, Building2, LogOut, Menu, X, Settings } from "lucide-react";
 import { api } from "../api/client";
 import type { Organization } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
@@ -53,6 +53,10 @@ export default function Shell({ children }: { children: ReactNode }) {
 
         <nav className="sidebar-nav">
           <Link to="/" onClick={closeMobile} className={`nav-link ${isActive("/") ? "active" : ""}`}>
+            <LayoutDashboard />
+            Overview
+          </Link>
+          <Link to="/domains" onClick={closeMobile} className={`nav-link ${isActive("/domains") ? "active" : ""}`}>
             <Globe />
             Domains
           </Link>

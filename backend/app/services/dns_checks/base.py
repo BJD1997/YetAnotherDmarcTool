@@ -23,3 +23,14 @@ class Finding:
     # e.g. a DKIM selector name, or a specific MX hostname for a per-host finding.
     subject: str | None = None
     rule_version: str = RULE_VERSION
+
+
+def is_null_mx(mx_records: list[tuple[int, str]]) -> bool:
+    """True for an explicit RFC 7505 null MX ("0 ."). resolve_mx()
+    (dns_checks/resolver.py) strips every exchange hostname's trailing dot
+    for comparability elsewhere (CNAME/A-AAAA lookups need bare names) —
+    for a null MX the exchange *is* the DNS root name, so that stripping
+    collapses it to "", not the literal ".". Shared by mx.py/starttls.py/
+    dane.py so this isn't re-derived (and re-broken, as it was — checked
+    against "." in all three, which never matched) a fourth time."""
+    return len(mx_records) == 1 and mx_records[0][1] == ""

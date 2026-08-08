@@ -10,12 +10,13 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.dmarc_aggregate import DmarcAggregateRecord, DmarcAggregateReport
 from app.models.dmarc_forensic import DmarcForensicReport
+from app.models.domain import Domain
 from app.models.enums import AuthResult, Disposition, TlsRptPolicyType
 from app.models.tls_rpt import TlsRptReport
 from app.services.ingestion.domain_matcher import match_domain
@@ -65,26 +66,43 @@ async def write_aggregate_report(
         logger.debug("duplicate aggregate report %s from %s, skipping", metadata.get("report_id"), metadata.get("org_name"))
         return False
 
+    # RFC 7489 §7.2 keeps policy_published/domain (report-level: whichever
+    # domain's DMARC record the receiver's DNS walk actually found) and each
+    # record's identifiers/header_from (the literal RFC5322.From of that one
+    # message) deliberately separate — a single report legitimately bundles
+    # records for an organizational domain and any number of its subdomains,
+    # since subdomain mail is evaluated against the inherited parent policy.
+    # Attributing every record to the report's domain_id (as if the whole
+    # report were about one domain) silently folds subdomain traffic into
+    # the parent's stats forever. Re-resolving per header_from — cached here
+    # since most reports only have a handful of distinct values across many
+    # source-IP records — is what match_domain's own "closest registered
+    # ancestor" walk is for.
+    header_from_domain_ids: dict[str, uuid.UUID | None] = {}
     now = datetime.now(timezone.utc)
-    records = [
-        DmarcAggregateRecord(
-            organization_id=organization_id,
-            report_id=report.id,
-            domain_id=domain_id,
-            source_ip=rec["source"]["ip_address"],
-            count=rec["count"],
-            disposition=Disposition(rec["policy_evaluated"]["disposition"]),
-            dkim_result=AuthResult(rec["policy_evaluated"]["dkim"]),
-            spf_result=AuthResult(rec["policy_evaluated"]["spf"]),
-            header_from=rec["identifiers"]["header_from"],
-            envelope_from=rec["identifiers"].get("envelope_from"),
-            envelope_to=rec["identifiers"].get("envelope_to"),
-            auth_results=rec.get("auth_results") or {},
-            policy_evaluated_reasons=rec["policy_evaluated"].get("policy_override_reasons") or None,
-            created_at=now,
+    records = []
+    for rec in parsed["records"]:
+        header_from = rec["identifiers"]["header_from"]
+        if header_from not in header_from_domain_ids:
+            header_from_domain_ids[header_from] = await match_domain(db, organization_id, header_from)
+        records.append(
+            DmarcAggregateRecord(
+                organization_id=organization_id,
+                report_id=report.id,
+                domain_id=header_from_domain_ids[header_from],
+                source_ip=rec["source"]["ip_address"],
+                count=rec["count"],
+                disposition=Disposition(rec["policy_evaluated"]["disposition"]),
+                dkim_result=AuthResult(rec["policy_evaluated"]["dkim"]),
+                spf_result=AuthResult(rec["policy_evaluated"]["spf"]),
+                header_from=header_from,
+                envelope_from=rec["identifiers"].get("envelope_from"),
+                envelope_to=rec["identifiers"].get("envelope_to"),
+                auth_results=rec.get("auth_results") or {},
+                policy_evaluated_reasons=rec["policy_evaluated"].get("policy_override_reasons") or None,
+                created_at=now,
+            )
         )
-        for rec in parsed["records"]
-    ]
     db.add_all(records)
     await db.flush()
     return True
@@ -185,11 +203,13 @@ async def resweep_unmatched_reports(db: AsyncSession, organization_id: uuid.UUID
         domain_id = await match_domain(db, organization_id, report.policy_published_domain)
         if domain_id is not None:
             report.domain_id = domain_id
-            await db.execute(
-                DmarcAggregateRecord.__table__.update()
-                .where(DmarcAggregateRecord.report_id == report.id)
-                .values(domain_id=domain_id)
-            )
+            # Deliberately NOT blanket-copying this onto the report's
+            # records anymore — a report's policy_published/domain and its
+            # records' own header_from can legitimately differ (RFC 7489
+            # §7.2, subdomain mail evaluated under an inherited parent
+            # policy). resweep_domain_records (called alongside this for
+            # the same newly-registered domain, see app/routers/domains.py)
+            # re-matches records by their own header_from instead.
             counts["aggregate_reports"] += 1
 
     forensic_result = await db.execute(
@@ -217,3 +237,49 @@ async def resweep_unmatched_reports(db: AsyncSession, organization_id: uuid.UUID
     if any(counts.values()):
         await db.flush()
     return counts
+
+
+async def resweep_domain_records(db: AsyncSession, organization_id: uuid.UUID, domain: Domain) -> int:
+    """Re-attributes DmarcAggregateRecord rows by re-resolving match_domain()
+    against each one's own header_from, scoped to exactly the header_from
+    values this newly-registered domain could possibly affect: itself, or
+    anything ending in ".{domain.name}" — nothing else is reachable by
+    match_domain's ancestor walk now that this domain exists. Re-examines
+    *existing* rows (not just domain_id IS NULL ones), so calling this for
+    an already-registered domain doubles as a backfill using the exact same
+    matching logic write_aggregate_report uses at ingestion time, rather
+    than a separately-maintained one-off script. Called alongside
+    resweep_unmatched_reports right after every domain is created (see
+    app/routers/domains.py) — apex or subdomain, going forward or backfill,
+    same call site."""
+    candidates = (
+        await db.execute(
+            select(DmarcAggregateRecord.header_from)
+            .where(
+                DmarcAggregateRecord.organization_id == organization_id,
+                or_(
+                    DmarcAggregateRecord.header_from == domain.name,
+                    DmarcAggregateRecord.header_from.like(f"%.{domain.name}"),
+                ),
+            )
+            .distinct()
+        )
+    ).scalars().all()
+
+    updated = 0
+    for header_from in candidates:
+        resolved_domain_id = await match_domain(db, organization_id, header_from)
+        result = await db.execute(
+            DmarcAggregateRecord.__table__.update()
+            .where(
+                DmarcAggregateRecord.organization_id == organization_id,
+                DmarcAggregateRecord.header_from == header_from,
+                DmarcAggregateRecord.domain_id.is_distinct_from(resolved_domain_id),
+            )
+            .values(domain_id=resolved_domain_id)
+        )
+        updated += result.rowcount
+
+    if updated:
+        await db.flush()
+    return updated

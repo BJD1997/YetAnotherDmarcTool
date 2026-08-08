@@ -6,11 +6,13 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.routers import (
+    action_queue,
     auth,
     dmarc_reports,
     dns_checks,
     domains,
     mailbox_connections,
+    onboarding,
     organizations,
     platform_admin,
     selectors,
@@ -63,6 +65,8 @@ api_router.include_router(mailbox_connections.router)
 api_router.include_router(dmarc_reports.router)
 api_router.include_router(selectors.router)
 api_router.include_router(dns_checks.router)
+api_router.include_router(action_queue.router)
+api_router.include_router(onboarding.router)
 
 app.include_router(api_router)
 

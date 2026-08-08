@@ -2,7 +2,7 @@
 MX for intentionally non-sending domains), and per-host validation that the
 target isn't a CNAME (RFC 2181 forbids this) and actually resolves."""
 
-from app.services.dns_checks.base import Finding
+from app.services.dns_checks.base import Finding, is_null_mx
 from app.services.dns_checks.resolver import DnsLookupError, resolve_address, resolve_cname, resolve_mx
 
 
@@ -27,7 +27,7 @@ async def check(domain: str) -> list[Finding]:
             )
         ]
 
-    if len(mx_records) == 1 and mx_records[0][1] == ".":
+    if is_null_mx(mx_records):
         return [Finding(status="pass", summary="Null MX (RFC 7505) — explicitly configured to not receive mail")]
 
     findings = [

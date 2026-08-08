@@ -10,7 +10,7 @@ Per the plan, DNSSEC status is read from the resolver's AD flag (the
 `resolver` container validates DNSSEC itself) rather than hand-rolling
 DS/DNSKEY/RRSIG chain validation here."""
 
-from app.services.dns_checks.base import Finding
+from app.services.dns_checks.base import Finding, is_null_mx
 from app.services.dns_checks.resolver import DnsLookupError, resolve_mx, resolve_tlsa
 
 _VALID_USAGE = {0, 1, 2, 3}
@@ -38,7 +38,7 @@ async def check(domain: str) -> list[Finding]:
     except DnsLookupError as exc:
         return [Finding(status="error", summary=f"Could not look up MX records for DANE check: {exc}")]
 
-    if not mx_records or (len(mx_records) == 1 and mx_records[0][1] == "."):
+    if not mx_records or is_null_mx(mx_records):
         # No mail is received here (absent MX, or an explicit RFC 7505 null
         # MX) — DANE has nothing to protect; mx.py already flags MX-level issues.
         return []

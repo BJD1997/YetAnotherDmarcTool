@@ -17,7 +17,7 @@ export default function AdminLogin() {
     setError(null);
     try {
       await api.post("/admin/login", { email, password });
-      refetch();
+      await refetch();
       navigate("/admin");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "login failed");

@@ -6,14 +6,14 @@ import type { CurrentUser } from "../api/types";
 interface AuthContextValue {
   user: CurrentUser | null;
   isLoading: boolean;
-  refetch: () => void;
+  refetch: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
-  const { data, isLoading, refetch } = useQuery({
+  const { data, isLoading } = useQuery({
     queryKey: ["me"],
     queryFn: async () => {
       try {
@@ -31,10 +31,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       value={{
         user: data ?? null,
         isLoading,
-        refetch: () => {
-          queryClient.invalidateQueries({ queryKey: ["me"] });
-          refetch();
-        },
+        // Callers that navigate right after this (Login/SetPassword) need
+        // to await it — invalidateQueries' promise resolves once the
+        // refetch itself completes, not just once it's kicked off, so
+        // RequireAuth sees the real post-login user instead of racing
+        // ahead on stale (pre-login, cached-null) data. That race was the
+        // exact cause of a reported bug: local-auth sign-in bouncing back
+        // to the login form once before landing on the dashboard the
+        // second time.
+        refetch: () => queryClient.invalidateQueries({ queryKey: ["me"] }),
       }}
     >
       {children}

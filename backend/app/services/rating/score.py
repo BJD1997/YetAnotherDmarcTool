@@ -11,7 +11,7 @@ shows them as "not checked" rather than this module fabricating a status."""
 
 import dataclasses
 
-from app.models.enums import CheckStatus, CheckType
+from app.models.enums import CheckStatus, CheckType, DomainMailProfile
 
 WEIGHTS: dict[str, int] = {
     "dmarc_policy": 25,
@@ -62,6 +62,17 @@ def worst_status(statuses: list[CheckStatus]) -> CheckStatus:
     return CheckStatus.pass_
 
 
+def tally_worst_status(findings_by_type: dict[CheckType, list]) -> dict[str, int]:
+    """One vote per check_type (its worst finding), not one per finding —
+    a category-level "how many of your checks are in each state" tally for
+    a compact per-domain summary, e.g. the Domains list page, rather than
+    the full per-finding detail Best Practices shows."""
+    counts = {status.value: 0 for status in CheckStatus}
+    for findings in findings_by_type.values():
+        counts[worst_status([f.status for f in findings]).value] += 1
+    return counts
+
+
 @dataclasses.dataclass
 class RatingFactor:
     factor: str
@@ -83,6 +94,7 @@ def compute_rating(
     findings_by_type: dict[CheckType, list],
     dmarc_pass_count: int,
     total_message_count: int,
+    mail_profile: DomainMailProfile = DomainMailProfile.sends_mail,
 ) -> DomainRating:
     """`findings_by_type` values are lists of objects with a `.status`
     (CheckStatus) attribute — either Finding instances (registry.run_all's
@@ -110,14 +122,29 @@ def compute_rating(
             )
         )
 
-    insufficient_data = total_message_count == 0
-    if not insufficient_data:
-        pass_pct = round(dmarc_pass_count / total_message_count * 100, 1)
-        factors.append(
-            RatingFactor(
-                factor="dmarc_pass_rate", weight=WEIGHTS["dmarc_pass_rate"], score_pct=pass_pct, detail=f"{pass_pct}% of messages"
+    # dmarc_pass_rate measures "are my legitimate senders authenticating
+    # correctly" — meaningless for a domain with no legitimate senders at
+    # all (receive_only/parked, see Domain.mail_profile). Any traffic a
+    # domain like that sees is illegitimate by definition, so a low (even
+    # 0%) pass rate reflects spoofing being correctly rejected, not a
+    # problem — scored the same way the DNS checks that also don't apply
+    # here (starttls/dane/mta_sts/tls_rpt) already are: left out of the
+    # weighted average rather than penalizing what's actually correct
+    # behavior. Message volume also stops gating insufficient_data in that
+    # case — zero traffic ever is the expected steady state, not a data
+    # shortfall (the `not factors` fallback below still catches the case
+    # where there's truly nothing to rate, e.g. no DNS checks have run yet).
+    if mail_profile == DomainMailProfile.sends_mail:
+        insufficient_data = total_message_count == 0
+        if not insufficient_data:
+            pass_pct = round(dmarc_pass_count / total_message_count * 100, 1)
+            factors.append(
+                RatingFactor(
+                    factor="dmarc_pass_rate", weight=WEIGHTS["dmarc_pass_rate"], score_pct=pass_pct, detail=f"{pass_pct}% of messages"
+                )
             )
-        )
+    else:
+        insufficient_data = False
 
     if insufficient_data or not factors:
         return DomainRating(score=None, grade=None, insufficient_data=True, factors=factors)

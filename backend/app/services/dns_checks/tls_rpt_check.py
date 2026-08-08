@@ -6,8 +6,8 @@ handled by report_writer.write_smtp_tls_report."""
 
 import re
 
-from app.services.dns_checks.base import Finding
-from app.services.dns_checks.resolver import DnsLookupError, resolve_txt_strict
+from app.services.dns_checks.base import Finding, is_null_mx
+from app.services.dns_checks.resolver import DnsLookupError, resolve_mx, resolve_txt_strict
 
 _TLSRPT_PREFIX_RE = re.compile(r"(?i)^v=TLSRPTv1(;|\s|$)")
 
@@ -28,6 +28,17 @@ def _parse_rua_uris(value: str) -> list[str]:
 
 
 async def check(domain: str) -> list[Finding]:
+    try:
+        mx_records = await resolve_mx(domain)
+    except DnsLookupError as exc:
+        return [Finding(status="error", summary=f"Could not look up MX records for TLS-RPT check: {exc}")]
+
+    if not mx_records or is_null_mx(mx_records):
+        # No mail is received here — nothing for TLS-RPT to ever report a
+        # negotiation failure on, same reasoning starttls.py/dane.py/
+        # mta_sts.py already apply.
+        return []
+
     name = f"_smtp._tls.{domain}"
     try:
         records = await resolve_txt_strict(name)

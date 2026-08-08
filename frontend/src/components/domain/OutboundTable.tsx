@@ -1,5 +1,5 @@
 import type { DmarcOutboundService } from "../../api/dmarc";
-import { ServiceBadge } from "./shared";
+import { ServiceBadge, riskScore, passRateStyle } from "./shared";
 
 function pct(value: number | null): string {
   return value === null ? "—" : `${value.toFixed(1)}%`;
@@ -9,6 +9,8 @@ export default function OutboundTable({ services }: { services: DmarcOutboundSer
   if (services.length === 0) {
     return <p className="empty-state">No aggregate reports received yet for this domain.</p>;
   }
+
+  const sorted = [...services].sort((a, b) => riskScore(b) - riskScore(a));
 
   return (
     <div className="table-wrap">
@@ -26,7 +28,7 @@ export default function OutboundTable({ services }: { services: DmarcOutboundSer
           </tr>
         </thead>
         <tbody>
-          {services.map((s) => (
+          {sorted.map((s) => (
             <tr key={s.service_label}>
               <td>
                 <ServiceBadge label={s.service_label} />
@@ -44,7 +46,7 @@ export default function OutboundTable({ services }: { services: DmarcOutboundSer
                 {s.rejected}
               </td>
               <td className="num" style={{ fontWeight: 600 }}>
-                {pct(s.dmarc_pass_pct)}
+                <span style={passRateStyle(s.dmarc_pass_pct)}>{pct(s.dmarc_pass_pct)}</span>
               </td>
             </tr>
           ))}

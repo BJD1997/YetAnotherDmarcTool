@@ -24,7 +24,12 @@ services:
     image: mvance/unbound:latest
     restart: unless-stopped
     volumes:
-      - ./resolver/zz-access-control.conf:/opt/unbound/etc/unbound/unbound.conf.d/zz-access-control.conf:ro
+      # forward-records.conf is one of the few files the base image's
+      # entrypoint actually includes into its generated unbound.conf (see
+      # that file's own header comment) — overrides.conf is pulled in
+      # through it, not auto-loaded by being in unbound.conf.d/.
+      - ./resolver/forward-records.conf:/opt/unbound/etc/unbound/forward-records.conf:ro
+      - ./resolver/overrides.conf:/opt/unbound/etc/unbound/unbound.conf.d/overrides.conf:ro
     networks:
       - internal
 

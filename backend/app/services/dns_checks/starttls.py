@@ -19,7 +19,7 @@ work at all"."""
 import asyncio
 import ssl
 
-from app.services.dns_checks.base import Finding
+from app.services.dns_checks.base import Finding, is_null_mx
 from app.services.dns_checks.resolver import DnsLookupError, resolve_mx
 
 SMTP_PORT = 25
@@ -99,7 +99,7 @@ async def check(domain: str) -> list[Finding]:
     except DnsLookupError as exc:
         return [Finding(status="error", summary=f"Could not look up MX records for STARTTLS check: {exc}")]
 
-    if not mx_records or (len(mx_records) == 1 and mx_records[0][1] == "."):
+    if not mx_records or is_null_mx(mx_records):
         return []  # no mail received here — mx.py already flags MX-level issues
 
     results = await asyncio.gather(*(_probe_host(host) for _preference, host in mx_records))

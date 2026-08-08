@@ -8,6 +8,7 @@ import base64
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.serialization import load_der_public_key
 
+from app.models.enums import DomainMailProfile
 from app.services.dns_checks.base import Finding
 from app.services.dns_checks.resolver import DnsLookupError, resolve_txt_strict
 
@@ -74,21 +75,29 @@ async def check_selector(domain: str, selector: str) -> Finding:
         if public_key.key_size < MIN_RSA_KEY_SIZE_FAIL:
             status = "fail"
             messages.append(f"RSA key is only {public_key.key_size} bits (minimum {MIN_RSA_KEY_SIZE_FAIL})")
+            details["recommendation"] = f"Rotate to a {MIN_RSA_KEY_SIZE_WARN}-bit (or larger) DKIM key as soon as possible."
         elif public_key.key_size < MIN_RSA_KEY_SIZE_WARN:
             status = "warn" if status == "pass" else status
             messages.append(f"RSA key is {public_key.key_size} bits — {MIN_RSA_KEY_SIZE_WARN}+ recommended")
+            details["recommendation"] = f"Rotate or upgrade to a {MIN_RSA_KEY_SIZE_WARN}-bit (or larger) DKIM key."
         else:
             messages.append(f"RSA {public_key.key_size}-bit key")
 
     if details["test_mode"]:
         status = "warn" if status == "pass" else status
         messages.append("selector is in test mode (t=y) — some receivers won't enforce DKIM failures while this is set")
+        details.setdefault("recommendation", "Remove t=y once you've confirmed this selector signs correctly.")
 
     return Finding(status=status, summary="; ".join(messages), subject=selector, details=details)
 
 
-async def check(domain: str, selectors: list[str]) -> list[Finding]:
+async def check(domain: str, selectors: list[str], mail_profile: DomainMailProfile = DomainMailProfile.sends_mail) -> list[Finding]:
     if not selectors:
+        # DKIM signs outbound mail — a domain that never sends any (see
+        # Domain.mail_profile) has nothing to sign, so "no selectors" isn't
+        # a gap to flag, unlike a domain that's expected to be sending.
+        if mail_profile != DomainMailProfile.sends_mail:
+            return [Finding(status="pass", summary="No DKIM selectors registered — expected, this domain doesn't send mail")]
         return [
             Finding(
                 status="warn",

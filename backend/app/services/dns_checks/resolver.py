@@ -1,7 +1,7 @@
 """Shared DNS lookup helper, used by domain verification and every Phase 3
 checker (SPF/DKIM/DMARC/MX now; MTA-STS/DANE in Phase 4). All lookups route
 through the `resolver` container (mvance/unbound, DNSSEC-validating — see
-docker-compose.yml and resolver/zz-access-control.conf) rather than whatever
+docker-compose.yml and resolver/overrides.conf) rather than whatever
 resolver the container's /etc/resolv.conf points at, so DANE's DNSSEC-chain
 requirement can eventually be satisfied by trusting the response's AD flag."""
 

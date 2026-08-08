@@ -7,7 +7,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
-from app.models.enums import DomainVerificationStatus
+from app.models.enums import DomainMailProfile, DomainVerificationStatus
 from app.models.mixins import TimestampMixin, UUIDPkMixin
 from app.models.pg_enum import pg_enum
 
@@ -51,3 +51,21 @@ class Domain(UUIDPkMixin, TimestampMixin, Base):
         String(64), unique=True, nullable=False, default=_generate_verification_token
     )
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Drives the DMARC policy recommendation: sends_mail (default) waits for
+    # report volume/pass-rate like today; receive_only/parked skip straight
+    # to recommending p=reject/np=reject since there's no legitimate
+    # outbound mail to protect (see _build_base_recommendation).
+    mail_profile: Mapped[DomainMailProfile] = mapped_column(
+        pg_enum(DomainMailProfile, "domain_mail_profile"),
+        nullable=False,
+        default=DomainMailProfile.sends_mail,
+    )
+
+    # <random>+reports@<hosted domain> — an operator-hosted rua= address for
+    # customers with no mailbox of their own to dedicate. Generated on
+    # first request (see POST /domains/{id}/hosted-report-address), null
+    # until then. Polled by app/workers/jobs/hosted_reports_poll_job.py,
+    # which demuxes one shared mailbox by matching each message's
+    # recipient against this column.
+    hosted_report_address: Mapped[str | None] = mapped_column(String(320), unique=True, nullable=True)
