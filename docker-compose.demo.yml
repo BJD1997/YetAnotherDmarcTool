@@ -1,0 +1,109 @@
+# A fully separate deployment of the same application — its own Postgres,
+# its own resolver, its own network/volumes — for a public, read-only demo
+# (see the is_demo_read_only org flag in app/main.py). Deliberately doesn't
+# share ANY infrastructure with docker-compose.yml's real instance: even a
+# bug in the read-only enforcement can't reach data that isn't there.
+#
+# Run alongside the real instance on the same host:
+#   cp .env.demo.example .env.demo   # fill in — see that file's comments
+#   docker compose -f docker-compose.demo.yml up -d
+# Then point your reverse proxy at this host's :8001 for the demo's own
+# hostname. See README.md's "Live demo" section for the one-time seed step.
+
+name: dmarc-dashboard-demo
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dmarc}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dmarc}
+      POSTGRES_DB: ${POSTGRES_DB:-dmarc}
+      DMARC_APP_DB_PASSWORD: ${DMARC_APP_DB_PASSWORD:-dmarc_app}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dmarc}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - internal
+
+  resolver:
+    image: mvance/unbound:latest
+    restart: unless-stopped
+    volumes:
+      - ./resolver/forward-records.conf:/opt/unbound/etc/unbound/forward-records.conf:ro
+      - ./resolver/overrides.conf:/opt/unbound/etc/unbound/unbound.conf.d/overrides.conf:ro
+    networks:
+      - internal
+
+  migrate:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: sh -c "alembic upgrade head && python -m app.scripts.bootstrap_platform_admin && python -m app.scripts.seed_demo"
+    env_file:
+      - .env.demo
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-dmarc}:${POSTGRES_PASSWORD:-dmarc}@db:5432/${POSTGRES_DB:-dmarc}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - internal
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    env_file:
+      - .env.demo
+    environment:
+      DATABASE_URL: postgresql+asyncpg://dmarc_app:${DMARC_APP_DB_PASSWORD:-dmarc_app}@db:5432/${POSTGRES_DB:-dmarc}
+      DNS_RESOLVER_HOST: resolver
+    ports:
+      # Different host port from the real instance's :8000 — both run on
+      # the same host.
+      - "8001:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      resolver:
+        condition: service_started
+    networks:
+      - internal
+
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    command: python -m app.workers.scheduler
+    env_file:
+      - .env.demo
+    environment:
+      DATABASE_URL: postgresql+asyncpg://dmarc_app:${DMARC_APP_DB_PASSWORD:-dmarc_app}@db:5432/${POSTGRES_DB:-dmarc}
+      DNS_RESOLVER_HOST: resolver
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      resolver:
+        condition: service_started
+    networks:
+      - internal
+
+networks:
+  internal:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  db_data:

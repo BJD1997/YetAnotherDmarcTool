@@ -1,0 +1,6 @@
+# Test-only dependencies, kept out of the production image (requirements.txt
+# alone is what actually gets installed there — see backend/Dockerfile).
+-r requirements.txt
+
+pytest==9.1.1
+pytest-asyncio==1.4.0

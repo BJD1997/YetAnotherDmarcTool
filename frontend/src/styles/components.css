@@ -1,0 +1,846 @@
+/* ---------- Modal ---------- */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(11, 11, 11, 0.5);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 3rem 1rem;
+  overflow-y: auto;
+  z-index: 50;
+}
+
+.modal-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  width: 100%;
+  max-width: 640px;
+  padding: 1.5rem;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+/* ---------- Layout shell ---------- */
+
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+}
+
+.sidebar {
+  width: var(--sidebar-width);
+  flex-shrink: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 1.25rem 1rem;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0 0.5rem;
+  margin-bottom: 0.25rem;
+  color: var(--ink-primary);
+}
+
+.sidebar-brand-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
+.sidebar-brand-text {
+  font-weight: 700;
+  font-size: 1rem;
+  letter-spacing: -0.01em;
+}
+
+.sidebar-org {
+  padding: 0 0.5rem;
+  margin: 0.15rem 0 1.25rem;
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.nav-link {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: var(--radius-sm);
+  color: var(--ink-secondary);
+  font-size: 0.88rem;
+  font-weight: 500;
+}
+.nav-link:hover {
+  background: var(--plane);
+  color: var(--ink-primary);
+  text-decoration: none;
+}
+.nav-link.active {
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+.nav-link svg {
+  width: 17px;
+  height: 17px;
+  flex-shrink: 0;
+}
+
+.sidebar-footer {
+  margin-top: auto;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.sidebar-user {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0 0.25rem;
+}
+
+.sidebar-user-email {
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-legal {
+  padding: 0 0.25rem;
+  font-size: 0.7rem;
+}
+
+.sidebar-legal a {
+  color: var(--ink-muted);
+  text-decoration: none;
+}
+
+.sidebar-legal a:hover {
+  color: var(--ink-secondary);
+  text-decoration: underline;
+}
+
+.app-main {
+  flex: 1;
+  min-width: 0;
+  padding: 1.75rem 2rem;
+}
+
+.app-main-inner {
+  max-width: 1440px;
+  margin: 0 auto;
+}
+
+/* ---------- Mobile: off-canvas sidebar ---------- */
+
+.mobile-topbar {
+  display: none;
+}
+
+.sidebar-backdrop {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .app-shell {
+    flex-direction: column;
+  }
+
+  .mobile-topbar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0.65rem 1rem;
+  }
+
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 40;
+    height: 100vh;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    box-shadow: var(--shadow);
+  }
+
+  .sidebar.is-open {
+    transform: translateX(0);
+  }
+
+  .sidebar-backdrop.is-open {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(11, 11, 11, 0.45);
+    z-index: 35;
+  }
+
+  .app-main {
+    padding: 1.25rem 1rem 2rem;
+  }
+}
+
+/* ---------- Page header ---------- */
+
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.page-header h1,
+.page-header h2 {
+  margin-bottom: 0.2rem;
+}
+
+.page-subtitle {
+  color: var(--ink-secondary);
+  font-size: 0.9rem;
+  max-width: 640px;
+}
+
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--ink-secondary);
+  font-size: 0.85rem;
+  margin-bottom: 0.75rem;
+}
+.back-link:hover {
+  color: var(--ink-primary);
+}
+
+/* ---------- Detail tabs ---------- */
+
+.detail-tabs {
+  display: flex;
+  gap: 1.25rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 1.5rem;
+  overflow-x: auto;
+}
+
+.detail-tab {
+  padding: 0.6rem 0.1rem;
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: var(--ink-secondary);
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+}
+.detail-tab:hover {
+  color: var(--ink-primary);
+  text-decoration: none;
+}
+.detail-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* ---------- Card ---------- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+  margin-bottom: 1.25rem;
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.card-header h3 {
+  margin: 0;
+}
+
+.section-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin: 0 0 0.25rem;
+}
+
+.section-hint {
+  color: var(--ink-secondary);
+  font-size: 0.85rem;
+  margin: -0.15rem 0 0.9rem;
+}
+
+/* ---------- Buttons ---------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 0.45rem 0.85rem;
+  font-size: 0.85rem;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease, opacity 0.12s ease;
+  line-height: 1.2;
+}
+.btn svg {
+  width: 15px;
+  height: 15px;
+}
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn--primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.btn--primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.btn--secondary {
+  background: var(--surface);
+  border-color: var(--border-strong);
+  color: var(--ink-primary);
+}
+.btn--secondary:hover:not(:disabled) {
+  background: var(--plane);
+}
+
+.btn--ghost {
+  background: transparent;
+  color: var(--ink-secondary);
+}
+.btn--ghost:hover:not(:disabled) {
+  background: var(--plane);
+  color: var(--ink-primary);
+}
+
+.btn--danger {
+  background: transparent;
+  border-color: var(--critical-wash);
+  color: var(--critical-text);
+}
+.btn--danger:hover:not(:disabled) {
+  background: var(--critical-wash);
+}
+
+.btn--sm {
+  padding: 0.3rem 0.6rem;
+  font-size: 0.78rem;
+}
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink-secondary);
+  cursor: pointer;
+}
+.icon-btn:hover {
+  background: var(--plane);
+  color: var(--ink-primary);
+}
+.icon-btn svg {
+  width: 17px;
+  height: 17px;
+}
+
+/* ---------- Badges ---------- */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  padding: 0.16rem 0.55rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.badge--good {
+  background: var(--good-wash);
+  color: var(--good-text);
+}
+.badge--warning {
+  background: var(--warning-wash);
+  color: var(--warning-text);
+}
+.badge--serious {
+  background: var(--serious-wash);
+  color: var(--serious-text);
+}
+.badge--critical {
+  background: var(--critical-wash);
+  color: var(--critical-text);
+}
+.badge--neutral {
+  background: var(--plane);
+  color: var(--ink-muted);
+  text-transform: none;
+  font-weight: 600;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: inline-block;
+}
+.dot--good {
+  background: var(--good);
+}
+.dot--warning {
+  background: var(--warning);
+}
+.dot--serious {
+  background: var(--serious);
+}
+.dot--critical {
+  background: var(--critical);
+}
+.dot--neutral {
+  background: var(--ink-muted);
+}
+
+/* ---------- Issue rows (action queue) ---------- */
+
+.issue-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.55rem 0.1rem;
+  border-bottom: 1px solid var(--border);
+  color: inherit;
+}
+.issue-row:last-child {
+  border-bottom: none;
+}
+a.issue-row:hover {
+  background: var(--plane);
+  text-decoration: none;
+  color: inherit;
+}
+.issue-row-body {
+  min-width: 0;
+  flex: 1;
+}
+.issue-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.issue-hint {
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+  margin-top: 0.1rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- Alerts / banners ---------- */
+
+.alert {
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1.25rem;
+  font-size: 0.88rem;
+}
+.alert--good {
+  background: var(--good-wash);
+  color: var(--good-text);
+  border-color: var(--good-wash);
+}
+.alert--warning {
+  background: var(--warning-wash);
+  color: var(--warning-text);
+  border-color: var(--warning-wash);
+}
+.alert--serious {
+  background: var(--serious-wash);
+  color: var(--serious-text);
+  border-color: var(--serious-wash);
+}
+.alert--critical {
+  background: var(--critical-wash);
+  color: var(--critical-text);
+  border-color: var(--critical-wash);
+}
+.alert--neutral {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--ink-secondary);
+}
+.alert a {
+  color: inherit;
+  text-decoration: underline;
+}
+
+/* ---------- Table ---------- */
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+.table {
+  font-size: 0.85rem;
+}
+
+.table th {
+  text-align: left;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--ink-muted);
+  padding: 0 0.75rem 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.table td {
+  padding: 0.55rem 0.75rem 0.55rem 0;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.table tbody tr:hover {
+  background: var(--plane);
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Dropdown menu ---------- */
+
+.dropdown-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.25rem);
+  z-index: 20;
+  min-width: 160px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  padding: 0.3rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.dropdown-menu button {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--ink-primary);
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+}
+.dropdown-menu button:hover {
+  background: var(--plane);
+}
+.dropdown-menu button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ---------- Inputs ---------- */
+
+.input,
+select.input {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 0.45rem 0.65rem;
+  font-size: 0.85rem;
+  color: var(--ink-primary);
+}
+.input:focus-visible {
+  border-color: var(--accent);
+}
+.input::placeholder {
+  color: var(--ink-muted);
+}
+
+.field-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* ---------- Stat tiles ---------- */
+
+.stat-row {
+  display: flex;
+  gap: 2rem;
+  flex-wrap: wrap;
+  margin: 0.25rem 0 1.25rem;
+}
+
+.stat-tile-value {
+  font-size: 1.6rem;
+  font-weight: 650;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+}
+
+.stat-tile-label {
+  color: var(--ink-muted);
+  font-size: 0.78rem;
+  margin-top: 0.2rem;
+}
+
+/* ---------- Risk tiles (posture strip) ---------- */
+
+/* Posture strip as one dense KPI band: tiles + current-policy pills share a
+   single row, wrapping only at narrow widths, instead of the policy block
+   sitting as a separate section underneath. */
+.kpi-band {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+.kpi-band-tiles {
+  margin: 0;
+  gap: 0.6rem;
+  flex: 1;
+  align-items: stretch;
+}
+.kpi-band-policy {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.3rem;
+}
+.kpi-band-policy .stat-tile-label {
+  margin: 0;
+}
+
+/* A stat-tile wrapped in a tinted chip so risk reads at a glance, not just
+   via a subtle text-color change on the number. Reuses the existing
+   .dot--{role} indicators and {role}-wash background tokens. Same
+   min-height + centered content across every tile so the band reads as one
+   even row rather than loose, differently-sized chips. */
+.risk-tile {
+  padding: 0.55rem 0.8rem;
+  border-radius: var(--radius);
+  min-width: 108px;
+  min-height: 56px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.risk-tile--good {
+  background: var(--good-wash);
+}
+.risk-tile--warning {
+  background: var(--warning-wash);
+}
+.risk-tile--serious {
+  background: var(--serious-wash);
+}
+.risk-tile--critical {
+  background: var(--critical-wash);
+}
+.risk-tile .stat-tile-value {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/* ---------- Auth pages ---------- */
+
+.auth-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--plane);
+  padding: 1.5rem;
+}
+
+.auth-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  padding: 2.25rem 2rem;
+  width: 100%;
+  max-width: 380px;
+}
+
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin-bottom: 1.5rem;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 1.25rem;
+}
+
+/* ---------- Misc ---------- */
+
+.muted {
+  color: var(--ink-muted);
+}
+.secondary-text {
+  color: var(--ink-secondary);
+}
+
+.empty-state {
+  color: var(--ink-muted);
+  font-size: 0.88rem;
+  padding: 1.5rem 0;
+  text-align: center;
+}
+
+.chip-row {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1.25rem 0;
+}
+
+/* ---------- Overview two-column grid ---------- */
+
+/* Cards stacked directly in the Overview page (CommandBar, PostureStrip,
+   the main grid, Sender inventory) sit tighter than the app-wide .card
+   default — this page is a dashboard meant to be scanned as one dense
+   surface, not a series of separated documents. */
+.overview-page > .card,
+.overview-page > .overview-main-grid {
+  margin-bottom: 0.9rem;
+}
+
+/* Trend chart (left) beside a stacked Action queue + Domains needing
+   attention column (right) — replaces stacking everything full-width,
+   which pushed "what needs work" below the fold. */
+.overview-main-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.9rem;
+  align-items: start;
+}
+@media (min-width: 900px) {
+  .overview-main-grid {
+    grid-template-columns: 65% 35%;
+  }
+}
+/* Grid/flex items default to min-width: auto, meaning they refuse to
+   shrink below their content's intrinsic width — without this override,
+   the chart's fixed viewBox and non-wrapping issue-row text push these
+   items (and the whole page) wider than the viewport on mobile. */
+.overview-main-grid > * {
+  min-width: 0;
+}
+
+.overview-side-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+.overview-side-stack > * {
+  min-width: 0;
+}
+
+/* These cards live inside a grid/stack that already provides gap — their
+   own margin-bottom (meant for cards stacked directly in a <section>)
+   would otherwise stack on top of it, throwing off vertical rhythm versus
+   the rest of the page. */
+.overview-main-grid > .card,
+.overview-side-stack > .card {
+  margin-bottom: 0;
+}
+

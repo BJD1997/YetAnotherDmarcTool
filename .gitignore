@@ -1,0 +1,14 @@
+.env
+.env.*
+!.env.example
+!.env.demo.example
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
+*.egg-info/
+backups/

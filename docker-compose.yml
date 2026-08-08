@@ -1,0 +1,109 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dmarc}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dmarc}
+      POSTGRES_DB: ${POSTGRES_DB:-dmarc}
+      # Read by db/init/01-create-app-role.sh on first startup only, to
+      # create the non-superuser `dmarc_app` runtime role.
+      DMARC_APP_DB_PASSWORD: ${DMARC_APP_DB_PASSWORD:-dmarc_app}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dmarc}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - internal
+
+  resolver:
+    image: mvance/unbound:latest
+    restart: unless-stopped
+    volumes:
+      # forward-records.conf is one of the few files the base image's
+      # entrypoint actually includes into its generated unbound.conf (see
+      # that file's own header comment) — overrides.conf is pulled in
+      # through it, not auto-loaded by being in unbound.conf.d/.
+      - ./resolver/forward-records.conf:/opt/unbound/etc/unbound/forward-records.conf:ro
+      - ./resolver/overrides.conf:/opt/unbound/etc/unbound/unbound.conf.d/overrides.conf:ro
+    networks:
+      - internal
+
+  # One-off: applies Alembic migrations (as the DB *owner* role, needed for
+  # CREATE TABLE/CREATE POLICY/GRANT) and bootstraps the first platform-admin
+  # account if none exists yet, then exits. api/worker wait for it to
+  # complete successfully before starting.
+  migrate:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: sh -c "alembic upgrade head && python -m app.scripts.bootstrap_platform_admin"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-dmarc}:${POSTGRES_PASSWORD:-dmarc}@db:5432/${POSTGRES_DB:-dmarc}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - internal
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    env_file:
+      - .env
+    environment:
+      # Runtime role — NOT the table owner, so FORCE ROW LEVEL SECURITY
+      # (set per-table in the initial migration) actually applies to it.
+      DATABASE_URL: postgresql+asyncpg://dmarc_app:${DMARC_APP_DB_PASSWORD:-dmarc_app}@db:5432/${POSTGRES_DB:-dmarc}
+      DNS_RESOLVER_HOST: resolver
+    ports:
+      # Published on this host so the NPM VM (separate host, no shared Docker
+      # network) can reverse-proxy to <this-host-ip>:8000. Bind to a specific
+      # interface here instead of 0.0.0.0 if this host has a public NIC that
+      # should NOT expose the API directly.
+      - "8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      resolver:
+        condition: service_started
+    networks:
+      - internal
+
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    command: python -m app.workers.scheduler
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://dmarc_app:${DMARC_APP_DB_PASSWORD:-dmarc_app}@db:5432/${POSTGRES_DB:-dmarc}
+      DNS_RESOLVER_HOST: resolver
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      resolver:
+        condition: service_started
+    networks:
+      - internal
+
+networks:
+  internal:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+
+volumes:
+  db_data:
