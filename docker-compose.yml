@@ -41,6 +41,13 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    # image: lets `docker compose pull` fetch a published release instead
+    # of rebuilding from source — `docker compose build` still builds
+    # fresh and tags locally as this same name, so local dev is unaffected.
+    # APP_VERSION here picks which published tag to pull; it's unrelated
+    # to the Dockerfile ARG of the same name, which only matters for a
+    # from-source build (see .env.example).
+    image: ghcr.io/bjd1997/yetanotherdmarctool:${APP_VERSION:-latest}
     command: sh -c "alembic upgrade head && python -m app.scripts.bootstrap_platform_admin"
     env_file:
       - .env
@@ -56,6 +63,7 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    image: ghcr.io/bjd1997/yetanotherdmarctool:${APP_VERSION:-latest}
     restart: unless-stopped
     # --forwarded-allow-ips: without this, request.client.host (used for
     # session/sign-in-event ip_address) is the reverse proxy's own IP, not
@@ -71,6 +79,10 @@ services:
       # (set per-table in the initial migration) actually applies to it.
       DATABASE_URL: postgresql+asyncpg://dmarc_app:${DMARC_APP_DB_PASSWORD:-dmarc_app}@db:5432/${POSTGRES_DB:-dmarc}
       DNS_RESOLVER_HOST: resolver
+      # See the updater service below — unset means the "Update now"
+      # button 503s cleanly rather than erroring obscurely.
+      UPDATER_URL: http://updater:9999
+      UPDATER_SHARED_SECRET: ${UPDATER_SHARED_SECRET:-}
     ports:
       # Published on this host so the NPM VM (separate host, no shared Docker
       # network) can reverse-proxy to <this-host-ip>:8000. Bind to a specific
@@ -89,6 +101,7 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    image: ghcr.io/bjd1997/yetanotherdmarctool:${APP_VERSION:-latest}
     restart: unless-stopped
     command: python -m app.workers.scheduler
     env_file:
@@ -101,6 +114,32 @@ services:
         condition: service_completed_successfully
       resolver:
         condition: service_started
+    networks:
+      - internal
+
+  # Powers the "Update now" button in the admin console (see
+  # app/services/updater_client.py, app/routers/admin_updates.py) — the
+  # one component with Docker socket access, deliberately isolated from
+  # api/worker (which handle untrusted HTTP input) into its own small,
+  # single-purpose container. See updater/server.py's header comment for
+  # the full risk writeup: this is host-root-equivalent access, inherent
+  # to any updater that recreates containers this way. Optional —
+  # everything else in this stack works fine without it; leave
+  # UPDATER_SHARED_SECRET unset in .env to not run it at all.
+  updater:
+    build:
+      context: ./updater
+    image: ghcr.io/bjd1997/yetanotherdmarctool-updater:${APP_VERSION:-latest}
+    restart: unless-stopped
+    environment:
+      UPDATER_SHARED_SECRET: ${UPDATER_SHARED_SECRET:-}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Read-only: even a compromised updater can't rewrite
+      # docker-compose.yml to smuggle something into the next cycle.
+      - .:/workspace:ro
+    # No ports: — reachable only from api over the internal network,
+    # same non-publishing pattern already used by db/resolver.
     networks:
       - internal
 

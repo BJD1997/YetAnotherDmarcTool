@@ -22,6 +22,7 @@ from app.models.organization import Organization
 from app.services.dns_checks.domain_verification import run_domain_verification_sweep
 from app.services.dns_checks.scheduled_recheck import DNS_CHECK_SWEEP_TICK_SECONDS, run_dns_check_sweep
 from app.services.retention.forensic_purge import run_retention_purge
+from app.services.update_check import run_update_check
 from app.workers.jobs.hosted_reports_poll_job import poll_hosted_reports_mailbox
 from app.workers.jobs.mailbox_poll_job import poll_org_mailbox
 
@@ -33,6 +34,7 @@ RECONCILE_INTERVAL_SECONDS = 300
 RETENTION_PURGE_INTERVAL_SECONDS = 24 * 3600
 DOMAIN_VERIFICATION_SWEEP_INTERVAL_SECONDS = 300
 HOSTED_REPORTS_POLL_INTERVAL_SECONDS = 600
+UPDATE_CHECK_INTERVAL_SECONDS = 6 * 3600
 _JOB_PREFIX = "mailbox_poll:"
 
 scheduler = AsyncIOScheduler()
@@ -130,12 +132,23 @@ async def main() -> None:
         max_instances=1,
         coalesce=True,
     )
+    # A no-op every run if settings.update_check_enabled is False.
+    scheduler.add_job(
+        run_update_check,
+        trigger="interval",
+        seconds=UPDATE_CHECK_INTERVAL_SECONDS,
+        id="update_check",
+        max_instances=1,
+        coalesce=True,
+    )
     scheduler.start()
     logger.info(
         "scheduler started (mailbox poll every %ss, reconcile every %ss, retention purge every %ss, "
-        "domain verification sweep every %ss, dns check sweep every %ss, hosted reports poll every %ss)",
+        "domain verification sweep every %ss, dns check sweep every %ss, hosted reports poll every %ss, "
+        "update check every %ss)",
         MAILBOX_POLL_INTERVAL_SECONDS, RECONCILE_INTERVAL_SECONDS, RETENTION_PURGE_INTERVAL_SECONDS,
         DOMAIN_VERIFICATION_SWEEP_INTERVAL_SECONDS, DNS_CHECK_SWEEP_TICK_SECONDS, HOSTED_REPORTS_POLL_INTERVAL_SECONDS,
+        UPDATE_CHECK_INTERVAL_SECONDS,
     )
     while True:
         await asyncio.sleep(3600)

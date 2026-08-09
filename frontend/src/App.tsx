@@ -4,6 +4,7 @@ import SetPassword from "./pages/SetPassword";
 import AdminLogin from "./pages/AdminLogin";
 import AdminOrganizations from "./pages/AdminOrganizations";
 import AdminJobRuns from "./pages/AdminJobRuns";
+import AdminUpdates from "./pages/AdminUpdates";
 import Overview from "./pages/Overview";
 import Onboarding from "./pages/Onboarding";
 import Domains from "./pages/Domains";
@@ -44,6 +45,16 @@ export default function App() {
           <RequireAdminAuth>
             <AdminShell>
               <AdminJobRuns />
+            </AdminShell>
+          </RequireAdminAuth>
+        }
+      />
+      <Route
+        path="/admin/updates"
+        element={
+          <RequireAdminAuth>
+            <AdminShell>
+              <AdminUpdates />
             </AdminShell>
           </RequireAdminAuth>
         }

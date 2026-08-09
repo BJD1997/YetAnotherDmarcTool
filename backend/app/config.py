@@ -94,6 +94,25 @@ class Settings(BaseSettings):
     mta_sts_policy_hostname: str | None = None
     mta_sts_policy_body: str | None = None
 
+    # Baked in by backend/Dockerfile's ARG APP_VERSION at build time —
+    # "dev" for any locally-built image. Exposed via GET /api/health and
+    # compared against update_check_state.latest_version (see
+    # app/services/update_check.py) to compute "an update is available".
+    app_version: str = "dev"
+    # Where the update check looks for the latest release — override for a
+    # fork. Set update_check_enabled=false to disable the periodic check
+    # entirely (e.g. an air-gapped instance with no outbound internet).
+    update_check_repo: str = "BJD1997/YetAnotherDmarcTool"
+    update_check_enabled: bool = True
+
+    # The updater companion container's internal-only URL (see
+    # updater/server.py and docker-compose.yml's updater service) and the
+    # shared secret it authenticates POST /trigger with — unset means the
+    # "Update now" button 503s cleanly rather than erroring obscurely,
+    # same "unconfigured optional feature is off" pattern as elsewhere.
+    updater_url: str | None = None
+    updater_shared_secret: str | None = None
+
     @property
     def entra_sso_redirect_uri(self) -> str:
         return f"{self.public_base_url}/api/auth/callback"

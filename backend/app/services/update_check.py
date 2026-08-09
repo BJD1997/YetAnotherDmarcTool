@@ -1,0 +1,65 @@
+"""Periodic check against GitHub's releases API for the latest tagged
+version — registered on the worker's scheduler (app/workers/scheduler.py).
+A no-op if settings.update_check_enabled is False (e.g. an air-gapped
+instance with no outbound internet)."""
+
+import logging
+from datetime import datetime, timezone
+
+import httpx
+from sqlalchemy import select
+
+from app.config import settings
+from app.db.session import async_session_factory
+from app.models.update_check_state import UpdateCheckState
+
+logger = logging.getLogger(__name__)
+
+GITHUB_API_BASE = "https://api.github.com"
+
+
+async def get_or_create_state(db) -> UpdateCheckState:
+    """Also used directly by GET /admin/updates to read the cached result
+    without re-running the check."""
+    result = await db.execute(select(UpdateCheckState).limit(1))
+    state = result.scalar_one_or_none()
+    if state is None:
+        state = UpdateCheckState()
+        db.add(state)
+        await db.flush()
+    return state
+
+
+async def run_update_check() -> None:
+    if not settings.update_check_enabled:
+        return
+
+    async with async_session_factory() as db:
+        state = await get_or_create_state(db)
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(
+                    f"{GITHUB_API_BASE}/repos/{settings.update_check_repo}/releases/latest",
+                    headers={"Accept": "application/vnd.github+json"},
+                )
+                resp.raise_for_status()
+                release = resp.json()
+
+            state.latest_version = release["tag_name"]
+            state.latest_release_url = release["html_url"]
+            state.latest_release_notes = release.get("body")
+            published_at = release.get("published_at")
+            state.latest_published_at = (
+                datetime.fromisoformat(published_at.replace("Z", "+00:00")) if published_at else None
+            )
+            state.checked_at = datetime.now(timezone.utc)
+            state.check_error = None
+        except httpx.HTTPError as exc:
+            # Leave the last-known-good latest_version untouched — a
+            # transient GitHub API failure shouldn't make an already-known
+            # update disappear from the admin console.
+            state.checked_at = datetime.now(timezone.utc)
+            state.check_error = str(exc)[:2000]
+            logger.warning("update check failed: %s", exc)
+
+        await db.commit()

@@ -16,6 +16,15 @@ RUN npm run build
 FROM python:3.12-slim AS runtime
 WORKDIR /app
 
+# Set by .github/workflows/release.yml to the git tag (e.g. "v0.1.0") on a
+# tagged build; "dev" for any locally-built image (docker compose build
+# without this arg), which is what a running instance's /api/health and
+# the update-check feature both key off of.
+ARG APP_VERSION=dev
+ENV APP_VERSION=${APP_VERSION}
+LABEL org.opencontainers.image.version=${APP_VERSION} \
+      org.opencontainers.image.source="https://github.com/BJD1997/YetAnotherDmarcTool"
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1

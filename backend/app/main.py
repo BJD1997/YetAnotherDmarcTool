@@ -11,6 +11,7 @@ from app.db.session import async_session_factory
 from app.models.organization import Organization
 from app.routers import (
     action_queue,
+    admin_updates,
     auth,
     dmarc_reports,
     dns_checks,
@@ -116,7 +117,7 @@ api_router = APIRouter(prefix="/api")
 
 @api_router.get("/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok", "environment": settings.environment}
+    return {"status": "ok", "environment": settings.environment, "version": settings.app_version}
 
 
 api_router.include_router(auth.router)
@@ -131,6 +132,7 @@ api_router.include_router(dns_checks.router)
 api_router.include_router(action_queue.router)
 api_router.include_router(onboarding.router)
 api_router.include_router(sign_in_events.router)
+api_router.include_router(admin_updates.router)
 
 app.include_router(api_router)
 

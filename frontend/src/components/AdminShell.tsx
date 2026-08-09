@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
-import { Building2, ListChecks, LogOut, Menu, X, ArrowLeft } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Building2, Download, ListChecks, LogOut, Menu, X, ArrowLeft } from "lucide-react";
 import { api } from "../api/client";
 import { useAdminAuth } from "../auth/AdminAuthContext";
 import ThemeToggle from "./ThemeToggle";
@@ -11,6 +11,12 @@ export default function AdminShell({ children }: { children: ReactNode }) {
   const location = useLocation();
   const queryClient = useQueryClient();
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  const { data: updateStatus } = useQuery({
+    queryKey: ["admin-updates"],
+    queryFn: () => api.get<{ update_available: boolean; latest_version: string | null }>("/admin/updates"),
+    staleTime: 5 * 60 * 1000,
+  });
 
   async function handleLogout() {
     // Only a "local" session has anything for /admin/logout to revoke — an
@@ -58,6 +64,15 @@ export default function AdminShell({ children }: { children: ReactNode }) {
           <Link to="/admin/job-runs" onClick={closeMobile} className={`nav-link ${isActive("/admin/job-runs") ? "active" : ""}`}>
             <ListChecks />
             Job runs
+          </Link>
+          <Link to="/admin/updates" onClick={closeMobile} className={`nav-link ${isActive("/admin/updates") ? "active" : ""}`}>
+            <Download />
+            Updates
+            {updateStatus?.update_available && (
+              <span className="badge badge--good" style={{ marginLeft: "0.4rem" }} title={`Update available: ${updateStatus.latest_version}`}>
+                new
+              </span>
+            )}
           </Link>
           {admin?.auth_type === "operator_org" && (
             <Link to="/" onClick={closeMobile} className="nav-link">
