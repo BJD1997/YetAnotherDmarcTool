@@ -17,6 +17,7 @@ from app.models.password_setup_token import PasswordSetupToken
 from app.models.platform_admin import PlatformAdmin
 from app.models.platform_admin_session import PlatformAdminSession
 from app.models.session import UserSession
+from app.models.sign_in_event import SignInEvent
 from app.models.source_ip_identity import SourceIpIdentity
 from app.models.tls_rpt import TlsRptReport
 from app.models.user import User
@@ -39,6 +40,7 @@ __all__ = [
     "PlatformAdmin",
     "PlatformAdminSession",
     "UserSession",
+    "SignInEvent",
     "SourceIpIdentity",
     "TlsRptReport",
     "User",

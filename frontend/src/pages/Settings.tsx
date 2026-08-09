@@ -6,6 +6,7 @@ import type { DetectedDomain, Domain, Organization, SpfAllQualifierMode } from "
 import { useAuth } from "../auth/AuthContext";
 import MailboxConnectionSection from "../components/settings/MailboxConnectionSection";
 import AddDomainForm from "../components/settings/AddDomainForm";
+import SignInEventsSection from "../components/settings/SignInEventsSection";
 
 export default function Settings() {
   const { user } = useAuth();
@@ -54,6 +55,11 @@ export default function Settings() {
           <h3 className="section-title">Hosted reporting mailbox</h3>
           <p className="section-hint">A YetAnotherDmarcTool-hosted rua= address, for domains with no mailbox of their own to dedicate.</p>
           <HostedMailboxSection />
+
+          <hr className="divider" />
+          <h3 className="section-title">Sign-in activity</h3>
+          <p className="section-hint">Successful and failed sign-ins to your organization, most recent first.</p>
+          <SignInEventsSection />
         </>
       )}
     </section>

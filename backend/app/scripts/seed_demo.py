@@ -27,24 +27,36 @@ and the DKIM checker has nothing to check without them.
 Also sets spf_all_qualifier_mode to conditional, matching the real
 deployment's org — it's normally a Settings toggle, but the demo org is
 is_demo_read_only so a visitor (or the operator, via the demo's own UI)
-can't change it there."""
+can't change it there.
+
+Also backdates a handful of SignInEvent rows the first time the org is
+created, via the real record_sign_in_event helper (not a hand-rolled
+insert) — real demo-visitor logins already log organically through the
+same is_demo_read_only branch in POST /auth/local-login, this only covers
+the "freshly deployed, nobody's visited yet" gap so the Settings page's
+sign-in log isn't empty on day one."""
 
 import asyncio
 import logging
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.config import settings
 from app.db.rls import set_platform_admin_context, set_org_context
 from app.db.session import async_session_factory
 from app.models.dkim_selector import DkimSelector
 from app.models.domain import Domain
-from app.models.enums import AuthMethod, DomainVerificationStatus, SpfAllQualifierMode, UserRole, UserStatus
+from app.models.enums import AuthMethod, DomainVerificationStatus, SignInResult, SpfAllQualifierMode, UserRole, UserStatus
 from app.models.organization import Organization
+from app.models.sign_in_event import SignInEvent
 from app.models.user import User
 from app.services.auth.password import hash_password
+from app.services.auth.sign_in_log import record_sign_in_event
+
+# RFC 5737 TEST-NET-3 — never a real address, used only for backdated demo rows.
+_DEMO_SEED_IP = "203.0.113.10"
 
 DKIM_SELECTORS = ["selector1", "selector2"]
 
@@ -127,6 +139,35 @@ async def main() -> None:
                     db.add(DkimSelector(organization_id=org.id, domain_id=domain.id, selector=selector))
                     logger.info("registered DKIM selector %s for demo domain", selector)
             await db.commit()
+
+        existing_events = (
+            await db.execute(select(func.count()).select_from(SignInEvent).where(SignInEvent.organization_id == org.id))
+        ).scalar_one()
+        if existing_events == 0:
+            demo_user = (
+                await db.execute(select(User).where(User.organization_id == org.id, User.email == settings.demo_login_email))
+            ).scalar_one()
+            now = datetime.now(timezone.utc)
+            for days_ago, result, reason in [
+                (6, SignInResult.success, None),
+                (3, SignInResult.failure, "invalid_credentials"),
+                (1, SignInResult.success, None),
+                (0, SignInResult.success, None),
+            ]:
+                await record_sign_in_event(
+                    db,
+                    result=result,
+                    auth_method=AuthMethod.local,
+                    organization_id=org.id,
+                    user_id=demo_user.id if result == SignInResult.success else None,
+                    attempted_email=settings.demo_login_email,
+                    failure_reason=reason,
+                    ip_address=_DEMO_SEED_IP,
+                    user_agent="Mozilla/5.0 (demo)",
+                    created_at=now - timedelta(days=days_ago),
+                )
+            await db.commit()
+            logger.info("seeded sign-in-event rows for demo org")
 
 
 if __name__ == "__main__":

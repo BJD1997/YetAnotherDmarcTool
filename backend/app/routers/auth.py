@@ -11,7 +11,7 @@ from app.config import settings
 from app.db.rls import set_org_context, set_platform_admin_context
 from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user
-from app.models.enums import AuthMethod, OrganizationStatus, UserRole, UserStatus
+from app.models.enums import AuthMethod, OrganizationStatus, SignInResult, UserRole, UserStatus
 from app.models.mfa_pending_challenge import MfaPendingChallenge
 from app.models.organization import Organization
 from app.models.password_setup_token import PasswordSetupToken
@@ -20,6 +20,7 @@ from app.models.user_recovery_code import UserRecoveryCode
 from app.services.auth import entra_oidc, pkce, session_manager, totp
 from app.services.auth.password import hash_password, verify_password
 from app.services.auth.session_manager import cookie_kwargs
+from app.services.auth.sign_in_log import client_network_info, record_sign_in_event
 from app.services.auth.tokens import hash_token, new_opaque_token
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -57,7 +58,14 @@ async def login() -> RedirectResponse:
 
 @router.get("/callback")
 async def callback(request: Request, db: AsyncSession = Depends(get_db)) -> RedirectResponse:
+    ip_address, user_agent = client_network_info(request)
+
     if request.query_params.get("error"):
+        await record_sign_in_event(
+            db, result=SignInResult.failure, auth_method=AuthMethod.entra,
+            failure_reason="entra_error", ip_address=ip_address, user_agent=user_agent,
+        )
+        await db.commit()
         return RedirectResponse(f"/login?error={request.query_params['error']}", status_code=302)
 
     code = request.query_params.get("code")
@@ -66,6 +74,11 @@ async def callback(request: Request, db: AsyncSession = Depends(get_db)) -> Redi
     verifier = request.cookies.get(_OAUTH_VERIFIER_COOKIE)
 
     if not code or not state or not cookie_state or not secrets.compare_digest(state, cookie_state) or not verifier:
+        await record_sign_in_event(
+            db, result=SignInResult.failure, auth_method=AuthMethod.entra,
+            failure_reason="invalid_state", ip_address=ip_address, user_agent=user_agent,
+        )
+        await db.commit()
         return RedirectResponse("/login?error=invalid_state", status_code=302)
 
     try:
@@ -74,6 +87,11 @@ async def callback(request: Request, db: AsyncSession = Depends(get_db)) -> Redi
         )
         claims = await entra_oidc.validate_id_token(tokens["id_token"])
     except (entra_oidc.TokenValidationError, KeyError):
+        await record_sign_in_event(
+            db, result=SignInResult.failure, auth_method=AuthMethod.entra,
+            failure_reason="token_invalid", ip_address=ip_address, user_agent=user_agent,
+        )
+        await db.commit()
         return RedirectResponse("/login?error=token_invalid", status_code=302)
 
     tenant_id = claims["tid"]
@@ -86,11 +104,25 @@ async def callback(request: Request, db: AsyncSession = Depends(get_db)) -> Redi
     if org is None:
         # Deliberate: orgs are provisioned by a platform admin ahead of time,
         # never auto-created just because some Entra tenant signed in.
+        await record_sign_in_event(
+            db, result=SignInResult.failure, auth_method=AuthMethod.entra,
+            attempted_email=email, failure_reason="organization_not_provisioned",
+            ip_address=ip_address, user_agent=user_agent,
+        )
+        await db.commit()
         return RedirectResponse("/login?error=organization_not_provisioned", status_code=302)
-    if org.status == OrganizationStatus.suspended:
-        return RedirectResponse("/login?error=organization_suspended", status_code=302)
 
+    # Moved up from after the suspended check below, so that branch gets
+    # correct RLS context for free (real org.id already known here).
     await set_org_context(db, org.id)
+    if org.status == OrganizationStatus.suspended:
+        await record_sign_in_event(
+            db, result=SignInResult.failure, auth_method=AuthMethod.entra,
+            organization_id=org.id, attempted_email=email, failure_reason="organization_suspended",
+            ip_address=ip_address, user_agent=user_agent,
+        )
+        await db.commit()
+        return RedirectResponse("/login?error=organization_suspended", status_code=302)
 
     result = await db.execute(
         select(User).where(User.organization_id == org.id, User.entra_object_id == object_id)
@@ -121,8 +153,13 @@ async def callback(request: Request, db: AsyncSession = Depends(get_db)) -> Redi
         db,
         user_id=user.id,
         organization_id=org.id,
-        ip_address=request.client.host if request.client else None,
-        user_agent=request.headers.get("user-agent"),
+        ip_address=ip_address,
+        user_agent=user_agent,
+    )
+    await record_sign_in_event(
+        db, result=SignInResult.success, auth_method=AuthMethod.entra,
+        organization_id=org.id, user_id=user.id, attempted_email=email,
+        ip_address=ip_address, user_agent=user_agent,
     )
     await db.commit()
 
@@ -229,21 +266,43 @@ async def _get_pending_user(request: Request, db: AsyncSession) -> tuple[User, M
 
 @router.post("/local-login")
 async def local_login(body: LocalLoginRequest, request: Request, db: AsyncSession = Depends(get_db)) -> Response:
+    ip_address, user_agent = client_network_info(request)
     await set_platform_admin_context(db, is_admin=True)
     result = await db.execute(
         select(User).where(func.lower(User.email) == body.email.strip().lower(), User.auth_method == AuthMethod.local)
     )
     user = result.scalar_one_or_none()
-    if (
-        user is None
-        or user.status != UserStatus.active
-        or user.password_hash is None
-        or not verify_password(body.password, user.password_hash)
-    ):
+    if user is None:
+        # No user matched at all — nothing to attribute this to beyond the
+        # attempted email itself, so organization_id stays unset.
+        await record_sign_in_event(
+            db, result=SignInResult.failure, auth_method=AuthMethod.local,
+            attempted_email=body.email, failure_reason="invalid_credentials",
+            ip_address=ip_address, user_agent=user_agent,
+        )
+        await db.commit()
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
+
+    if user.status != UserStatus.active or user.password_hash is None or not verify_password(body.password, user.password_hash):
+        # Same generic 401 as the "no user" case above — deliberately not
+        # distinguishing the response, only the logged detail, to avoid
+        # user enumeration.
+        await record_sign_in_event(
+            db, result=SignInResult.failure, auth_method=AuthMethod.local,
+            organization_id=user.organization_id, user_id=user.id, attempted_email=body.email,
+            failure_reason="invalid_credentials", ip_address=ip_address, user_agent=user_agent,
+        )
+        await db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
 
     org = await db.get(Organization, user.organization_id)
     if org is None or org.status == OrganizationStatus.suspended:
+        await record_sign_in_event(
+            db, result=SignInResult.failure, auth_method=AuthMethod.local,
+            organization_id=user.organization_id, user_id=user.id, attempted_email=body.email,
+            failure_reason="organization_suspended", ip_address=ip_address, user_agent=user_agent,
+        )
+        await db.commit()
         raise HTTPException(status.HTTP_403_FORBIDDEN, "organization access suspended")
 
     # A published public demo login has no meaningful TOTP secret to keep
@@ -256,10 +315,15 @@ async def local_login(body: LocalLoginRequest, request: Request, db: AsyncSessio
             db,
             user_id=user.id,
             organization_id=user.organization_id,
-            ip_address=request.client.host if request.client else None,
-            user_agent=request.headers.get("user-agent"),
+            ip_address=ip_address,
+            user_agent=user_agent,
         )
         user.last_login_at = datetime.now(timezone.utc)
+        await record_sign_in_event(
+            db, result=SignInResult.success, auth_method=AuthMethod.local,
+            organization_id=user.organization_id, user_id=user.id, attempted_email=body.email,
+            ip_address=ip_address, user_agent=user_agent,
+        )
         await db.commit()
         response = Response(status_code=204)
         response.set_cookie(
@@ -278,8 +342,27 @@ async def local_login(body: LocalLoginRequest, request: Request, db: AsyncSessio
 
 @router.post("/verify-otp")
 async def verify_otp(body: VerifyOtpRequest, request: Request, db: AsyncSession = Depends(get_db)) -> Response:
-    user, challenge = await _get_pending_user(request, db)
+    ip_address, user_agent = client_network_info(request)
+    try:
+        user, challenge = await _get_pending_user(request, db)
+    except HTTPException:
+        # Covers all 3 of _get_pending_user's internal raise points (missing
+        # cookie, expired challenge, gone/inactive user) as one bucket —
+        # equally unattributable to a specific org/user.
+        await record_sign_in_event(
+            db, result=SignInResult.failure, auth_method=AuthMethod.local,
+            failure_reason="no_pending_challenge", ip_address=ip_address, user_agent=user_agent,
+        )
+        await db.commit()
+        raise
+
     if user.otp_enrolled_at is None:
+        await record_sign_in_event(
+            db, result=SignInResult.failure, auth_method=AuthMethod.local,
+            organization_id=user.organization_id, user_id=user.id, attempted_email=user.email,
+            failure_reason="totp_not_enrolled", ip_address=ip_address, user_agent=user_agent,
+        )
+        await db.commit()
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "TOTP not enrolled yet")
 
     code = body.code.strip()
@@ -294,6 +377,12 @@ async def verify_otp(body: VerifyOtpRequest, request: Request, db: AsyncSession 
         )
         recovery = result.scalar_one_or_none()
         if recovery is None:
+            await record_sign_in_event(
+                db, result=SignInResult.failure, auth_method=AuthMethod.local,
+                organization_id=user.organization_id, user_id=user.id, attempted_email=user.email,
+                failure_reason="invalid_totp_or_recovery_code", ip_address=ip_address, user_agent=user_agent,
+            )
+            await db.commit()
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid code")
         recovery.used_at = datetime.now(timezone.utc)
 
@@ -301,10 +390,15 @@ async def verify_otp(body: VerifyOtpRequest, request: Request, db: AsyncSession 
         db,
         user_id=user.id,
         organization_id=user.organization_id,
-        ip_address=request.client.host if request.client else None,
-        user_agent=request.headers.get("user-agent"),
+        ip_address=ip_address,
+        user_agent=user_agent,
     )
     user.last_login_at = datetime.now(timezone.utc)
+    await record_sign_in_event(
+        db, result=SignInResult.success, auth_method=AuthMethod.local,
+        organization_id=user.organization_id, user_id=user.id, attempted_email=user.email,
+        ip_address=ip_address, user_agent=user_agent,
+    )
     await db.delete(challenge)
     await db.commit()
 
@@ -359,8 +453,24 @@ async def enroll_otp(request: Request, db: AsyncSession = Depends(get_db)) -> di
 async def enroll_otp_confirm(
     body: EnrollOtpConfirmRequest, request: Request, db: AsyncSession = Depends(get_db)
 ) -> JSONResponse:
-    user, challenge = await _get_pending_user(request, db)
+    ip_address, user_agent = client_network_info(request)
+    try:
+        user, challenge = await _get_pending_user(request, db)
+    except HTTPException:
+        await record_sign_in_event(
+            db, result=SignInResult.failure, auth_method=AuthMethod.local,
+            failure_reason="no_pending_challenge", ip_address=ip_address, user_agent=user_agent,
+        )
+        await db.commit()
+        raise
+
     if not totp.verify_code(body.secret, body.code):
+        await record_sign_in_event(
+            db, result=SignInResult.failure, auth_method=AuthMethod.local,
+            organization_id=user.organization_id, user_id=user.id, attempted_email=user.email,
+            failure_reason="invalid_totp_enrollment_code", ip_address=ip_address, user_agent=user_agent,
+        )
+        await db.commit()
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "code didn't match — check your authenticator app and try again")
 
     now = datetime.now(timezone.utc)
@@ -375,10 +485,15 @@ async def enroll_otp_confirm(
         db,
         user_id=user.id,
         organization_id=user.organization_id,
-        ip_address=request.client.host if request.client else None,
-        user_agent=request.headers.get("user-agent"),
+        ip_address=ip_address,
+        user_agent=user_agent,
     )
     user.last_login_at = now
+    await record_sign_in_event(
+        db, result=SignInResult.success, auth_method=AuthMethod.local,
+        organization_id=user.organization_id, user_id=user.id, attempted_email=user.email,
+        ip_address=ip_address, user_agent=user_agent,
+    )
     await db.delete(challenge)
     await db.commit()
 

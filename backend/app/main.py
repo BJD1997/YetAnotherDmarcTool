@@ -20,6 +20,7 @@ from app.routers import (
     organizations,
     platform_admin,
     selectors,
+    sign_in_events,
     users,
 )
 from app.services.auth import session_manager
@@ -129,6 +130,7 @@ api_router.include_router(selectors.router)
 api_router.include_router(dns_checks.router)
 api_router.include_router(action_queue.router)
 api_router.include_router(onboarding.router)
+api_router.include_router(sign_in_events.router)
 
 app.include_router(api_router)
 

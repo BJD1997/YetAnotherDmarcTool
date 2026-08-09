@@ -91,6 +91,11 @@ class AuthMethod(str, enum.Enum):
     local = "local"
 
 
+class SignInResult(str, enum.Enum):
+    success = "success"
+    failure = "failure"
+
+
 class UserStatus(str, enum.Enum):
     active = "active"
     disabled = "disabled"
