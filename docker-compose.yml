@@ -57,7 +57,13 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     restart: unless-stopped
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    # --forwarded-allow-ips: without this, request.client.host (used for
+    # session/sign-in-event ip_address) is the reverse proxy's own IP, not
+    # the real visitor's — uvicorn only unwraps X-Forwarded-For from an
+    # explicitly trusted peer. Set FORWARDED_ALLOW_IPS to your reverse
+    # proxy's IP (see .env.example). Defaults to 127.0.0.1 (trust nothing
+    # external) if unset, matching uvicorn's own default.
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips=${FORWARDED_ALLOW_IPS:-127.0.0.1}
     env_file:
       - .env
     environment:

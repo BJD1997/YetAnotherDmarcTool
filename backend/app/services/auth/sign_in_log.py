@@ -21,10 +21,25 @@ from app.models.sign_in_event import SignInEvent
 
 
 def client_network_info(request: Request) -> tuple[str | None, str | None]:
-    return (
-        request.client.host if request.client else None,
-        request.headers.get("user-agent"),
-    )
+    """(ip_address, user_agent). Prefers Cloudflare's CF-Connecting-IP —
+    set authoritatively at Cloudflare's edge for any request that actually
+    passed through it, unlike X-Forwarded-For which is just appended to
+    hop by hop and depends on every hop in between (NPM here) forwarding
+    it correctly. Falls back to request.client.host, which uvicorn's
+    ProxyHeadersMiddleware already resolves via X-Forwarded-For for any
+    request from an IP listed in FORWARDED_ALLOW_IPS (see
+    docker-compose.yml's api command) — the path taken for anything not
+    behind Cloudflare, or if CF-Connecting-IP is ever absent.
+
+    Only as trustworthy as the assumption that the origin isn't reachable
+    except through Cloudflare — if this host's :8000 is reachable directly
+    from the internet, a direct request can set its own CF-Connecting-IP
+    header. Restrict inbound access to Cloudflare's published IP ranges
+    (https://www.cloudflare.com/ips/) at the host firewall to close that
+    gap; this app has no way to enforce it from here."""
+    cf_connecting_ip = request.headers.get("cf-connecting-ip")
+    ip_address = cf_connecting_ip or (request.client.host if request.client else None)
+    return ip_address, request.headers.get("user-agent")
 
 
 async def record_sign_in_event(

@@ -61,7 +61,8 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     restart: unless-stopped
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    # See docker-compose.yml's api service for why this is needed.
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips=${FORWARDED_ALLOW_IPS:-127.0.0.1}
     env_file:
       - .env.demo
     environment:
