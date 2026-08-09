@@ -27,13 +27,20 @@ jobs:
       # Derives a lowercased image ref — GHCR rejects uppercase, and this
       # repo's owner/name (BJD1997/YetAnotherDmarcTool) is mixed-case, so
       # hand-building the ref risks a push that looks fine in the YAML but
-      # fails at push time.
+      # fails at push time. type=ref,event=tag uses the raw git tag as-is
+      # (e.g. "v0.1.0") — deliberately NOT type=semver, which strips the
+      # "v" prefix and would leave the published image tag ("0.1.0") not
+      # matching the git tag ("v0.1.0"), GET /api/health's baked-in
+      # APP_VERSION, or the tag_name GitHub's releases API reports (all of
+      # which use the raw ref) — an operator pinning APP_VERSION to match
+      # the git tag they saw on GitHub would otherwise get "manifest
+      # unknown" from `docker compose pull`.
       - uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         id: meta
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=semver,pattern={{version}}
+            type=ref,event=tag
             type=raw,value=latest
 
       - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
