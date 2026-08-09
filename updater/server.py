@@ -46,8 +46,15 @@ def _run_update() -> None:
     compose = ["docker", "compose", "-p", project, "-f", f"{WORKSPACE}/docker-compose.yml"]
     try:
         subprocess.run(compose + ["pull", "api", "worker", "migrate"], cwd=WORKSPACE, check=True)
-        subprocess.run(compose + ["run", "--rm", "migrate"], cwd=WORKSPACE, check=True)
-        subprocess.run(compose + ["up", "-d", "api", "worker"], cwd=WORKSPACE, check=True)
+        # --no-deps on both: db/resolver are long-running, already-healthy
+        # services with nothing to do with an app-code update — without
+        # this, `run`/`up` evaluate the whole dependency graph and can
+        # decide to recreate them too (confirmed live: this happened once,
+        # tied to introducing this compose file's new structure — db came
+        # back up cleanly on its existing volume, but a live db restart is
+        # real disruption this shouldn't ever risk on a routine update).
+        subprocess.run(compose + ["run", "--rm", "--no-deps", "migrate"], cwd=WORKSPACE, check=True)
+        subprocess.run(compose + ["up", "-d", "--no-deps", "api", "worker"], cwd=WORKSPACE, check=True)
         print("update completed successfully", flush=True)
     except subprocess.CalledProcessError as exc:
         print(f"update failed: {exc}", flush=True)
