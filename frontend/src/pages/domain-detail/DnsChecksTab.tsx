@@ -306,10 +306,12 @@ function CheckRow({
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: "0.5rem", flexWrap: "wrap" }}>
             <strong style={{ fontSize: "0.88rem" }}>{CHECK_LABELS[checkType]}</strong>
-            <span style={{ fontSize: "0.85rem", color: "var(--ink-secondary)" }}>{primary.summary}</span>
+            <span style={{ fontSize: "0.85rem", color: "var(--ink-secondary)", wordBreak: "break-all" }}>{primary.summary}</span>
           </div>
           {recommendation && (
-            <div style={{ fontSize: "0.82rem", color: "var(--ink-secondary)", marginTop: "0.2rem" }}>{recommendation}</div>
+            <div style={{ fontSize: "0.82rem", color: "var(--ink-secondary)", marginTop: "0.2rem", wordBreak: "break-all" }}>
+              {recommendation}
+            </div>
           )}
         </div>
         {hasMoreEvidence && (
@@ -319,7 +321,7 @@ function CheckRow({
 
       {expanded && (
         <div style={{ marginTop: "0.6rem", paddingTop: "0.6rem", borderTop: "1px solid var(--border)" }}>
-          <ul style={{ margin: 0, padding: "0 0 0 1.1rem", fontSize: "0.82rem", color: "var(--ink-secondary)" }}>
+          <ul style={{ margin: 0, padding: "0 0 0 1.1rem", fontSize: "0.82rem", color: "var(--ink-secondary)", wordBreak: "break-all" }}>
             {results.map((r) => (
               <li key={r.id} style={{ marginBottom: "0.3rem" }}>
                 <StatusBadge status={r.status} /> {r.subject && <code style={{ marginRight: "0.3rem" }}>{r.subject}</code>}
