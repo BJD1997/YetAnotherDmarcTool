@@ -1,20 +1,21 @@
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db.session import get_db
 from app.middleware.tenant_context import AdminPrincipal, get_current_platform_admin
+from app.models.update_check_state import UpdateCheckState
 from app.services import update_check, updater_client
 
 router = APIRouter(prefix="/admin/updates", tags=["platform-admin"])
 
 
-@router.get("")
-async def get_update_status(
-    db: AsyncSession = Depends(get_db), _admin: AdminPrincipal = Depends(get_current_platform_admin)
-) -> dict:
-    state = await update_check.get_or_create_state(db)
-    await db.commit()
+class UpdateSettingsPatch(BaseModel):
+    include_prereleases: bool
+
+
+def _status_out(state: UpdateCheckState) -> dict:
     update_available = bool(state.latest_version and state.latest_version != settings.app_version)
     return {
         "running_version": settings.app_version,
@@ -24,14 +25,42 @@ async def get_update_status(
         "latest_published_at": state.latest_published_at.isoformat() if state.latest_published_at else None,
         "checked_at": state.checked_at.isoformat() if state.checked_at else None,
         "check_error": state.check_error,
+        "include_prereleases": state.include_prereleases,
         "update_available": update_available,
     }
 
 
+@router.get("")
+async def get_update_status(
+    db: AsyncSession = Depends(get_db), _admin: AdminPrincipal = Depends(get_current_platform_admin)
+) -> dict:
+    state = await update_check.get_or_create_state(db)
+    await db.commit()
+    return _status_out(state)
+
+
+@router.patch("")
+async def update_settings(
+    body: UpdateSettingsPatch,
+    db: AsyncSession = Depends(get_db),
+    _admin: AdminPrincipal = Depends(get_current_platform_admin),
+) -> dict:
+    """Operator-facing toggle for the prerelease channel — persisted here
+    instead of an env var so it can be flipped from the Updates page
+    without editing .env or restarting a container."""
+    state = await update_check.get_or_create_state(db)
+    state.include_prereleases = body.include_prereleases
+    await db.commit()
+    return _status_out(state)
+
+
 @router.post("/check-now")
-async def check_now(_admin: AdminPrincipal = Depends(get_current_platform_admin)) -> dict:
+async def check_now(
+    db: AsyncSession = Depends(get_db), _admin: AdminPrincipal = Depends(get_current_platform_admin)
+) -> dict:
     await update_check.run_update_check()
-    return {"status": "checked"}
+    state = await update_check.get_or_create_state(db)
+    return _status_out(state)
 
 
 @router.post("/trigger", status_code=status.HTTP_202_ACCEPTED)

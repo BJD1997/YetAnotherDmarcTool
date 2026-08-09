@@ -38,7 +38,7 @@ async def run_update_check() -> None:
         state = await get_or_create_state(db)
         try:
             async with httpx.AsyncClient(timeout=15) as client:
-                if settings.update_check_include_prereleases:
+                if state.include_prereleases:
                     # The list endpoint (not /latest) is the only way to see
                     # prereleases — it's already newest-first and excludes
                     # drafts with no extra filtering needed, so the first

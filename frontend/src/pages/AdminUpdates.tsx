@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "../api/client";
 
 interface UpdateStatus {
@@ -10,6 +10,7 @@ interface UpdateStatus {
   latest_published_at: string | null;
   checked_at: string | null;
   check_error: string | null;
+  include_prereleases: boolean;
   update_available: boolean;
 }
 
@@ -24,6 +25,17 @@ export default function AdminUpdates() {
   const { data: status, isLoading } = useQuery({
     queryKey: ["admin-updates"],
     queryFn: () => api.get<UpdateStatus>("/admin/updates"),
+  });
+
+  const setPrereleases = useMutation({
+    mutationFn: (include: boolean) => api.patch<UpdateStatus>("/admin/updates", { include_prereleases: include }),
+    onSuccess: async () => {
+      // Flipping the toggle alone wouldn't change what "latest" means until
+      // the next scheduled check (up to 6h away) — re-check immediately so
+      // the page reflects the new channel right away.
+      await api.post("/admin/updates/check-now");
+      queryClient.invalidateQueries({ queryKey: ["admin-updates"] });
+    },
   });
 
   async function checkNow() {
@@ -105,6 +117,19 @@ export default function AdminUpdates() {
         <button className="btn btn--secondary btn--sm" onClick={checkNow} disabled={phase === "checking"}>
           {phase === "checking" ? "Checking…" : "Check now"}
         </button>
+
+        <label
+          className="section-hint"
+          style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.9rem", paddingTop: "0.75rem", borderTop: "1px solid var(--border)" }}
+        >
+          <input
+            type="checkbox"
+            checked={status.include_prereleases}
+            disabled={setPrereleases.isPending}
+            onChange={(e) => setPrereleases.mutate(e.target.checked)}
+          />
+          Include prereleases (test builds tagged -rc/-beta, not recommended for production use)
+        </label>
       </div>
 
       {status.update_available && (

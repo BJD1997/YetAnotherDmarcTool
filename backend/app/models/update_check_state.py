@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, String, Text
+from sqlalchemy import Boolean, DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -21,3 +21,7 @@ class UpdateCheckState(UUIDPkMixin, Base):
     latest_published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     check_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Operator-toggleable from the Updates admin page (not an env var) — off
+    # by default, same "stable-only unless you opt in" semantics as before,
+    # just persisted here instead of requiring a .env edit + restart.
+    include_prereleases: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

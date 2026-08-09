@@ -104,11 +104,6 @@ class Settings(BaseSettings):
     # entirely (e.g. an air-gapped instance with no outbound internet).
     update_check_repo: str = "BJD1997/YetAnotherDmarcTool"
     update_check_enabled: bool = True
-    # Off by default — GitHub's own /releases/latest already excludes
-    # prereleases, which is the right default for every self-hoster. Opt in
-    # per-instance to test an -rcN tag through the real "Update available"
-    # UI before it's promoted to a stable release.
-    update_check_include_prereleases: bool = False
 
     # The updater companion container's internal-only URL (see
     # updater/server.py and docker-compose.yml's updater service) and the
