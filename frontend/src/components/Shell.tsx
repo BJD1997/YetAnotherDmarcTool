@@ -18,6 +18,17 @@ export default function Shell({ children }: { children: ReactNode }) {
     enabled: !!user,
   });
 
+  // Same population that can already see "Manage organizations" below —
+  // a plain org user would just get a 401 from /admin/updates, so the
+  // query is gated on the same condition rather than firing and failing.
+  const canSeeUpdates = !!(org?.is_operator && user?.role === "org_admin");
+  const { data: updateStatus } = useQuery({
+    queryKey: ["admin-updates"],
+    queryFn: () => api.get<{ update_available: boolean; latest_version: string | null }>("/admin/updates"),
+    enabled: canSeeUpdates,
+    staleTime: 5 * 60 * 1000,
+  });
+
   async function handleLogout() {
     await api.post("/auth/logout");
     queryClient.clear();
@@ -68,10 +79,15 @@ export default function Shell({ children }: { children: ReactNode }) {
             <Settings />
             Settings
           </Link>
-          {org?.is_operator && user?.role === "org_admin" && (
+          {canSeeUpdates && (
             <Link to="/admin" onClick={closeMobile} className={`nav-link ${isActive("/admin") ? "active" : ""}`}>
               <Building2 />
               Manage organizations
+              {updateStatus?.update_available && (
+                <span className="badge badge--good" style={{ marginLeft: "0.4rem" }} title={`Update available: ${updateStatus.latest_version}`}>
+                  new
+                </span>
+              )}
             </Link>
           )}
         </nav>

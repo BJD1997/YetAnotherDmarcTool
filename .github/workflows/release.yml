@@ -35,13 +35,19 @@ jobs:
       # which use the raw ref) — an operator pinning APP_VERSION to match
       # the git tag they saw on GitHub would otherwise get "manifest
       # unknown" from `docker compose pull`.
+      #
+      # The `latest` tag is skipped for any ref containing a hyphen (e.g.
+      # v0.1.2-rc1) — those are prerelease-style tags (see
+      # update_check_include_prereleases), and :latest must keep meaning
+      # "latest stable" for every self-hoster whose update check doesn't
+      # opt into prereleases.
       - uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         id: meta
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
             type=ref,event=tag
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
 
       - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:

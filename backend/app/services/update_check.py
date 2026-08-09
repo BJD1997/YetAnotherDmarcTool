@@ -38,12 +38,29 @@ async def run_update_check() -> None:
         state = await get_or_create_state(db)
         try:
             async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.get(
-                    f"{GITHUB_API_BASE}/repos/{settings.update_check_repo}/releases/latest",
-                    headers={"Accept": "application/vnd.github+json"},
-                )
-                resp.raise_for_status()
-                release = resp.json()
+                if settings.update_check_include_prereleases:
+                    # The list endpoint (not /latest) is the only way to see
+                    # prereleases — it's already newest-first and excludes
+                    # drafts with no extra filtering needed, so the first
+                    # entry is simply "the latest release, prerelease or
+                    # not".
+                    resp = await client.get(
+                        f"{GITHUB_API_BASE}/repos/{settings.update_check_repo}/releases",
+                        headers={"Accept": "application/vnd.github+json"},
+                        params={"per_page": 1},
+                    )
+                    resp.raise_for_status()
+                    releases = resp.json()
+                    if not releases:
+                        raise httpx.HTTPError("no releases found")
+                    release = releases[0]
+                else:
+                    resp = await client.get(
+                        f"{GITHUB_API_BASE}/repos/{settings.update_check_repo}/releases/latest",
+                        headers={"Accept": "application/vnd.github+json"},
+                    )
+                    resp.raise_for_status()
+                    release = resp.json()
 
             state.latest_version = release["tag_name"]
             state.latest_release_url = release["html_url"]

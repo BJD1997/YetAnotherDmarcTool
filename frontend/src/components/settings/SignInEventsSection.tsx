@@ -1,6 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { RefreshCw } from "lucide-react";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { api } from "../../api/client";
 
 interface SignInEvent {
@@ -14,36 +13,57 @@ interface SignInEvent {
   user_agent: string | null;
 }
 
-export default function SignInEventsSection() {
-  const [limit, setLimit] = useState(50);
+interface SignInEventsPage {
+  events: SignInEvent[];
+  has_more: boolean;
+}
 
-  const { data: events, isLoading, isFetching, refetch } = useQuery({
-    queryKey: ["sign-in-events", limit],
-    queryFn: () => api.get<SignInEvent[]>(`/sign-in-events?limit=${limit}`),
+const LIMIT = 50;
+
+export default function SignInEventsSection() {
+  const [resultFilter, setResultFilter] = useState("");
+  const [authMethodFilter, setAuthMethodFilter] = useState("");
+
+  const params = new URLSearchParams({ limit: String(LIMIT) });
+  if (resultFilter) params.set("result", resultFilter);
+  if (authMethodFilter) params.set("auth_method", authMethodFilter);
+  const filterQS = params.toString();
+
+  const query = useInfiniteQuery({
+    queryKey: ["sign-in-events", filterQS],
+    queryFn: ({ pageParam }: { pageParam: string | undefined }) => {
+      const qs = new URLSearchParams(filterQS);
+      if (pageParam) qs.set("before_id", pageParam);
+      return api.get<SignInEventsPage>(`/sign-in-events?${qs.toString()}`);
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => {
+      if (!lastPage.has_more) return undefined;
+      return lastPage.events[lastPage.events.length - 1]?.id;
+    },
   });
+
+  const events = query.data?.pages.flatMap((page) => page.events) ?? [];
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.6rem", marginBottom: "0.6rem" }}>
-        <label className="muted" style={{ fontSize: "0.85rem", display: "flex", alignItems: "center", gap: "0.4rem" }}>
-          Show last
-          <select className="input" value={limit} onChange={(e) => setLimit(Number(e.target.value))}>
-            <option value={20}>20</option>
-            <option value={50}>50</option>
-            <option value={100}>100</option>
-            <option value={200}>200</option>
-          </select>
-        </label>
-        <button className="btn btn--secondary btn--sm" onClick={() => refetch()} disabled={isFetching}>
-          <RefreshCw />
-          {isFetching ? "Refreshing…" : "Refresh"}
-        </button>
+      <div className="field-row" style={{ justifyContent: "flex-end", marginBottom: "0.6rem" }}>
+        <select className="input" value={resultFilter} onChange={(e) => setResultFilter(e.target.value)}>
+          <option value="">Any result</option>
+          <option value="success">Success</option>
+          <option value="failure">Failure</option>
+        </select>
+        <select className="input" value={authMethodFilter} onChange={(e) => setAuthMethodFilter(e.target.value)}>
+          <option value="">Any method</option>
+          <option value="entra">Microsoft</option>
+          <option value="local">Local</option>
+        </select>
       </div>
 
-      {isLoading && <p className="muted">Loading…</p>}
-      {events && events.length === 0 && <p className="empty-state">No sign-in activity yet.</p>}
+      {query.isLoading && <p className="muted">Loading…</p>}
+      {query.isSuccess && events.length === 0 && <p className="empty-state">No sign-in activity matches these filters.</p>}
 
-      {events && events.length > 0 && (
+      {events.length > 0 && (
         <div className="card" style={{ padding: 0 }}>
           <div className="table-wrap">
             <table className="table">
@@ -82,6 +102,17 @@ export default function SignInEventsSection() {
             </table>
           </div>
         </div>
+      )}
+
+      {query.hasNextPage && (
+        <button
+          className="btn btn--secondary"
+          style={{ marginTop: "0.75rem" }}
+          onClick={() => query.fetchNextPage()}
+          disabled={query.isFetchingNextPage}
+        >
+          {query.isFetchingNextPage ? "Loading…" : "Load more"}
+        </button>
       )}
     </div>
   );

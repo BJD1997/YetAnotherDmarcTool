@@ -17,7 +17,10 @@ import DnsChecksTab from "./pages/domain-detail/DnsChecksTab";
 import SendersTab from "./pages/domain-detail/SendersTab";
 import InboundTab from "./pages/domain-detail/InboundTab";
 import Team from "./pages/Team";
-import Settings from "./pages/Settings";
+import SettingsLayout from "./pages/SettingsLayout";
+import GeneralTab from "./pages/settings/GeneralTab";
+import DomainsTab from "./pages/settings/DomainsTab";
+import SignInActivityTab from "./pages/settings/SignInActivityTab";
 import Shell from "./components/Shell";
 import AdminShell from "./components/AdminShell";
 import RequireAuth from "./components/RequireAuth";
@@ -122,11 +125,15 @@ export default function App() {
         element={
           <RequireAuth>
             <Shell>
-              <Settings />
+              <SettingsLayout />
             </Shell>
           </RequireAuth>
         }
-      />
+      >
+        <Route index element={<GeneralTab />} />
+        <Route path="domains" element={<DomainsTab />} />
+        <Route path="sign-in-activity" element={<SignInActivityTab />} />
+      </Route>
     </Routes>
   );
 }
