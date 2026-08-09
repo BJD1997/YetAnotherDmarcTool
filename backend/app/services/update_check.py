@@ -4,6 +4,7 @@ A no-op if settings.update_check_enabled is False (e.g. an air-gapped
 instance with no outbound internet)."""
 
 import logging
+import re
 from datetime import datetime, timezone
 
 import httpx
@@ -16,6 +17,33 @@ from app.models.update_check_state import UpdateCheckState
 logger = logging.getLogger(__name__)
 
 GITHUB_API_BASE = "https://api.github.com"
+
+_VERSION_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:-rc(\d+))?$")
+
+
+def _parse_version(version: str) -> tuple[int, int, int, float] | None:
+    match = _VERSION_RE.match(version)
+    if match is None:
+        return None
+    major, minor, patch, rc = match.groups()
+    # A stable release outranks every -rcN of the same major.minor.patch —
+    # inf sorts higher than any real rc number.
+    prerelease_rank = float(rc) if rc is not None else float("inf")
+    return (int(major), int(minor), int(patch), prerelease_rank)
+
+
+def is_newer_version(latest: str, running: str) -> bool:
+    """True only if `latest` actually outranks `running` — plain inequality
+    would flag a "downgrade" (e.g. running v0.1.2-rc2 with prereleases
+    switched back off, so the latest known release becomes the older stable
+    v0.1.1) as an available update. Falls back to inequality when either
+    side isn't a recognized vX.Y.Z[-rcN] tag (e.g. a locally-built "dev"
+    image), since there's nothing more precise to compare against."""
+    latest_parsed = _parse_version(latest)
+    running_parsed = _parse_version(running)
+    if latest_parsed is None or running_parsed is None:
+        return latest != running
+    return latest_parsed > running_parsed
 
 
 async def get_or_create_state(db) -> UpdateCheckState:

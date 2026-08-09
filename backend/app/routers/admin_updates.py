@@ -16,7 +16,9 @@ class UpdateSettingsPatch(BaseModel):
 
 
 def _status_out(state: UpdateCheckState) -> dict:
-    update_available = bool(state.latest_version and state.latest_version != settings.app_version)
+    update_available = state.latest_version is not None and update_check.is_newer_version(
+        state.latest_version, settings.app_version
+    )
     return {
         "running_version": settings.app_version,
         "latest_version": state.latest_version,

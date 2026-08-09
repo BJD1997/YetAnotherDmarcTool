@@ -1,12 +1,13 @@
 import { Link, Navigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, KeyRound, ShieldCheck, Users } from "lucide-react";
+import { ArrowRight, Download, KeyRound, ShieldCheck, Users } from "lucide-react";
 import { api } from "../api/client";
-import type { Domain } from "../api/types";
+import type { Domain, Organization } from "../api/types";
 import type { Posture, TrendPoint } from "../api/overview";
 import type { OnboardingStatus } from "../api/onboarding";
 import type { MailboxConnectionStatus } from "../api/dmarc";
 import { DATE_RANGE_PRESETS } from "../api/overview";
+import { useAuth } from "../auth/AuthContext";
 import CommandBar from "../components/overview/CommandBar";
 import PostureStrip from "../components/overview/PostureStrip";
 import TrendChart from "../components/overview/TrendChart";
@@ -20,6 +21,7 @@ export default function Overview() {
   const domainId = params.get("domain");
   const requestedDays = Number(params.get("days") ?? "30");
   const days = (DATE_RANGE_PRESETS as readonly number[]).includes(requestedDays) ? requestedDays : 30;
+  const { user } = useAuth();
 
   const { data: domains } = useQuery({
     queryKey: ["domains"],
@@ -29,6 +31,20 @@ export default function Overview() {
   const { data: onboarding, isLoading: onboardingLoading } = useQuery({
     queryKey: ["onboarding-status"],
     queryFn: () => api.get<OnboardingStatus>("/onboarding/status"),
+  });
+
+  const { data: org } = useQuery({
+    queryKey: ["organization", "current"],
+    queryFn: () => api.get<Organization>("/organizations/current"),
+  });
+  // Same population that can reach /admin at all — a plain org user would
+  // just get a 401 from this endpoint.
+  const canSeeUpdates = !!(org?.is_operator && user?.role === "org_admin");
+  const { data: updateStatus } = useQuery({
+    queryKey: ["admin-updates"],
+    queryFn: () => api.get<{ update_available: boolean; latest_version: string | null }>("/admin/updates"),
+    enabled: canSeeUpdates,
+    staleTime: 5 * 60 * 1000,
   });
 
   function setDomain(id: string | null) {
@@ -93,6 +109,18 @@ export default function Overview() {
           </p>
         </div>
       </div>
+
+      {canSeeUpdates && updateStatus?.update_available && (
+        <div className="alert alert--good" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "0.5rem" }}>
+          <span style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <Download size={15} />
+            Update available: <strong>{updateStatus.latest_version}</strong>
+          </span>
+          <Link to="/admin/updates" className="btn btn--secondary btn--sm">
+            View update
+          </Link>
+        </div>
+      )}
 
       <CommandBar
         domains={domains ?? []}

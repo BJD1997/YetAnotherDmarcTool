@@ -8,7 +8,7 @@ import { useAuth } from "../auth/AuthContext";
 import ThemeToggle from "./ThemeToggle";
 
 export default function Shell({ children }: { children: ReactNode }) {
-  const { user, refetch } = useAuth();
+  const { user } = useAuth();
   const location = useLocation();
   const queryClient = useQueryClient();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -18,21 +18,28 @@ export default function Shell({ children }: { children: ReactNode }) {
     enabled: !!user,
   });
 
-  // Same population that can already see "Manage organizations" below —
-  // a plain org user would just get a 401 from /admin/updates, so the
-  // query is gated on the same condition rather than firing and failing.
-  const canSeeUpdates = !!(org?.is_operator && user?.role === "org_admin");
-  const { data: updateStatus } = useQuery({
-    queryKey: ["admin-updates"],
-    queryFn: () => api.get<{ update_available: boolean; latest_version: string | null }>("/admin/updates"),
-    enabled: canSeeUpdates,
+  // Same population that can see /admin — a plain org user would just get
+  // a 401 from admin-only routes, so links into that area are gated on the
+  // same condition rather than being shown and failing.
+  const canSeeAdmin = !!(org?.is_operator && user?.role === "org_admin");
+
+  // Shown to every user, not just admins — /api/health needs no auth.
+  const { data: health } = useQuery({
+    queryKey: ["health"],
+    queryFn: () => api.get<{ version: string }>("/health"),
     staleTime: 5 * 60 * 1000,
   });
 
   async function handleLogout() {
-    await api.post("/auth/logout");
-    queryClient.clear();
-    refetch();
+    try {
+      await api.post("/auth/logout");
+    } finally {
+      // A hard navigation (not react-query cache invalidation) so this is
+      // deterministic regardless of query-observer timing — logout should
+      // never require a second click to actually leave the app.
+      queryClient.clear();
+      window.location.href = "/login";
+    }
   }
 
   const isActive = (path: string) => (path === "/" ? location.pathname === "/" : location.pathname.startsWith(path));
@@ -79,15 +86,10 @@ export default function Shell({ children }: { children: ReactNode }) {
             <Settings />
             Settings
           </Link>
-          {canSeeUpdates && (
+          {canSeeAdmin && (
             <Link to="/admin" onClick={closeMobile} className={`nav-link ${isActive("/admin") ? "active" : ""}`}>
               <Building2 />
               Manage organizations
-              {updateStatus?.update_available && (
-                <span className="badge badge--good" style={{ marginLeft: "0.4rem" }} title={`Update available: ${updateStatus.latest_version}`}>
-                  new
-                </span>
-              )}
             </Link>
           )}
         </nav>
@@ -104,7 +106,8 @@ export default function Shell({ children }: { children: ReactNode }) {
               </button>
             </div>
           </div>
-          <div className="sidebar-legal">
+          <div className="sidebar-legal" style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem" }}>
+            <span title="Running version">{health?.version ?? "…"}</span>
             <a href="https://github.com/BJD1997/YetAnotherDmarcTool" target="_blank" rel="noopener noreferrer">
               GitHub
             </a>
