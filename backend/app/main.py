@@ -63,6 +63,16 @@ async def enforce_demo_read_only(request: Request, call_next):
     still log in/out/enroll TOTP etc.; everything else under /api/ with an
     unsafe method is blocked.
 
+    /api/admin/ is also exempt — platform-admin auth is a completely
+    separate realm from the org-scoped session this check keys off of
+    (session_cookie_name, not platform_admin_session_cookie_name), so it
+    was never meant to be in scope here. Without this, a stray regular
+    dmarc_session cookie left over from ever trying the public demo login
+    in the same browser blocks even POST /api/admin/login itself, purely
+    because that leftover cookie happens to resolve to the read-only demo
+    org — confirmed live: the platform admin couldn't log into their own
+    demo instance's admin console because of an unrelated cookie.
+
     Checked here at the middleware level — not only inside get_current_user/
     require_org_admin — as defense in depth: coverage this way doesn't
     depend on every current and future mutating route correctly using
@@ -72,6 +82,7 @@ async def enforce_demo_read_only(request: Request, call_next):
         request.method in _UNSAFE_METHODS
         and request.url.path.startswith("/api/")
         and not request.url.path.startswith("/api/auth/")
+        and not request.url.path.startswith("/api/admin/")
     ):
         raw_token = request.cookies.get(settings.session_cookie_name)
         if raw_token:
