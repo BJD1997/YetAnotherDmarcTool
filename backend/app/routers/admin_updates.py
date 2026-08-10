@@ -66,9 +66,18 @@ async def check_now(
 
 
 @router.post("/trigger", status_code=status.HTTP_202_ACCEPTED)
-async def trigger(_admin: AdminPrincipal = Depends(get_current_platform_admin)) -> dict:
+async def trigger(
+    db: AsyncSession = Depends(get_db), _admin: AdminPrincipal = Depends(get_current_platform_admin)
+) -> dict:
+    state = await update_check.get_or_create_state(db)
+    # Backstop, not the primary gate — the frontend already only shows the
+    # button when update_available is true. Guards against a stale UI
+    # state or a direct API call re-triggering a pull of the currently
+    # running (or an older) version.
+    if state.latest_version is None or not update_check.is_newer_version(state.latest_version, settings.app_version):
+        raise HTTPException(status.HTTP_409_CONFLICT, "no newer version available to update to")
     try:
-        await updater_client.trigger_update()
+        await updater_client.trigger_update(state.latest_version)
     except updater_client.UpdaterUnavailableError as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
-    return {"status": "update triggered"}
+    return {"status": "update triggered", "target_version": state.latest_version}

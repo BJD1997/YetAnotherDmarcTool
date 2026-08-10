@@ -61,11 +61,22 @@ def _compose_project_name() -> str:
     return result.stdout.strip()
 
 
-def _run_update() -> None:
+def _run_update(version: str) -> None:
     project = _compose_project_name()
     compose = ["docker", "compose", "-p", project, "--env-file", f"{WORKSPACE}/{ENV_FILE}", "-f", f"{WORKSPACE}/{COMPOSE_FILE}"]
+    # Overrides whatever APP_VERSION the env file might (not) define —
+    # process environment takes precedence over --env-file in compose's
+    # substitution order, so THIS is what actually controls which tag gets
+    # pulled. Without it, `pull` always resolved to :latest regardless of
+    # which version the admin console said was available — confirmed
+    # live: harmless while :latest happened to get overwritten by every
+    # prerelease (a since-fixed separate bug), broken for real once
+    # :latest correctly went back to meaning "stable only" — pull would
+    # then fetch an OLDER image than what's already running, missing
+    # whatever migrations shipped after it.
+    env = {**os.environ, "APP_VERSION": version}
     try:
-        subprocess.run(compose + ["pull", "api", "worker", "migrate"], cwd=WORKSPACE, check=True)
+        subprocess.run(compose + ["pull", "api", "worker", "migrate"], cwd=WORKSPACE, env=env, check=True)
         # --no-deps on both: db/resolver are long-running, already-healthy
         # services with nothing to do with an app-code update — without
         # this, `run`/`up` evaluate the whole dependency graph and can
@@ -73,11 +84,11 @@ def _run_update() -> None:
         # tied to introducing this compose file's new structure — db came
         # back up cleanly on its existing volume, but a live db restart is
         # real disruption this shouldn't ever risk on a routine update).
-        subprocess.run(compose + ["run", "--rm", "--no-deps", "migrate"], cwd=WORKSPACE, check=True)
-        subprocess.run(compose + ["up", "-d", "--no-deps", "api", "worker"], cwd=WORKSPACE, check=True)
-        print("update completed successfully", flush=True)
+        subprocess.run(compose + ["run", "--rm", "--no-deps", "migrate"], cwd=WORKSPACE, env=env, check=True)
+        subprocess.run(compose + ["up", "-d", "--no-deps", "api", "worker"], cwd=WORKSPACE, env=env, check=True)
+        print(f"update to {version} completed successfully", flush=True)
     except subprocess.CalledProcessError as exc:
-        print(f"update failed: {exc}", flush=True)
+        print(f"update to {version} failed: {exc}", flush=True)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -93,6 +104,18 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
 
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        body = self.rfile.read(length) if length else b"{}"
+        try:
+            version = json.loads(body)["version"]
+            if not isinstance(version, str) or not version:
+                raise ValueError
+        except (json.JSONDecodeError, KeyError, ValueError):
+            self.send_response(400)
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": "missing or invalid 'version' in request body"}).encode())
+            return
+
         # Responds before starting the update, not after — `docker compose
         # up -d api worker` recreates the very api container whose request
         # triggered this, so a synchronous response would never make it
@@ -100,9 +123,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(202)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(json.dumps({"status": "started"}).encode())
+        self.wfile.write(json.dumps({"status": "started", "version": version}).encode())
 
-        threading.Thread(target=_run_update, daemon=True).start()
+        threading.Thread(target=_run_update, args=(version,), daemon=True).start()
 
     def log_message(self, format: str, *args) -> None:
         print(f"{self.address_string()} - {format % args}", flush=True)
