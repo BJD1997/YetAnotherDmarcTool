@@ -3,11 +3,21 @@ import { api, ApiError } from "../../api/client";
 import type { EnrollOtpConfirmResponse, EnrollOtpResponse } from "../../api/localAuth";
 
 // TOTP enrollment is mandatory for every local-auth account — reused by
-// both Login.tsx (a local-auth user who somehow never finished enrolling)
-// and SetPassword.tsx (a brand-new account's first-ever login). Both call
+// Login.tsx (a local-auth org user who somehow never finished enrolling),
+// SetPassword.tsx (a brand-new account's first-ever login), and
+// AdminLogin.tsx (a platform admin's first-ever login). All three call
 // this right after proving password ownership, while the backend's
-// mfa_pending cookie from that step is still active.
-export default function EnrollOtpStep({ onComplete }: { onComplete: (recoveryCodes: string[]) => void }) {
+// mfa_pending cookie from that step is still active. basePath picks which
+// mfa_pending cookie/table the backend checks against — "/auth" for org
+// users, "/admin" for platform admins (see platform_admin.py's own
+// enroll-otp routes, which mirror auth.py's exactly).
+export default function EnrollOtpStep({
+  onComplete,
+  basePath = "/auth",
+}: {
+  onComplete: (recoveryCodes: string[]) => void;
+  basePath?: "/auth" | "/admin";
+}) {
   const [enrollment, setEnrollment] = useState<EnrollOtpResponse | null>(null);
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -15,10 +25,10 @@ export default function EnrollOtpStep({ onComplete }: { onComplete: (recoveryCod
 
   useEffect(() => {
     api
-      .post<EnrollOtpResponse>("/auth/enroll-otp")
+      .post<EnrollOtpResponse>(`${basePath}/enroll-otp`)
       .then(setEnrollment)
       .catch((err) => setError(err instanceof ApiError ? err.message : "couldn't start enrollment"));
-  }, []);
+  }, [basePath]);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -26,7 +36,7 @@ export default function EnrollOtpStep({ onComplete }: { onComplete: (recoveryCod
     setSubmitting(true);
     setError(null);
     try {
-      const result = await api.post<EnrollOtpConfirmResponse>("/auth/enroll-otp/confirm", {
+      const result = await api.post<EnrollOtpConfirmResponse>(`${basePath}/enroll-otp/confirm`, {
         secret: enrollment.secret,
         code,
       });

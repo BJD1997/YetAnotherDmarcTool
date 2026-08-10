@@ -15,6 +15,8 @@ from app.models.mfa_pending_challenge import MfaPendingChallenge
 from app.models.organization import Organization
 from app.models.password_setup_token import PasswordSetupToken
 from app.models.platform_admin import PlatformAdmin
+from app.models.platform_admin_mfa_pending_challenge import PlatformAdminMfaPendingChallenge
+from app.models.platform_admin_recovery_code import PlatformAdminRecoveryCode
 from app.models.platform_admin_session import PlatformAdminSession
 from app.models.session import UserSession
 from app.models.sign_in_event import SignInEvent
@@ -39,6 +41,8 @@ __all__ = [
     "Organization",
     "PasswordSetupToken",
     "PlatformAdmin",
+    "PlatformAdminMfaPendingChallenge",
+    "PlatformAdminRecoveryCode",
     "PlatformAdminSession",
     "UserSession",
     "SignInEvent",

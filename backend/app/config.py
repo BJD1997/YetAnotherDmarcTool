@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     mfa_pending_timeout_minutes: int = 10
     password_setup_token_timeout_hours: int = 72
 
+    # Platform admin TOTP — separate cookie from mfa_pending_cookie_name
+    # above even though the mechanics mirror it exactly, so a regular
+    # local-auth login and a platform-admin login pending in the same
+    # browser at once can never be confused with each other.
+    platform_admin_mfa_pending_cookie_name: str = "dmarc_admin_mfa_pending"
+
     # The operator's own shared reporting mailbox — <mailbox-local-part>+<tag>@<domain>
     # addresses issued via POST /domains/{id}/hosted-report-address all land
     # here via plus-addressing, polled by app/workers/jobs/hosted_reports_poll_job.py.

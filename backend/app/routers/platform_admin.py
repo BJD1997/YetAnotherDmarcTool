@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
@@ -22,21 +23,33 @@ from app.models.mailbox_connection import MailboxConnection
 from app.models.organization import Organization
 from app.models.password_setup_token import PasswordSetupToken
 from app.models.platform_admin import PlatformAdmin
+from app.models.platform_admin_mfa_pending_challenge import PlatformAdminMfaPendingChallenge
+from app.models.platform_admin_recovery_code import PlatformAdminRecoveryCode
 from app.models.user import User
-from app.services.auth import session_manager
+from app.services.auth import session_manager, totp
 from app.services.auth.entra_links import entra_consent_urls
 from app.services.auth.password import hash_password, verify_password
 from app.services.auth.session_manager import cookie_kwargs
-from app.services.auth.tokens import new_opaque_token
+from app.services.auth.tokens import hash_token, new_opaque_token
 
 router = APIRouter(prefix="/admin", tags=["platform-admin"])
 
 JOB_ERROR_WINDOW_DAYS = 7
+_ADMIN_MFA_PENDING_COOKIE = settings.platform_admin_mfa_pending_cookie_name
 
 
 class AdminLoginRequest(BaseModel):
     email: EmailStr
     password: str
+
+
+class AdminVerifyOtpRequest(BaseModel):
+    code: str
+
+
+class AdminEnrollOtpConfirmRequest(BaseModel):
+    secret: str
+    code: str
 
 
 class OrganizationCreateRequest(BaseModel):
@@ -163,6 +176,41 @@ async def _org_out(db: AsyncSession, org: Organization, aggregates: dict | None 
     }
 
 
+async def _set_admin_mfa_pending(db: AsyncSession, response: Response, platform_admin_id: uuid.UUID) -> None:
+    raw_token, token_hash = new_opaque_token()
+    now = datetime.now(timezone.utc)
+    db.add(
+        PlatformAdminMfaPendingChallenge(
+            platform_admin_id=platform_admin_id,
+            token_hash=token_hash,
+            created_at=now,
+            expires_at=now + timedelta(minutes=settings.mfa_pending_timeout_minutes),
+        )
+    )
+    short_lived = {**cookie_kwargs(), "max_age": settings.mfa_pending_timeout_minutes * 60}
+    response.set_cookie(_ADMIN_MFA_PENDING_COOKIE, raw_token, **short_lived)
+
+
+async def _get_pending_admin(request: Request, db: AsyncSession) -> tuple[PlatformAdmin, PlatformAdminMfaPendingChallenge]:
+    raw_token = request.cookies.get(_ADMIN_MFA_PENDING_COOKIE)
+    if not raw_token:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "no pending login")
+    token_hash = hash_token(raw_token)
+    result = await db.execute(
+        select(PlatformAdminMfaPendingChallenge).where(PlatformAdminMfaPendingChallenge.token_hash == token_hash)
+    )
+    challenge = result.scalar_one_or_none()
+    if challenge is None or challenge.expires_at <= datetime.now(timezone.utc):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "pending login expired — sign in again")
+    # platform_admins carries no RLS (see the model's own docstring), so no
+    # context-setting is needed before this lookup, unlike auth.py's
+    # equivalent for the RLS-protected users table.
+    admin = await db.get(PlatformAdmin, challenge.platform_admin_id)
+    if admin is None or not admin.is_active:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "no pending login")
+    return admin, challenge
+
+
 @router.post("/login")
 async def admin_login(body: AdminLoginRequest, request: Request, db: AsyncSession = Depends(get_db)) -> Response:
     result = await db.execute(select(PlatformAdmin).where(PlatformAdmin.email == body.email))
@@ -170,15 +218,90 @@ async def admin_login(body: AdminLoginRequest, request: Request, db: AsyncSessio
     if admin is None or not admin.is_active or not verify_password(body.password, admin.password_hash):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
 
+    response = JSONResponse({"needs_enrollment": admin.otp_enrolled_at is None})
+    await _set_admin_mfa_pending(db, response, admin.id)
+    await db.commit()
+    return response
+
+
+@router.post("/verify-otp")
+async def admin_verify_otp(body: AdminVerifyOtpRequest, request: Request, db: AsyncSession = Depends(get_db)) -> Response:
+    admin, challenge = await _get_pending_admin(request, db)
+
+    if admin.otp_enrolled_at is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "TOTP not enrolled yet")
+
+    code = body.code.strip()
+    if not totp.verify_code(admin.otp_secret, code):
+        code_hash = totp.hash_recovery_code_for_lookup(code)
+        result = await db.execute(
+            select(PlatformAdminRecoveryCode).where(
+                PlatformAdminRecoveryCode.platform_admin_id == admin.id,
+                PlatformAdminRecoveryCode.code_hash == code_hash,
+                PlatformAdminRecoveryCode.used_at.is_(None),
+            )
+        )
+        recovery = result.scalar_one_or_none()
+        if recovery is None:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid code")
+        recovery.used_at = datetime.now(timezone.utc)
+
     _, raw_token = await session_manager.create_platform_admin_session(
         db,
         platform_admin_id=admin.id,
         ip_address=request.client.host if request.client else None,
         user_agent=request.headers.get("user-agent"),
     )
+    await db.delete(challenge)
     await db.commit()
 
     response = Response(status_code=204)
+    response.delete_cookie(_ADMIN_MFA_PENDING_COOKIE, path="/")
+    response.set_cookie(
+        settings.platform_admin_session_cookie_name,
+        raw_token,
+        max_age=settings.session_idle_timeout_hours * 3600,
+        **cookie_kwargs(),
+    )
+    return response
+
+
+@router.post("/enroll-otp")
+async def admin_enroll_otp(request: Request, db: AsyncSession = Depends(get_db)) -> dict:
+    admin, _challenge = await _get_pending_admin(request, db)
+    secret = totp.generate_secret()
+    uri = totp.provisioning_uri(secret, admin.email)
+    return {"secret": secret, "qr_code_data_uri": totp.qr_code_data_uri(uri)}
+
+
+@router.post("/enroll-otp/confirm")
+async def admin_enroll_otp_confirm(
+    body: AdminEnrollOtpConfirmRequest, request: Request, db: AsyncSession = Depends(get_db)
+) -> JSONResponse:
+    admin, challenge = await _get_pending_admin(request, db)
+
+    if not totp.verify_code(body.secret, body.code):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "code didn't match — check your authenticator app and try again")
+
+    now = datetime.now(timezone.utc)
+    admin.otp_secret = body.secret
+    admin.otp_enrolled_at = now
+
+    codes = totp.generate_recovery_codes()
+    for plaintext, code_hash in codes:
+        db.add(PlatformAdminRecoveryCode(platform_admin_id=admin.id, code_hash=code_hash, created_at=now))
+
+    _, raw_token = await session_manager.create_platform_admin_session(
+        db,
+        platform_admin_id=admin.id,
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+    await db.delete(challenge)
+    await db.commit()
+
+    response = JSONResponse({"recovery_codes": [plaintext for plaintext, _hash in codes]})
+    response.delete_cookie(_ADMIN_MFA_PENDING_COOKIE, path="/")
     response.set_cookie(
         settings.platform_admin_session_cookie_name,
         raw_token,

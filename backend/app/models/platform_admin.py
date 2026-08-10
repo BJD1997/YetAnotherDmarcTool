@@ -1,4 +1,6 @@
-from sqlalchemy import Boolean, String
+from datetime import datetime
+
+from sqlalchemy import Boolean, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -19,3 +21,8 @@ class PlatformAdmin(UUIDPkMixin, TimestampMixin, Base):
     email: Mapped[str] = mapped_column(String(320), unique=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Mandatory, same as local-auth org users (see User.otp_secret) — nullable
+    # only because a freshly bootstrapped admin hasn't enrolled yet.
+    # otp_enrolled_at is None is what gates the forced-enrollment step.
+    otp_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    otp_enrolled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
