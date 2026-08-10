@@ -3,10 +3,15 @@ reach this org's configured mailbox? Mirrors dmarc_record.py's
 check_rua_destination and its test coverage: a domain can publish a
 syntactically valid TLS-RPT record while rua= points somewhere else
 entirely (a stale vendor, a typo), a gap invisible to tls_rpt_check.py's
-own presence/validity check by design."""
+own presence/validity check by design.
+
+Also covers check()'s own mailbox_address comparison — unlike DMARC's
+checker, this one DOES surface the mismatch directly as a scored finding
+(see the module's own docstring for why), not only via the builder."""
 
 from unittest.mock import patch
 
+from app.services.dns_checks import tls_rpt_check
 from app.services.dns_checks.resolver import DnsLookupError
 from app.services.dns_checks.tls_rpt_check import TlsRptRecordInfo, check_tls_rpt_rua_destination
 
@@ -76,3 +81,61 @@ async def test_lookup_error_when_dns_fails():
     with patch("app.services.dns_checks.tls_rpt_check.fetch_current_tls_rpt_record", fake):
         result = await check_tls_rpt_rua_destination("example.com", "reports@example.com")
     assert result.status == "lookup_error"
+
+
+def _mocked_check(txt_records: list[str]):
+    async def fake_resolve_mx(domain):
+        return [(10, "mail.example.com")]
+
+    async def fake_resolve_txt_strict(name):
+        return txt_records
+
+    return patch.multiple(
+        "app.services.dns_checks.tls_rpt_check",
+        resolve_mx=fake_resolve_mx,
+        resolve_txt_strict=fake_resolve_txt_strict,
+    )
+
+
+async def test_check_flags_mailbox_mismatch_as_warn():
+    with _mocked_check(["v=TLSRPTv1; rua=mailto:old-vendor@third-party.com"]):
+        findings = await tls_rpt_check.check("example.com", mailbox_address="reports@example.com")
+    mismatch = [f for f in findings if "doesn't include your configured mailbox" in f.summary]
+    assert len(mismatch) == 1
+    assert mismatch[0].status == "warn"
+    # The existing presence/validity pass finding is untouched — this is an
+    # additional finding, not a replacement.
+    assert any(f.status == "pass" and "TLS-RPT reports configured" in f.summary for f in findings)
+
+
+async def test_check_no_mismatch_finding_when_mailbox_matches():
+    with _mocked_check(["v=TLSRPTv1; rua=mailto:reports@example.com"]):
+        findings = await tls_rpt_check.check("example.com", mailbox_address="reports@example.com")
+    assert not any("doesn't include your configured mailbox" in f.summary for f in findings)
+
+
+async def test_check_no_mismatch_finding_when_no_mailbox_address_given():
+    # Unaffected/unchanged behavior when the caller has no mailbox to
+    # compare against (e.g. a local-auth org with no connection yet) —
+    # mailbox_address defaults to None.
+    with _mocked_check(["v=TLSRPTv1; rua=mailto:old-vendor@third-party.com"]):
+        findings = await tls_rpt_check.check("example.com")
+    assert not any("doesn't include your configured mailbox" in f.summary for f in findings)
+
+
+async def test_check_flags_mismatch_for_https_only_rua():
+    # A legitimate RFC 8460 config, but still means reports never reach
+    # this app's own mailbox for this domain.
+    with _mocked_check(["v=TLSRPTv1; rua=https://reports.example.com/submit"]):
+        findings = await tls_rpt_check.check("example.com", mailbox_address="reports@example.com")
+    assert any(f.status == "warn" and "doesn't include your configured mailbox" in f.summary for f in findings)
+
+
+async def test_check_no_mismatch_finding_when_rua_itself_is_invalid():
+    # Nothing "valid" to compare a mailbox against — the invalid-scheme
+    # fail finding already covers this domain's real problem, no need for
+    # a second, confusing finding about the mailbox on top of it.
+    with _mocked_check(["v=TLSRPTv1; rua=ftp://not-a-real-scheme"]):
+        findings = await tls_rpt_check.check("example.com", mailbox_address="reports@example.com")
+    assert not any("doesn't include your configured mailbox" in f.summary for f in findings)
+    assert any(f.status == "fail" for f in findings)

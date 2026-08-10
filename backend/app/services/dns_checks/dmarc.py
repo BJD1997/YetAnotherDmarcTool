@@ -1,6 +1,12 @@
 """DMARC (RFC 7489) best-practice checker: presence/uniqueness, policy
-strength, pct rollout, rua/ruf presence, and the RFC 7489 §7.1 external
-destination verification for report addresses on a different domain.
+strength, pct rollout, rua/ruf presence, the RFC 7489 §7.1 external
+destination verification for report addresses on a different domain, and
+— given an optional mailbox_address — whether rua=/ruf= actually include
+this org's own configured mailbox (warn if not; ruf= only checked when
+it's configured at all, since it's optional and its absence alone isn't
+flagged). Same comparison the DMARC Policy Builder already surfaces for
+rua=, mirrored here as a scored finding too — see tls_rpt_check.py's
+module docstring for the equivalent reasoning on the TLS-RPT side.
 
 DMARCbis (RFC 9989, published May 2026 — np=/psd=/t= tags, pct= removal)
 is deliberately NOT checked here; it gets its own module (dmarcbis.py) that
@@ -120,7 +126,7 @@ async def _check_inherited_policy(domain: str, parent_domain: str, name: str) ->
     ]
 
 
-async def check(domain: str, parent_domain: str | None = None) -> list[Finding]:
+async def check(domain: str, parent_domain: str | None = None, mailbox_address: str | None = None) -> list[Finding]:
     name = f"_dmarc.{domain}"
     try:
         records = await resolve_txt_strict(name)
@@ -191,11 +197,35 @@ async def check(domain: str, parent_domain: str | None = None) -> list[Finding]:
             ext_finding = await _check_external_destination(domain, target, "rua")
             if ext_finding:
                 findings.append(ext_finding)
+        # Presence + external authorization don't prove reports actually
+        # reach THIS org's own mailbox — same gap tls_rpt_check.py's check()
+        # flags directly rather than leaving it to the policy builder alone
+        # (see that module's docstring). ruf= gets the identical check below.
+        if mailbox_address and mailbox_address.lower() not in (t.lower() for t in rua_targets):
+            findings.append(
+                Finding(
+                    status="warn",
+                    summary=f"rua= doesn't include your configured mailbox ({mailbox_address}) — aggregate reports won't reach it",
+                    details={"recommendation": "Use the policy builder to update rua= to include your mailbox."},
+                )
+            )
 
-    for target in parse_mailto_targets(tags.get("ruf", "")):
+    ruf_targets = parse_mailto_targets(tags.get("ruf", ""))
+    for target in ruf_targets:
         ext_finding = await _check_external_destination(domain, target, "ruf")
         if ext_finding:
             findings.append(ext_finding)
+    # ruf= is optional (unlike rua=, its absence isn't flagged at all) —
+    # only worth comparing against the org's mailbox when it's actually
+    # configured to begin with.
+    if ruf_targets and mailbox_address and mailbox_address.lower() not in (t.lower() for t in ruf_targets):
+        findings.append(
+            Finding(
+                status="warn",
+                summary=f"ruf= doesn't include your configured mailbox ({mailbox_address}) — forensic reports won't reach it",
+                details={"recommendation": "Use the policy builder to update ruf= to include your mailbox."},
+            )
+        )
 
     adkim = tags.get("adkim", "r")
     aspf = tags.get("aspf", "r")

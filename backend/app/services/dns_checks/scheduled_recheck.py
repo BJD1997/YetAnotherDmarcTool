@@ -20,6 +20,7 @@ from app.models.dns_check import DnsCheckResult
 from app.models.domain import Domain
 from app.models.enums import CheckStatus, CheckType, DomainVerificationStatus, JobStatus, JobType
 from app.models.job_run import JobRun
+from app.models.mailbox_connection import MailboxConnection
 from app.models.organization import Organization
 from app.services.dns_checks.registry import run_all
 
@@ -51,12 +52,23 @@ async def run_and_persist_checks(db: AsyncSession, domain: Domain, org: Organiza
         if parent is not None:
             parent_domain_name = parent.name
 
+    # Same resolution as the DMARC/TLS-RPT policy builders' own
+    # org_mailbox_address (app/routers/dns_checks.py) — a domain's own
+    # hosted address takes priority over the org's shared connected
+    # mailbox. Passed through to tls_rpt_check.check() so the scored check
+    # can flag a rua= that doesn't include it, not just the builder.
+    connection = (
+        await db.execute(select(MailboxConnection).where(MailboxConnection.organization_id == domain.organization_id))
+    ).scalar_one_or_none()
+    mailbox_address = domain.hosted_report_address or (connection.mailbox_address if connection is not None else None)
+
     findings_by_type = await run_all(
         domain.name,
         [s.selector for s in selectors],
         domain.mail_profile,
         org.spf_all_qualifier_mode,
         parent_domain_name,
+        mailbox_address,
     )
 
     now = datetime.now(timezone.utc)
