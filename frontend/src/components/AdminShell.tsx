@@ -7,7 +7,7 @@ import { useAdminAuth } from "../auth/AdminAuthContext";
 import ThemeToggle from "./ThemeToggle";
 
 export default function AdminShell({ children }: { children: ReactNode }) {
-  const { admin, refetch } = useAdminAuth();
+  const { admin } = useAdminAuth();
   const location = useLocation();
   const queryClient = useQueryClient();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -18,14 +18,27 @@ export default function AdminShell({ children }: { children: ReactNode }) {
     staleTime: 5 * 60 * 1000,
   });
 
+  // Same public, unauthenticated /api/health source as the main Shell's
+  // sidebar footer — shown here too since this is a different component,
+  // not covered by that one.
+  const { data: health } = useQuery({
+    queryKey: ["health"],
+    queryFn: () => api.get<{ version: string }>("/health"),
+    staleTime: 5 * 60 * 1000,
+  });
+
   async function handleLogout() {
     // Only a "local" session has anything for /admin/logout to revoke — an
     // operator_org admin is really just using their normal dashboard login,
     // signing out of that belongs in the main Shell instead.
-    if (admin?.auth_type === "local") {
+    if (admin?.auth_type !== "local") return;
+    try {
       await api.post("/admin/logout");
+    } finally {
+      // Hard redirect, not react-query cache invalidation — see Shell.tsx's
+      // handleLogout for why (same bug, same fix, applies here too).
       queryClient.clear();
-      refetch();
+      window.location.href = "/admin/login";
     }
   }
 
@@ -96,7 +109,8 @@ export default function AdminShell({ children }: { children: ReactNode }) {
               )}
             </div>
           </div>
-          <div className="sidebar-legal">
+          <div className="sidebar-legal" style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem" }}>
+            <span title="Running version">{health?.version ?? "…"}</span>
             <a href="https://github.com/BJD1997/YetAnotherDmarcTool" target="_blank" rel="noopener noreferrer">
               GitHub
             </a>

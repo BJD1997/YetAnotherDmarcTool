@@ -1,8 +1,9 @@
+import html
 import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
@@ -174,6 +175,60 @@ async def _org_out(db: AsyncSession, org: Organization, aggregates: dict | None 
         "job_error_count_7d": agg["job_error_count_7d"],
         "last_report_at": agg["last_report_at"],
     }
+
+
+_CONSENT_PAGE_STYLE = """
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; display: flex;
+           align-items: center; justify-content: center; min-height: 100vh; margin: 0;
+           background: #f7f7f5; color: #1a1a1a; }
+    @media (prefers-color-scheme: dark) { body { background: #17181c; color: #e8e8e6; } }
+    .card { max-width: 26rem; padding: 2rem; border-radius: 0.75rem; border: 1px solid rgba(127,127,127,0.25);
+            text-align: center; }
+    h1 { font-size: 1.15rem; margin: 0 0 0.6rem; }
+    p { font-size: 0.92rem; line-height: 1.5; color: rgba(127,127,127,1); margin: 0; }
+    .mark { display: inline-flex; align-items: center; justify-content: center; width: 2.2rem; height: 2.2rem;
+            border-radius: 0.5rem; background: #2563eb; color: white; font-weight: 700; margin-bottom: 0.75rem; }
+  </style>
+"""
+
+
+@router.get("/entra/consent-callback")
+async def entra_consent_callback(request: Request) -> HTMLResponse:
+    """Landing page for the admin-consent redirect Microsoft sends the
+    tenant's Global Admin back to after granting (or denying) the
+    mail-access app's permissions — see entra_links.mail_access_consent_url,
+    which MailboxConnectionSection.tsx opens in a new tab. Was previously
+    just a dead URL with no route at all: the SPA's catch-all served
+    index.html, but no client-side route matched it either, so it rendered
+    a blank page. This intentionally does no DB writes — consent_status is
+    self-attested when the org admin sets the mailbox address (see
+    set_mailbox_connection's docstring), not derived from this redirect,
+    and whoever lands here (often a Global Admin, not necessarily someone
+    with a dashboard login at all) has nothing to authenticate as anyway."""
+    error = request.query_params.get("error")
+    if error:
+        # error/error_description are attacker-controllable query params
+        # (anyone can craft this URL) — must be escaped before landing in
+        # raw HTML, not trusted just because they usually come from Entra.
+        error = html.escape(error)
+        description = html.escape(request.query_params.get("error_description") or "No further details were provided.")
+        body = f"""<!doctype html><html><head><meta charset="utf-8">
+        <title>Mail access — YetAnotherDmarcTool</title>{_CONSENT_PAGE_STYLE}</head>
+        <body><div class="card"><div class="mark">Y</div>
+        <h1>Consent wasn't granted</h1>
+        <p>{error}: {description}</p>
+        <p style="margin-top:0.75rem">You can close this tab and try again from the dashboard.</p>
+        </div></body></html>"""
+    else:
+        body = """<!doctype html><html><head><meta charset="utf-8">
+        <title>Mail access granted — YetAnotherDmarcTool</title>""" + _CONSENT_PAGE_STYLE + """</head>
+        <body><div class="card"><div class="mark">Y</div>
+        <h1>Mail access granted</h1>
+        <p>You can close this tab and return to the dashboard.</p>
+        </div></body></html>"""
+    return HTMLResponse(body)
 
 
 async def _set_admin_mfa_pending(db: AsyncSession, response: Response, platform_admin_id: uuid.UUID) -> None:
