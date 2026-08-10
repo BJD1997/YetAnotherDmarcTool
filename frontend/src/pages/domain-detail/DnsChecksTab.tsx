@@ -10,6 +10,7 @@ import { useAuth } from "../../auth/AuthContext";
 import { StatusBadge } from "../../components/domain/shared";
 import PolicyBuilder from "../../components/policy-builder/PolicyBuilder";
 import MtaStsPolicyBuilder from "../../components/policy-builder/MtaStsPolicyBuilder";
+import TlsRptPolicyBuilder from "../../components/policy-builder/TlsRptPolicyBuilder";
 
 const CHECK_LABELS: Record<CheckType, string> = {
   spf: "SPF",
@@ -96,6 +97,7 @@ export default function DnsChecksTab() {
   const [error, setError] = useState<string | null>(null);
   const [showPolicyBuilder, setShowPolicyBuilder] = useState(false);
   const [showMtaStsBuilder, setShowMtaStsBuilder] = useState(false);
+  const [showTlsRptBuilder, setShowTlsRptBuilder] = useState(false);
   const [filter, setFilter] = useState<StatusFilter>("attention");
 
   const recheck = useMutation({
@@ -145,6 +147,12 @@ export default function DnsChecksTab() {
               Build MTA-STS policy
             </button>
           )}
+          {canManage && (
+            <button className="btn btn--ghost btn--sm" onClick={() => setShowTlsRptBuilder(true)}>
+              <Wand2 />
+              Build TLS-RPT record
+            </button>
+          )}
           {canManage && domain.verification_status === "verified" && (
             <button className="btn btn--secondary btn--sm" onClick={() => recheck.mutate()} disabled={recheck.isPending}>
               <RefreshCw />
@@ -159,6 +167,9 @@ export default function DnsChecksTab() {
       )}
       {showMtaStsBuilder && (
         <MtaStsPolicyBuilder domainId={domainId} domainName={domain.name} onClose={() => setShowMtaStsBuilder(false)} />
+      )}
+      {showTlsRptBuilder && (
+        <TlsRptPolicyBuilder domainId={domainId} domainName={domain.name} onClose={() => setShowTlsRptBuilder(false)} />
       )}
 
       {domain.verification_status !== "verified" && (

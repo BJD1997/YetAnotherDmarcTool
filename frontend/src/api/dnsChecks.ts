@@ -42,3 +42,29 @@ export interface MtaStsBuilderData {
   current_policy_fetch_error: string | null;
   recommended_mode: MtaStsMode;
 }
+
+export type RuaDestinationStatus =
+  | "not_configured"
+  | "lookup_error"
+  | "no_rua"
+  | "points_elsewhere"
+  | "correct"
+  | "no_mailbox";
+
+export interface RuaDestination {
+  status: RuaDestinationStatus;
+  current_targets: string[];
+}
+
+export interface TlsRptCurrentRecord {
+  raw: string;
+  tags: Record<string, string>;
+}
+
+export interface TlsRptBuilderData {
+  current_record: TlsRptCurrentRecord | null;
+  current_record_lookup_error: boolean;
+  rua_destination: RuaDestination;
+  org_mailbox_address: string | null;
+  hosted_report_address: string | null;
+}

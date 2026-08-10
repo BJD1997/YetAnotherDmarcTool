@@ -2,8 +2,18 @@
 advertising where other mail servers should send SMTP TLS negotiation
 failure reports. This is a DNS-publication check only — actually parsing
 inbound TLS-RPT reports that arrive in the mailbox is a separate concern
-handled by report_writer.write_smtp_tls_report."""
+handled by report_writer.write_smtp_tls_report.
 
+Also home to fetch_current_tls_rpt_record/check_tls_rpt_rua_destination,
+used by the TLS-RPT policy builder (app/routers/dns_checks.py) — mirrors
+dmarc_record.py's fetch_current_dmarc_record/check_rua_destination for the
+exact same reason: a domain can publish a syntactically valid record (the
+check() below passes it) while rua= points somewhere other than this org's
+configured mailbox, a gap invisible to check() by design (same scope
+dmarc.py's own rua= check has — presence/validity, not "is it MY mailbox").
+"""
+
+import dataclasses
 import re
 
 from app.services.dns_checks.base import Finding, is_null_mx
@@ -25,6 +35,53 @@ def _parse_tags(record: str) -> dict[str, str]:
 
 def _parse_rua_uris(value: str) -> list[str]:
     return [uri.strip() for uri in value.split(",") if uri.strip()]
+
+
+def _parse_mailto_targets(value: str) -> list[str]:
+    return [uri[len("mailto:"):] for uri in _parse_rua_uris(value) if uri.lower().startswith("mailto:")]
+
+
+@dataclasses.dataclass
+class TlsRptRecordInfo:
+    raw: str
+    tags: dict[str, str]
+
+
+async def fetch_current_tls_rpt_record(domain: str) -> TlsRptRecordInfo | None:
+    """Live-fetches _smtp._tls.<domain> and returns the first valid
+    v=TLSRPTv1 record (parsed), or None if genuinely absent. Raises
+    DnsLookupError — not swallowed — on a real lookup failure, same
+    contract as fetch_current_dmarc_record."""
+    name = f"_smtp._tls.{domain}"
+    records = await resolve_txt_strict(name)
+    tlsrpt_records = [r for r in records if _TLSRPT_PREFIX_RE.match(r.strip())]
+    if not tlsrpt_records:
+        return None
+    return TlsRptRecordInfo(raw=tlsrpt_records[0], tags=_parse_tags(tlsrpt_records[0]))
+
+
+@dataclasses.dataclass
+class TlsRptRuaDestinationCheck:
+    status: str  # "not_configured" | "lookup_error" | "no_rua" | "points_elsewhere" | "correct"
+    current_targets: list[str]
+
+
+async def check_tls_rpt_rua_destination(domain: str, mailbox_address: str) -> TlsRptRuaDestinationCheck:
+    """Does this domain's published TLS-RPT rua= actually include the org's
+    report destination? Same question dmarc_record.check_rua_destination
+    answers for DMARC, applied to _smtp._tls.<domain> instead."""
+    try:
+        record = await fetch_current_tls_rpt_record(domain)
+    except DnsLookupError:
+        return TlsRptRuaDestinationCheck(status="lookup_error", current_targets=[])
+    if record is None:
+        return TlsRptRuaDestinationCheck(status="not_configured", current_targets=[])
+    targets = _parse_mailto_targets(record.tags.get("rua", ""))
+    if not targets:
+        return TlsRptRuaDestinationCheck(status="no_rua", current_targets=[])
+    if mailbox_address.lower() in (t.lower() for t in targets):
+        return TlsRptRuaDestinationCheck(status="correct", current_targets=targets)
+    return TlsRptRuaDestinationCheck(status="points_elsewhere", current_targets=targets)
 
 
 async def check(domain: str) -> list[Finding]:

@@ -20,6 +20,7 @@ from app.services.dns_checks.inbound_view import build_inbound_hosts
 from app.services.dns_checks.mta_sts import _TXT_RE, _mx_covered, _parse_policy, fetch_policy_file
 from app.services.dns_checks.resolver import DnsLookupError, resolve_mx, resolve_txt_strict
 from app.services.dns_checks.scheduled_recheck import run_and_persist_checks
+from app.services.dns_checks.tls_rpt_check import check_tls_rpt_rua_destination, fetch_current_tls_rpt_record
 
 router = APIRouter(tags=["dns-checks"])
 
@@ -343,4 +344,44 @@ async def mta_sts_builder(
         "current_policy": current_policy,
         "current_policy_fetch_error": current_policy_fetch_error,
         "recommended_mode": recommended_mode,
+    }
+
+
+@router.get("/domains/{domain_id}/dns/tls-rpt-builder")
+async def tls_rpt_builder(
+    domain_id: uuid.UUID, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
+) -> dict:
+    """Live DNS state + report-destination status for the TLS-RPT policy
+    builder UI — mirrors dmarc_rua_check/the DMARC Policy Builder's
+    rua-destination check for _smtp._tls.<domain> instead of _dmarc.<domain>.
+    Shares hosted_report_address with the DMARC side (see
+    POST /domains/{id}/hosted-report-address) — one hosted mailbox per
+    domain receives both DMARC aggregate and TLS-RPT reports, not two
+    separate addresses."""
+    domain = await _get_owned_domain(db, domain_id, user.organization_id)
+
+    connection = (
+        await db.execute(select(MailboxConnection).where(MailboxConnection.organization_id == user.organization_id))
+    ).scalar_one_or_none()
+    mailbox_address = domain.hosted_report_address or (connection.mailbox_address if connection is not None else None)
+
+    lookup_error = False
+    try:
+        current = await fetch_current_tls_rpt_record(domain.name)
+    except DnsLookupError:
+        current = None
+        lookup_error = True
+
+    if mailbox_address is not None:
+        rua_result = await check_tls_rpt_rua_destination(domain.name, mailbox_address)
+        rua_destination = {"status": rua_result.status, "current_targets": rua_result.current_targets}
+    else:
+        rua_destination = {"status": "no_mailbox", "current_targets": []}
+
+    return {
+        "current_record": {"raw": current.raw, "tags": current.tags} if current is not None else None,
+        "current_record_lookup_error": lookup_error,
+        "rua_destination": rua_destination,
+        "org_mailbox_address": mailbox_address,
+        "hosted_report_address": domain.hosted_report_address,
     }
