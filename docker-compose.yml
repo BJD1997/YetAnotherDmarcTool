@@ -133,6 +133,15 @@ services:
     restart: unless-stopped
     environment:
       UPDATER_SHARED_SECRET: ${UPDATER_SHARED_SECRET:-}
+      # Explicit rather than relying on server.py's defaults — this same
+      # image also runs docker-compose.demo.yml's own updater (see that
+      # file), which sets these to docker-compose.demo.yml/.env.demo
+      # instead. Getting either wrong means an update trigger applies the
+      # WRONG file's service definitions, or substitutes the WRONG
+      # deployment's secrets, under this project's name — see server.py's
+      # comments on COMPOSE_FILE and ENV_FILE.
+      UPDATER_COMPOSE_FILE: docker-compose.yml
+      UPDATER_ENV_FILE: .env
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       # Read-only: even a compromised updater can't rewrite

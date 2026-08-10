@@ -41,10 +41,24 @@ jobs:
       # update_check_include_prereleases), and :latest must keep meaning
       # "latest stable" for every self-hoster whose update check doesn't
       # opt into prereleases.
+      #
+      # flavor.latest=false is required here, not optional: metadata-action
+      # auto-generates its OWN `latest` tag by default (flavor: latest=auto)
+      # for any type=ref,event=tag entry, completely independent of the
+      # enable= condition on the type=raw entry below. Without this, the
+      # enable= condition above looks like it's working (the raw entry is
+      # correctly suppressed) while the action still pushes `latest` anyway
+      # via its own auto flavor — confirmed live: v0.1.2-rc1/rc2/rc3 each
+      # silently overwrote :latest with a prerelease build despite
+      # "enable=false" appearing right there in the action's own log,
+      # because that log line described the raw entry, not the final tag
+      # list actually pushed. Restored via a rerun of v0.1.1's release job.
       - uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         id: meta
         with:
           images: ghcr.io/${{ github.repository }}
+          flavor: |
+            latest=false
           tags: |
             type=ref,event=tag
             type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}

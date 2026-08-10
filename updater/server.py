@@ -25,6 +25,26 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 WORKSPACE = "/workspace"
 SHARED_SECRET = os.environ.get("UPDATER_SHARED_SECRET", "")
+# Both docker-compose.yml (the real instance) and docker-compose.demo.yml
+# (the isolated public demo) share this same image and mount the same
+# read-only /workspace (the whole repo checkout, since both files live
+# side by side there) — this MUST be set per-deployment. Getting it wrong
+# doesn't fail loudly: `-p <this project> -f <wrong file>` is still valid
+# docker compose invocation, it just applies the WRONG file's service
+# definitions (ports, images, env_file) under this project's name, which
+# for prod vs demo means colliding host ports and cross-deployment secrets.
+COMPOSE_FILE = os.environ.get("UPDATER_COMPOSE_FILE", "docker-compose.yml")
+# Just as important and easy to miss: `docker compose` auto-loads a file
+# literally named `.env` from the project directory for ${VAR} substitution
+# in the compose YAML itself — regardless of which -f file is given. Since
+# both .env and .env.demo live in the same /workspace, an update running
+# under the demo project without an explicit --env-file would silently
+# substitute the REAL instance's secrets (POSTGRES_PASSWORD,
+# DMARC_APP_DB_PASSWORD, ...) into the demo's containers instead of its own
+# — confirmed live: this had already happened before this variable existed,
+# and demo's actual Postgres roles had to be rotated to match .env.demo
+# for real once the substitution was fixed.
+ENV_FILE = os.environ.get("UPDATER_ENV_FILE", ".env")
 
 
 def _compose_project_name() -> str:
@@ -43,7 +63,7 @@ def _compose_project_name() -> str:
 
 def _run_update() -> None:
     project = _compose_project_name()
-    compose = ["docker", "compose", "-p", project, "-f", f"{WORKSPACE}/docker-compose.yml"]
+    compose = ["docker", "compose", "-p", project, "--env-file", f"{WORKSPACE}/{ENV_FILE}", "-f", f"{WORKSPACE}/{COMPOSE_FILE}"]
     try:
         subprocess.run(compose + ["pull", "api", "worker", "migrate"], cwd=WORKSPACE, check=True)
         # --no-deps on both: db/resolver are long-running, already-healthy
@@ -91,6 +111,7 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     if not SHARED_SECRET:
         print("WARNING: UPDATER_SHARED_SECRET is unset — every request will be rejected", flush=True)
+    print(f"configured for {COMPOSE_FILE} (env: {ENV_FILE})", flush=True)
     server = ThreadingHTTPServer(("0.0.0.0", 9999), Handler)
     print("updater listening on :9999", flush=True)
     server.serve_forever()

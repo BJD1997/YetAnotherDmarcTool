@@ -4,11 +4,29 @@
 # share ANY infrastructure with docker-compose.yml's real instance: even a
 # bug in the read-only enforcement can't reach data that isn't there.
 #
+# One deliberate exception: if UPDATER_SHARED_SECRET is set below, this
+# deployment's updater service gets its own /var/run/docker.sock mount —
+# same as the real instance's. The Docker socket is host-wide by nature,
+# so that container CAN see and technically control every other container
+# on this host, real instance included, regardless of which compose
+# project it belongs to. UPDATER_COMPOSE_FILE keeps its normal *operation*
+# scoped to this file only (see updater/server.py) — this note is about
+# the underlying access, not what it's expected to do with it.
+#
 # Run alongside the real instance on the same host:
 #   cp .env.demo.example .env.demo   # fill in — see that file's comments
-#   docker compose -f docker-compose.demo.yml up -d
+#   docker compose --env-file .env.demo -f docker-compose.demo.yml up -d
 # Then point your reverse proxy at this host's :8001 for the demo's own
 # hostname. See README.md's "Live demo" section for the one-time seed step.
+#
+# --env-file .env.demo is NOT optional here, and easy to forget: since
+# both this file and the real instance's docker-compose.yml live in the
+# same directory, `docker compose` would otherwise silently fall back to
+# auto-loading the real instance's own bare .env for every ${VAR}
+# substitution below (POSTGRES_PASSWORD, DMARC_APP_DB_PASSWORD, ...) —
+# not a startup error, just this deployment quietly initializing its
+# Postgres roles with the real instance's actual secret values instead of
+# its own.
 
 name: dmarc-dashboard-demo
 
@@ -45,6 +63,11 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    # See docker-compose.yml's migrate service for why build: and image:
+    # coexist — lets `docker compose pull` track a published release the
+    # same way the real instance does, instead of only ever building from
+    # whatever's checked out locally.
+    image: ghcr.io/bjd1997/yetanotherdmarctool:${APP_VERSION:-latest}
     command: sh -c "alembic upgrade head && python -m app.scripts.bootstrap_platform_admin && python -m app.scripts.seed_demo"
     env_file:
       - .env.demo
@@ -60,6 +83,7 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    image: ghcr.io/bjd1997/yetanotherdmarctool:${APP_VERSION:-latest}
     restart: unless-stopped
     # See docker-compose.yml's api service for why this is needed.
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips=${FORWARDED_ALLOW_IPS:-127.0.0.1}
@@ -68,6 +92,11 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://dmarc_app:${DMARC_APP_DB_PASSWORD:-dmarc_app}@db:5432/${POSTGRES_DB:-dmarc}
       DNS_RESOLVER_HOST: resolver
+      # See docker-compose.yml's api service — same "Update now" button,
+      # this deployment's own updater below (its own project, own secret,
+      # own compose file — never touches the real instance).
+      UPDATER_URL: http://updater:9999
+      UPDATER_SHARED_SECRET: ${UPDATER_SHARED_SECRET:-}
     ports:
       # Different host port from the real instance's :8000 — both run on
       # the same host.
@@ -84,6 +113,7 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    image: ghcr.io/bjd1997/yetanotherdmarctool:${APP_VERSION:-latest}
     restart: unless-stopped
     command: python -m app.workers.scheduler
     env_file:
@@ -96,6 +126,35 @@ services:
         condition: service_completed_successfully
       resolver:
         condition: service_started
+    networks:
+      - internal
+
+  # This deployment's own updater — same image as docker-compose.yml's,
+  # but pointed at THIS file via UPDATER_COMPOSE_FILE, so a trigger here
+  # can never apply the real instance's port/image/env config under this
+  # project's name (see updater/server.py's COMPOSE_FILE comment). Its own
+  # Docker socket access is scoped the same way as the real instance's —
+  # see docker-compose.yml's updater service and updater/server.py's
+  # header comment for the full risk writeup, which applies here
+  # identically. Optional, same as the real instance: leave
+  # UPDATER_SHARED_SECRET unset in .env.demo to not run it at all.
+  updater:
+    build:
+      context: ./updater
+    image: ghcr.io/bjd1997/yetanotherdmarctool-updater:${APP_VERSION:-latest}
+    restart: unless-stopped
+    environment:
+      UPDATER_SHARED_SECRET: ${UPDATER_SHARED_SECRET:-}
+      UPDATER_COMPOSE_FILE: docker-compose.demo.yml
+      # Without this, `docker compose`'s own automatic .env lookup (which
+      # ignores which -f file was given) would substitute the REAL
+      # instance's secrets into this deployment's containers instead of
+      # this file's own .env.demo — see updater/server.py's comment on
+      # ENV_FILE for the full story, including how this bit already once.
+      UPDATER_ENV_FILE: .env.demo
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - .:/workspace:ro
     networks:
       - internal
 
