@@ -44,6 +44,34 @@ _CSRF_HEADER_VALUE = "yetanotherdmarctool"
 _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 
+# Response hardening headers applied to every response. Only the CSP
+# directives that can't affect script/style/img loading are set here, so this
+# can't break the SPA: frame-ancestors (clickjacking), base-uri (<base>
+# injection), object-src (plugin embedding), form-action (form hijacking). A
+# full script-src/style-src CSP is a deliberate follow-up — index.html has an
+# inline theme-bootstrap <script> that would need its sha256 hash allow-listed
+# first, and there's no way to verify a strict CSP doesn't break rendering
+# without a browser in the loop.
+_SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Content-Security-Policy": "frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'",
+}
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    for header, value in _SECURITY_HEADERS.items():
+        response.headers.setdefault(header, value)
+    # HSTS only when this instance is actually served over HTTPS (every real
+    # deployment, behind NPM) — never on plain-http localhost smoke testing.
+    if settings.public_base_url.startswith("https://"):
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return response
+
+
 @app.middleware("http")
 async def enforce_csrf_header(request: Request, call_next):
     if (
@@ -203,7 +231,13 @@ if STATIC_DIR.exists():
 
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str) -> FileResponse:
-        candidate = STATIC_DIR / full_path
-        if full_path and candidate.is_file():
+        # Contain to the static root: resolve() collapses any `..`/encoded
+        # traversal and symlinks, and is_relative_to() rejects anything that
+        # escaped the directory (e.g. /%2e%2e/app/config.py, //etc/passwd).
+        # Without this, `STATIC_DIR / full_path` served arbitrary files —
+        # `FileResponse` will happily read /etc/passwd or the app source.
+        root = STATIC_DIR.resolve()
+        candidate = (root / full_path).resolve()
+        if full_path and candidate.is_file() and candidate.is_relative_to(root):
             return FileResponse(candidate, headers=_NO_STORE)
-        return FileResponse(STATIC_DIR / "index.html", headers=_NO_STORE)
+        return FileResponse(root / "index.html", headers=_NO_STORE)
