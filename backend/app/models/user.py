@@ -9,6 +9,7 @@ from app.db.base import Base
 from app.models.enums import AuthMethod, UserRole, UserStatus
 from app.models.mixins import TimestampMixin, UUIDPkMixin
 from app.models.pg_enum import pg_enum
+from app.services.auth.totp_secret import EncryptedSecret
 
 
 class User(UUIDPkMixin, TimestampMixin, Base):
@@ -39,7 +40,10 @@ class User(UUIDPkMixin, TimestampMixin, Base):
     # login can complete — TOTP is mandatory for local-auth users, so a
     # session is never issued until it's set (see app/routers/auth.py).
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    otp_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Encrypted at rest via EncryptedSecret (Fernet) — the DB column holds a
+    # Fernet token (~140 chars), never the raw base32 secret; widened to
+    # varchar(255) in migration 0020.
+    otp_secret: Mapped[str | None] = mapped_column(EncryptedSecret(255), nullable=True)
     otp_enrolled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     role: Mapped[UserRole] = mapped_column(
