@@ -55,7 +55,7 @@ def generate_recovery_codes() -> list[tuple[str, str]]:
     persisted."""
     codes = []
     for _ in range(RECOVERY_CODE_COUNT):
-        plaintext = "-".join(secrets.token_hex(2) for _ in range(2))
+        plaintext = "-".join(secrets.token_hex(2) for _ in range(4))
         codes.append((plaintext, _hash_recovery_code(plaintext)))
     return codes
 

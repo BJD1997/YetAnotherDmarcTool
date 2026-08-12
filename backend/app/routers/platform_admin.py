@@ -28,8 +28,9 @@ from app.models.platform_admin_mfa_pending_challenge import PlatformAdminMfaPend
 from app.models.platform_admin_recovery_code import PlatformAdminRecoveryCode
 from app.models.user import User
 from app.services.auth import session_manager, totp
+from app.services.auth.rate_limit import login_limiter, otp_limiter, rate_limiter
 from app.services.auth.entra_links import entra_consent_urls
-from app.services.auth.password import hash_password, verify_password
+from app.services.auth.password import dummy_verify, hash_password, verify_password
 from app.services.auth.session_manager import cookie_kwargs
 from app.services.auth.tokens import hash_token, new_opaque_token
 
@@ -266,11 +267,16 @@ async def _get_pending_admin(request: Request, db: AsyncSession) -> tuple[Platfo
     return admin, challenge
 
 
-@router.post("/login")
+@router.post("/login", dependencies=[Depends(rate_limiter(login_limiter))])
 async def admin_login(body: AdminLoginRequest, request: Request, db: AsyncSession = Depends(get_db)) -> Response:
     result = await db.execute(select(PlatformAdmin).where(PlatformAdmin.email == body.email))
     admin = result.scalar_one_or_none()
-    if admin is None or not admin.is_active or not verify_password(body.password, admin.password_hash):
+    password_ok = admin is not None and verify_password(body.password, admin.password_hash)
+    if admin is None:
+        # Constant-work verify so a missing admin email isn't faster to
+        # reject than an existing one (user enumeration).
+        dummy_verify()
+    if not password_ok or not admin.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
 
     response = JSONResponse({"needs_enrollment": admin.otp_enrolled_at is None})
@@ -279,7 +285,7 @@ async def admin_login(body: AdminLoginRequest, request: Request, db: AsyncSessio
     return response
 
 
-@router.post("/verify-otp")
+@router.post("/verify-otp", dependencies=[Depends(rate_limiter(otp_limiter))])
 async def admin_verify_otp(body: AdminVerifyOtpRequest, request: Request, db: AsyncSession = Depends(get_db)) -> Response:
     admin, challenge = await _get_pending_admin(request, db)
 

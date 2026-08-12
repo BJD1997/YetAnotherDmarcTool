@@ -18,7 +18,8 @@ from app.models.password_setup_token import PasswordSetupToken
 from app.models.user import User
 from app.models.user_recovery_code import UserRecoveryCode
 from app.services.auth import entra_oidc, pkce, session_manager, totp
-from app.services.auth.password import hash_password, verify_password
+from app.services.auth.password import dummy_verify, hash_password, verify_password
+from app.services.auth.rate_limit import login_limiter, otp_limiter, rate_limiter
 from app.services.auth.session_manager import cookie_kwargs
 from app.services.auth.sign_in_log import client_network_info, record_sign_in_event
 from app.services.auth.tokens import hash_token, new_opaque_token
@@ -264,7 +265,7 @@ async def _get_pending_user(request: Request, db: AsyncSession) -> tuple[User, M
     return user, challenge
 
 
-@router.post("/local-login")
+@router.post("/local-login", dependencies=[Depends(rate_limiter(login_limiter))])
 async def local_login(body: LocalLoginRequest, request: Request, db: AsyncSession = Depends(get_db)) -> Response:
     ip_address, user_agent = client_network_info(request)
     await set_platform_admin_context(db, is_admin=True)
@@ -273,6 +274,9 @@ async def local_login(body: LocalLoginRequest, request: Request, db: AsyncSessio
     )
     user = result.scalar_one_or_none()
     if user is None:
+        # Spend the same Argon2 cost as a real verify so response timing
+        # doesn't reveal whether this email exists (user enumeration).
+        dummy_verify()
         # No user matched at all — nothing to attribute this to beyond the
         # attempted email itself, so organization_id stays unset.
         await record_sign_in_event(
@@ -283,7 +287,13 @@ async def local_login(body: LocalLoginRequest, request: Request, db: AsyncSessio
         await db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
 
-    if user.status != UserStatus.active or user.password_hash is None or not verify_password(body.password, user.password_hash):
+    password_ok = user.password_hash is not None and verify_password(body.password, user.password_hash)
+    if user.password_hash is None:
+        # No local password set yet — still burn a verify so this branch is
+        # indistinguishable, timing-wise, from a wrong password for an
+        # enrolled user (the status check below short-circuits otherwise).
+        dummy_verify()
+    if not password_ok or user.status != UserStatus.active:
         # Same generic 401 as the "no user" case above — deliberately not
         # distinguishing the response, only the logged detail, to avoid
         # user enumeration.
@@ -340,7 +350,7 @@ async def local_login(body: LocalLoginRequest, request: Request, db: AsyncSessio
     return response
 
 
-@router.post("/verify-otp")
+@router.post("/verify-otp", dependencies=[Depends(rate_limiter(otp_limiter))])
 async def verify_otp(body: VerifyOtpRequest, request: Request, db: AsyncSession = Depends(get_db)) -> Response:
     ip_address, user_agent = client_network_info(request)
     try:
