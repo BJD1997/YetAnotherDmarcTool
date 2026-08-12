@@ -11,6 +11,7 @@ import httpx
 
 from app.services.dns_checks.base import Finding, is_null_mx
 from app.services.dns_checks.resolver import DnsLookupError, resolve_mx, resolve_txt_strict
+from app.services.dns_checks.ssrf_guard import BlockedAddressError, assert_public_host
 
 _TXT_RE = re.compile(r"(?i)^v=STSv1;\s*id=([A-Za-z0-9]+);?\s*$")
 POLICY_FETCH_TIMEOUT = 10.0
@@ -29,9 +30,19 @@ async def fetch_policy_file(domain: str) -> PolicyFetchResult:
     policy builder (GET /domains/{id}/dns/mta-sts-builder, showing the
     user their current policy to edit) — one implementation of the fetch,
     not two."""
-    policy_url = f"https://mta-sts.{domain}/.well-known/mta-sts.txt"
+    policy_host = f"mta-sts.{domain}"
+    policy_url = f"https://{policy_host}/.well-known/mta-sts.txt"
     try:
-        async with httpx.AsyncClient(timeout=POLICY_FETCH_TIMEOUT) as client:
+        # SSRF guard: refuse before connecting if the customer pointed
+        # mta-sts.<domain> at an internal/loopback/metadata address.
+        await assert_public_host(policy_host)
+    except BlockedAddressError as exc:
+        return PolicyFetchResult(body=None, error=f"Refusing to fetch MTA-STS policy: {exc}")
+    try:
+        # follow_redirects stays off (httpx default) so a 3xx to an internal
+        # host can't sidestep the guard above — a redirect is treated as a
+        # non-200 fetch failure instead.
+        async with httpx.AsyncClient(timeout=POLICY_FETCH_TIMEOUT, follow_redirects=False) as client:
             response = await client.get(policy_url)
     except httpx.RequestError as exc:
         # httpx's own exceptions (ConnectTimeout, ConnectError, ...) often
