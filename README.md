@@ -274,6 +274,12 @@ is a solved problem best left to a dedicated proxy rather than reimplemented
 here. You'll also want a domain/subdomain pointed at this host to serve it
 from (e.g. `dmarc.yourdomain.com`).
 
+Two ways to deploy, same containers either way — the Docker Compose CLI, or
+**[Portainer Stacks](#deploy-with-portainer-stacks)** if you manage Docker
+through Portainer's web UI.
+
+### Deploy with Docker Compose (CLI)
+
 **1. Clone it**
 
 ```bash
@@ -331,6 +337,52 @@ and create an organization. From there, see
 [`docs/onboarding.md`](docs/onboarding.md) for the full walkthrough —
 connecting a mailbox, verifying a domain, adding DKIM selectors, and what
 "done" looks like.
+
+### Deploy with Portainer (Stacks)
+
+If you manage Docker through [Portainer](https://www.portainer.io/), deploy
+the Portainer-tailored compose file —
+[`docker-compose.portainer.yml`](docker-compose.portainer.yml) — as a
+**Repository** stack. Use the Repository method, *not* the web editor: the
+stack needs files from this repo (the Postgres init script that creates the
+RLS role, and the resolver config), which only the git clone brings along.
+That compose pulls the published image instead of building, and takes all its
+settings from environment variables you set in Portainer's UI instead of a
+`.env` file.
+
+**1.** In Portainer: **Stacks → Add stack → Repository**.
+
+**2.** Point it at this repo:
+- **Repository URL**: `https://github.com/BJD1997/YetAnotherDmarcTool`
+- **Reference**: `refs/heads/master` (or a release tag, e.g. `refs/tags/v0.1.2`)
+- **Compose path**: `docker-compose.portainer.yml`
+
+**3.** Under **Environment variables**, add the settings below (they fill the
+`${...}` placeholders in the compose file — the same options documented inline
+in [`.env.example`](.env.example)):
+
+| Variable | Required | Notes |
+|---|---|---|
+| `FERNET_KEY` | **Yes** | Encrypts TOTP secrets & stored credentials at rest. Generate one with:<br>`docker run --rm ghcr.io/bjd1997/yetanotherdmarctool:latest python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
+| `PUBLIC_BASE_URL` | **Yes** | Public HTTPS URL your reverse proxy serves this at, e.g. `https://dmarc.yourdomain.com` |
+| `POSTGRES_PASSWORD` | **Yes** | Any strong password |
+| `DMARC_APP_DB_PASSWORD` | **Yes** | A second, different strong password |
+| `PLATFORM_ADMIN_BOOTSTRAP_EMAIL` / `PLATFORM_ADMIN_BOOTSTRAP_PASSWORD` | Recommended | Your first admin login (a no-op once an admin exists — change the password after first sign-in) |
+| `FORWARDED_ALLOW_IPS` | Recommended | Your reverse proxy's IP, so real client IPs (not the proxy's) get logged |
+| `APP_VERSION` | Optional | Image tag to run (default `latest`); pin to a release tag like `v0.1.2` if you prefer |
+| `API_HOST_PORT` | Optional | Host port to publish (default `8000`); change if `8000` is taken |
+| `ENTRA_MAIL_CLIENT_ID` / `ENTRA_MAIL_CLIENT_SECRET` | Optional | Report ingestion via Microsoft Graph — leave unset for DNS-checks-only |
+| `ENTRA_SSO_CLIENT_ID` / `ENTRA_SSO_CLIENT_SECRET`, `CLOUDFLARE_*`, `HOSTED_REPORTS_*`, `SECURITY_CONTACT_EMAIL`, `MTA_STS_POLICY_*` | Optional | Feature-gated — leave unset to keep the feature off |
+
+**4.** **Deploy the stack.** `migrate` runs first (schema migrations +
+bootstrapping the admin account), then `api` and `worker` start. Point your
+reverse proxy's upstream at this host's `:8000` (or your `API_HOST_PORT`),
+exactly as in the CLI path.
+
+**Updating:** change the `APP_VERSION` variable to the release you want and
+redeploy the stack — Portainer re-pulls the image. (The in-app "Update now"
+button is for the CLI deployment only; it isn't wired into the Portainer
+path, which is why the `updater` service is omitted from this compose file.)
 
 ## Configuration
 

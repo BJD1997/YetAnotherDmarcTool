@@ -1,0 +1,136 @@
+# YetAnotherDmarcTool — Portainer Stacks variant.
+#
+# The main docker-compose.yml is written for the CLI (`docker compose
+# --env-file .env up`) and won't deploy cleanly in Portainer as-is: it relies
+# on `env_file: .env`, local `build:` contexts, and bind-mounts to repo files.
+# This file is the Portainer-friendly equivalent, meant to be deployed as a
+# **Git repository stack** (Portainer → Stacks → Add stack → Repository), so
+# the repo's own files (db/init, resolver configs) are present in the clone:
+#
+#   - No `build:` — pulls the published image from GHCR instead.
+#   - No `env_file:` — every setting is passed via `environment:` and filled
+#     from the "Environment variables" you add in Portainer's stack UI.
+#   - The `updater` service is omitted (in Portainer you update by changing
+#     the APP_VERSION variable and redeploying the stack).
+#
+# Required Portainer environment variables: FERNET_KEY, PUBLIC_BASE_URL,
+# POSTGRES_PASSWORD, DMARC_APP_DB_PASSWORD. See the README "Deploy with
+# Portainer" section for the full list and how to generate the Fernet key.
+
+# Shared app config, merged into api/worker/migrate. Anything left unset in
+# Portainer keeps its feature switched off (same feature-gating as .env.example).
+x-app-environment: &app-environment
+  PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL to your public https URL}
+  FERNET_KEY: ${FERNET_KEY:?generate one - see the README}
+  ENVIRONMENT: ${ENVIRONMENT:-production}
+  DNS_RESOLVER_HOST: resolver
+  # First platform-admin bootstrap (no-op once an admin exists).
+  PLATFORM_ADMIN_BOOTSTRAP_EMAIL: ${PLATFORM_ADMIN_BOOTSTRAP_EMAIL:-}
+  PLATFORM_ADMIN_BOOTSTRAP_PASSWORD: ${PLATFORM_ADMIN_BOOTSTRAP_PASSWORD:-}
+  # Report ingestion via Microsoft Graph (leave unset for DNS-checks-only).
+  ENTRA_MAIL_CLIENT_ID: ${ENTRA_MAIL_CLIENT_ID:-}
+  ENTRA_MAIL_CLIENT_SECRET: ${ENTRA_MAIL_CLIENT_SECRET:-}
+  # Entra SSO org login (optional; local email+password+TOTP works without it).
+  ENTRA_SSO_CLIENT_ID: ${ENTRA_SSO_CLIENT_ID:-}
+  ENTRA_SSO_CLIENT_SECRET: ${ENTRA_SSO_CLIENT_SECRET:-}
+  ENTRA_SSO_AUTHORITY: ${ENTRA_SSO_AUTHORITY:-https://login.microsoftonline.com/organizations}
+  # Operator-hosted reporting mailbox (optional).
+  HOSTED_REPORTS_TENANT_ID: ${HOSTED_REPORTS_TENANT_ID:-}
+  HOSTED_REPORTS_MAILBOX_ADDRESS: ${HOSTED_REPORTS_MAILBOX_ADDRESS:-}
+  HOSTED_REPORTS_ADDRESS_DOMAIN: ${HOSTED_REPORTS_ADDRESS_DOMAIN:-}
+  # Cloudflare auto-provisioning of the RFC 7489 authorization record (optional).
+  CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+  CLOUDFLARE_ZONE_ID: ${CLOUDFLARE_ZONE_ID:-}
+  # security.txt contact + this instance's own MTA-STS policy (optional).
+  SECURITY_CONTACT_EMAIL: ${SECURITY_CONTACT_EMAIL:-}
+  MTA_STS_POLICY_HOSTNAME: ${MTA_STS_POLICY_HOSTNAME:-}
+  MTA_STS_POLICY_BODY: ${MTA_STS_POLICY_BODY:-}
+  # Update check (against GitHub releases). Disable on air-gapped installs.
+  UPDATE_CHECK_ENABLED: ${UPDATE_CHECK_ENABLED:-true}
+  UPDATE_CHECK_REPO: ${UPDATE_CHECK_REPO:-BJD1997/YetAnotherDmarcTool}
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dmarc}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set a strong POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-dmarc}
+      # Read once by db/init/01-create-app-role.sh to create the non-superuser
+      # dmarc_app role that RLS is actually enforced against.
+      DMARC_APP_DB_PASSWORD: ${DMARC_APP_DB_PASSWORD:?set a strong DMARC_APP_DB_PASSWORD}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dmarc}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - internal
+
+  resolver:
+    image: mvance/unbound:latest
+    restart: unless-stopped
+    volumes:
+      - ./resolver/forward-records.conf:/opt/unbound/etc/unbound/forward-records.conf:ro
+      - ./resolver/overrides.conf:/opt/unbound/etc/unbound/unbound.conf.d/overrides.conf:ro
+    networks:
+      - internal
+
+  migrate:
+    image: ghcr.io/bjd1997/yetanotherdmarctool:${APP_VERSION:-latest}
+    command: sh -c "alembic upgrade head && python -m app.scripts.bootstrap_platform_admin"
+    environment:
+      <<: *app-environment
+      # Migrations/bootstrap run as the DB owner (superuser) role.
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-dmarc}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-dmarc}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - internal
+
+  api:
+    image: ghcr.io/bjd1997/yetanotherdmarctool:${APP_VERSION:-latest}
+    restart: unless-stopped
+    # Set FORWARDED_ALLOW_IPS to your reverse proxy's IP so the real client IP
+    # (not the proxy's) is recorded — see the README.
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips=${FORWARDED_ALLOW_IPS:-127.0.0.1}
+    environment:
+      <<: *app-environment
+      # api/worker connect as the non-owner dmarc_app role so RLS applies.
+      DATABASE_URL: postgresql+asyncpg://dmarc_app:${DMARC_APP_DB_PASSWORD}@db:5432/${POSTGRES_DB:-dmarc}
+    ports:
+      - "${API_HOST_PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      resolver:
+        condition: service_started
+    networks:
+      - internal
+
+  worker:
+    image: ghcr.io/bjd1997/yetanotherdmarctool:${APP_VERSION:-latest}
+    restart: unless-stopped
+    command: python -m app.workers.scheduler
+    environment:
+      <<: *app-environment
+      DATABASE_URL: postgresql+asyncpg://dmarc_app:${DMARC_APP_DB_PASSWORD}@db:5432/${POSTGRES_DB:-dmarc}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      resolver:
+        condition: service_started
+    networks:
+      - internal
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  db_data:
