@@ -33,17 +33,30 @@ def _parse_version(version: str) -> tuple[int, int, int, float] | None:
 
 
 def is_newer_version(latest: str, running: str) -> bool:
-    """True only if `latest` actually outranks `running` — plain inequality
-    would flag a "downgrade" (e.g. running v0.1.2-rc2 with prereleases
-    switched back off, so the latest known release becomes the older stable
-    v0.1.1) as an available update. Falls back to inequality when either
-    side isn't a recognized vX.Y.Z[-rcN] tag (e.g. a locally-built "dev"
-    image), since there's nothing more precise to compare against."""
+    """True only if `latest` is a recognized release tag that genuinely
+    outranks `running` (e.g. running v0.1.2-rc2 with prereleases switched
+    back off must NOT flag the older stable v0.1.1 as an available update).
+
+    A `running` version that isn't a recognized vX.Y.Z[-rcN] tag — most
+    importantly a locally-built "dev" image — is treated as off the release
+    channel and never has an update "available": it's presumed built from
+    source and at least current, and "updating" it would in fact DOWNGRADE it
+    to an older tagged release, silently replacing the local build (which is
+    what made the updater feel trigger-happy on dev builds, and was a real
+    downgrade footgun). A `latest` that doesn't parse likewise gives nothing
+    safe to compare against."""
     latest_parsed = _parse_version(latest)
     running_parsed = _parse_version(running)
     if latest_parsed is None or running_parsed is None:
-        return latest != running
+        return False
     return latest_parsed > running_parsed
+
+
+def is_dev_build(version: str) -> bool:
+    """True when `version` isn't a recognized release tag (e.g. a locally
+    built "dev" image) — such a build is off the release channel, so the
+    updater neither prompts for nor allows an update toward a tagged release."""
+    return _parse_version(version) is None
 
 
 async def get_or_create_state(db) -> UpdateCheckState:

@@ -19,10 +19,14 @@ from app.services.update_check import is_newer_version
         # while running a newer rc shouldn't look like an available update
         # to an older stable release.
         ("v0.1.1", "v0.1.2-rc2", False),
-        # Unparseable versions (e.g. a locally-built "dev" image) fall back
-        # to plain inequality rather than silently hiding a real update.
-        ("v0.1.2", "dev", True),
+        # A locally-built "dev" (unparseable) running version is off the
+        # release channel — never treated as having an update available, so
+        # the updater can't silently downgrade it to an older tagged release.
+        ("v0.1.2", "dev", False),
+        ("v0.1.3-rc2", "dev", False),
         ("dev", "dev", False),
+        # An unparseable *latest* likewise gives nothing safe to compare.
+        ("dev", "v0.1.2", False),
     ],
 )
 def test_is_newer_version(latest: str, running: str, expected: bool):

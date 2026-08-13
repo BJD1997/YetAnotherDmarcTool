@@ -12,6 +12,7 @@ interface UpdateStatus {
   check_error: string | null;
   include_prereleases: boolean;
   update_available: boolean;
+  is_dev_build: boolean;
 }
 
 type UpdatePhase = "idle" | "checking" | "updating" | "success" | "error";
@@ -110,6 +111,12 @@ export default function AdminUpdates() {
             <div className="stat-tile-value">{status.latest_version ?? "—"}</div>
           </div>
         </div>
+        {status.is_dev_build && (
+          <p className="section-hint" style={{ marginTop: "0.75rem" }}>
+            <span className="badge badge--neutral">development build</span>{" "}
+            Off the release channel — updates are managed manually (rebuild &amp; redeploy), not from this page.
+          </p>
+        )}
         <p className="section-hint" style={{ marginTop: "0.75rem" }}>
           {status.checked_at ? `Last checked ${new Date(status.checked_at).toLocaleString()}` : "Never checked yet"}
           {status.check_error && <span className="badge badge--critical" style={{ marginLeft: "0.5rem" }}>check failed: {status.check_error}</span>}
