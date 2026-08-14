@@ -300,8 +300,9 @@ Open `.env` and fill in, at minimum:
   in with Microsoft Entra SSO — it's part of the OAuth redirect URI.
 - `POSTGRES_PASSWORD` and `DMARC_APP_DB_PASSWORD` — any two strong, distinct
   passwords.
-- `FERNET_KEY` — generate with:
+- `FERNET_KEY` — 32 random bytes in URL-safe base64. Generate with either:
   ```bash
+  openssl rand -base64 32 | tr '+/' '-_'                                    # no Python needed
   python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
   ```
 - `PLATFORM_ADMIN_BOOTSTRAP_EMAIL` / `PLATFORM_ADMIN_BOOTSTRAP_PASSWORD` —
@@ -364,7 +365,7 @@ in [`.env.example`](.env.example)):
 
 | Variable | Required | Notes |
 |---|---|---|
-| `FERNET_KEY` | **Yes** | Encrypts TOTP secrets & stored credentials at rest. Generate one with:<br>`docker run --rm ghcr.io/bjd1997/yetanotherdmarctool:latest python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
+| `FERNET_KEY` | **Yes** | Encrypts TOTP secrets & stored credentials at rest. Generate one with:<br>`openssl rand -base64 32 \| tr '+/' '-_'` |
 | `PUBLIC_BASE_URL` | **Yes** | Public HTTPS URL your reverse proxy serves this at, e.g. `https://dmarc.yourdomain.com` |
 | `POSTGRES_PASSWORD` | **Yes** | Any strong password |
 | `DMARC_APP_DB_PASSWORD` | **Yes** | A second, different strong password |
