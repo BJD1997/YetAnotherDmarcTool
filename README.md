@@ -340,24 +340,25 @@ connecting a mailbox, verifying a domain, adding DKIM selectors, and what
 
 ### Deploy with Portainer (Stacks)
 
-If you manage Docker through [Portainer](https://www.portainer.io/), deploy
-the Portainer-tailored compose file —
-[`docker-compose.portainer.yml`](docker-compose.portainer.yml) — as a
-**Repository** stack. Use the Repository method, *not* the web editor: the
-stack needs files from this repo (the Postgres init script that creates the
-RLS role, and the resolver config), which only the git clone brings along.
-That compose pulls the published image instead of building, and takes all its
-settings from environment variables you set in Portainer's UI instead of a
-`.env` file.
+If you manage Docker through [Portainer](https://www.portainer.io/), use the
+Portainer-tailored compose file —
+[`docker-compose.portainer.yml`](docker-compose.portainer.yml) — with the
+**Web editor** method. It's fully self-contained: it pulls the published image
+(no build) and embeds the two files the CLI compose bind-mounts (the Postgres
+init script for the RLS role, and the resolver config) directly in the YAML,
+so there's nothing to clone.
 
-**1.** In Portainer: **Stacks → Add stack → Repository**.
+> **Use the Web editor, not the Repository method.** With a Repository stack,
+> Portainer only reads a `stack.env` committed *in the repo* — the variables
+> you type in the UI are ignored, so `${...}` placeholders fall back to their
+> defaults (which is why `API_HOST_PORT` wouldn't take and it kept trying to
+> bind `:8000`). The Web editor builds the stack's environment from the
+> variables you set, so they actually apply.
 
-**2.** Point it at this repo:
-- **Repository URL**: `https://github.com/BJD1997/YetAnotherDmarcTool`
-- **Reference**: `refs/heads/master` (or a release tag, e.g. `refs/tags/v0.1.2`)
-- **Compose path**: `docker-compose.portainer.yml`
+**1.** In Portainer: **Stacks → Add stack → Web editor**, and paste the
+contents of `docker-compose.portainer.yml`.
 
-**3.** Under **Environment variables**, add the settings below (they fill the
+**2.** Under **Environment variables**, add the settings below (they fill the
 `${...}` placeholders in the compose file — the same options documented inline
 in [`.env.example`](.env.example)):
 
@@ -374,10 +375,11 @@ in [`.env.example`](.env.example)):
 | `ENTRA_MAIL_CLIENT_ID` / `ENTRA_MAIL_CLIENT_SECRET` | Optional | Report ingestion via Microsoft Graph — leave unset for DNS-checks-only |
 | `ENTRA_SSO_CLIENT_ID` / `ENTRA_SSO_CLIENT_SECRET`, `CLOUDFLARE_*`, `HOSTED_REPORTS_*`, `SECURITY_CONTACT_EMAIL`, `MTA_STS_POLICY_*` | Optional | Feature-gated — leave unset to keep the feature off |
 
-**4.** **Deploy the stack.** `migrate` runs first (schema migrations +
-bootstrapping the admin account), then `api` and `worker` start. Point your
-reverse proxy's upstream at this host's `:8000` (or your `API_HOST_PORT`),
-exactly as in the CLI path.
+**3.** **Deploy the stack.** `migrate` runs first (schema migrations +
+bootstrapping the admin account), then `api` and `worker` start. If `:8000`
+is already in use on the host (e.g. another instance), set `API_HOST_PORT` to
+a free port. Point your reverse proxy's upstream at this host's `:8000` (or
+your `API_HOST_PORT`), exactly as in the CLI path.
 
 **Updating:** change the `APP_VERSION` variable to the release you want and
 redeploy the stack — Portainer re-pulls the image. (The in-app "Update now"
