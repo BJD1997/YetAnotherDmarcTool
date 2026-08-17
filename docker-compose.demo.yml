@@ -68,7 +68,7 @@ services:
     # same way the real instance does, instead of only ever building from
     # whatever's checked out locally.
     image: ghcr.io/bjd1997/yetanotherdmarctool:${APP_VERSION:-latest}
-    command: sh -c "alembic upgrade head && python -m app.scripts.bootstrap_platform_admin && python -m app.scripts.seed_demo"
+    command: sh -c "alembic upgrade head && python -m app.scripts.bootstrap_platform_admin && python -m app.scripts.seed_demo && python -m app.scripts.seed_demo_reports"
     env_file:
       - .env.demo
     environment:
