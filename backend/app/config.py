@@ -78,6 +78,13 @@ class Settings(BaseSettings):
     demo_login_email: str | None = None
     demo_login_password: str | None = None
 
+    # When true, sign-in-event IP addresses are stored masked (host bits
+    # dropped, e.g. 203.0.x.x) instead of in full. Intended for the public
+    # demo, whose sign-in log is visible to every visitor and shouldn't expose
+    # other visitors' real IPs. Off by default — the real instance keeps full
+    # IPs, which it needs for security auditing (see the sign-in-events page).
+    mask_sign_in_ips: bool = False
+
     # DNS resolver to send checker queries through (the `resolver` container) (Phase 3)
     dns_resolver_host: str = "resolver"
 

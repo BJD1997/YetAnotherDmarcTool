@@ -9,15 +9,34 @@ insert is the last DB operation before that request's own commit, so
 widening the context here can't leak anything to a later read in the same
 request."""
 
+import ipaddress
 from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.db.rls import set_platform_admin_context
 from app.models.enums import AuthMethod, SignInResult
 from app.models.sign_in_event import SignInEvent
+
+
+def _mask_ip(ip: str | None) -> str | None:
+    """Drop the host portion so the sign-in log shows the rough network, not
+    the exact address — for a public demo (settings.mask_sign_in_ips). Keeps
+    the first two labels: 203.0.113.10 -> 203.0.x.x, 2606:4700::1 -> 2606:4700:x."""
+    if not ip:
+        return ip
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return "masked"
+    if addr.version == 4:
+        a, b = str(addr).split(".")[:2]
+        return f"{a}.{b}.x.x"
+    groups = addr.exploded.split(":")
+    return f"{groups[0]}:{groups[1]}:x"
 
 
 def client_network_info(request: Request) -> tuple[str | None, str | None]:
@@ -56,6 +75,8 @@ async def record_sign_in_event(
     created_at: datetime | None = None,
 ) -> None:
     await set_platform_admin_context(db, is_admin=True)
+    if settings.mask_sign_in_ips:
+        ip_address = _mask_ip(ip_address)
     db.add(
         SignInEvent(
             organization_id=organization_id,
