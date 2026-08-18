@@ -45,17 +45,17 @@ REPORTERS = ["google.com", "Enterprise Outlook", "Yahoo! Inc.", "Mail.Ru", "Fast
 #   spoof     -> SPF fail + DKIM fail  (DMARC fail)
 # (ip, service_label|None, ptr|None, header_from, outcome, weight, (min_vol, max_vol))
 SOURCES = [
-    ("40.107.0.42", "Microsoft 365", "mail-0107.protection.outlook.com", DEMO_DOMAIN, "aligned", 40, (400, 3000)),
-    ("209.85.220.41", "Google Workspace", "mail-209-85-220-41.google.com", DEMO_DOMAIN, "aligned", 18, (100, 900)),
-    ("149.72.130.17", "SendGrid", "o1.ptr.sendgrid.net", DEMO_DOMAIN, "aligned", 14, (200, 1500)),
-    ("54.240.11.30", "Amazon SES", "a11-30.smtp-out.amazonses.com", DEMO_DOMAIN, "aligned", 8, (50, 600)),
+    ("40.107.0.42", "Microsoft 365", "mail-0107.protection.outlook.com", DEMO_DOMAIN, "aligned", 40, (80, 650)),
+    ("209.85.220.41", "Google Workspace", "mail-209-85-220-41.google.com", DEMO_DOMAIN, "aligned", 18, (20, 200)),
+    ("149.72.130.17", "SendGrid", "o1.ptr.sendgrid.net", DEMO_DOMAIN, "aligned", 14, (40, 320)),
+    ("54.240.11.30", "Amazon SES", "a11-30.smtp-out.amazonses.com", DEMO_DOMAIN, "aligned", 8, (10, 130)),
     # ESP sending as a marketing subdomain that was never registered -> "detected domains".
-    ("149.72.140.9", "SendGrid", "o2.ptr.sendgrid.net", "newsletter." + DEMO_DOMAIN, "aligned", 9, (300, 1800)),
+    ("149.72.140.9", "SendGrid", "o2.ptr.sendgrid.net", "newsletter." + DEMO_DOMAIN, "aligned", 9, (60, 380)),
     # Forwarding: SPF breaks in transit, DKIM survives -> still DMARC pass.
-    ("128.148.20.15", "brown.edu", "mail.brown.edu", DEMO_DOMAIN, "dkim_only", 5, (5, 60)),
+    ("128.148.20.15", "brown.edu", "mail.brown.edu", DEMO_DOMAIN, "dkim_only", 5, (2, 18)),
     # Unauthorized / spoofing infrastructure -> DMARC fail (no PTR, shown as raw IP).
-    ("45.137.21.88", None, None, DEMO_DOMAIN, "spoof", 6, (10, 220)),
-    ("193.42.33.104", None, None, DEMO_DOMAIN, "spoof", 4, (5, 130)),
+    ("45.137.21.88", None, None, DEMO_DOMAIN, "spoof", 6, (3, 50)),
+    ("193.42.33.104", None, None, DEMO_DOMAIN, "spoof", 4, (2, 30)),
 ]
 _MAX_WEIGHT = max(s[5] for s in SOURCES)
 
