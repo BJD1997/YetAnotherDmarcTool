@@ -18,12 +18,24 @@ interface MergedRow extends SenderInventoryRow {
 // out of the main scan, not worth deleting the record of.
 const BLOCKED_LOW_VOLUME_THRESHOLD = 10;
 
-async function fetchDomainInventory(domain: Domain): Promise<MergedRow[]> {
-  const rows = await api.get<SenderInventoryRow[]>(`/domains/${domain.id}/dmarc/sender-inventory`);
+async function fetchDomainInventory(domain: Domain, days: number | null): Promise<MergedRow[]> {
+  const qs = days === null ? "" : `?days=${days}`;
+  const rows = await api.get<SenderInventoryRow[]>(`/domains/${domain.id}/dmarc/sender-inventory${qs}`);
   return rows.map((r) => ({ ...r, domain_id: domain.id, domain_name: domain.name }));
 }
 
-type FilterKey = "all" | "failing" | "unknown" | "approved" | "needs_owner" | "spoofed" | "rdns";
+// Recency window: senders/IPs with no traffic in this window drop out, so a
+// decommissioned host (e.g. an old web01 replaced by web02) stops cluttering
+// the list without any manual step. Defaults to a recent window; "All time"
+// still shows everything.
+const WINDOW_OPTIONS: { label: string; days: number | null }[] = [
+  { label: "Last 30 days", days: 30 },
+  { label: "Last 90 days", days: 90 },
+  { label: "All time", days: null },
+];
+const DEFAULT_WINDOW_DAYS: number | null = 90;
+
+type FilterKey = "all" | "failing" | "unknown" | "approved" | "needs_owner" | "spoofed" | "rdns" | "archived";
 
 const FILTERS: { key: FilterKey; label: string }[] = [
   { key: "all", label: "All" },
@@ -33,6 +45,7 @@ const FILTERS: { key: FilterKey; label: string }[] = [
   { key: "needs_owner", label: "Needs owner" },
   { key: "spoofed", label: "Likely spoofed" },
   { key: "rdns", label: "rDNS issues" },
+  { key: "archived", label: "Archived" },
 ];
 
 function matchesFilter(row: MergedRow, filter: FilterKey): boolean {
@@ -53,6 +66,8 @@ function matchesFilter(row: MergedRow, filter: FilterKey): boolean {
       // Only meaningful for senders you've claimed as your own — a spoofer with
       // no reverse DNS is expected, not a problem to fix.
       return row.status === "approved" && row.fcrdns_status !== "pass";
+    case "archived":
+      return row.status === "archived";
   }
 }
 
@@ -62,14 +77,15 @@ export default function SenderInventory({ domainId, domains }: { domainId: strin
   const queryClient = useQueryClient();
   const [filter, setFilter] = useState<FilterKey>("all");
   const [showBlockedGroup, setShowBlockedGroup] = useState(false);
+  const [windowDays, setWindowDays] = useState<number | null>(DEFAULT_WINDOW_DAYS);
 
   const targetDomains = domainId ? domains.filter((d) => d.id === domainId) : domains;
   const targetIds = targetDomains.map((d) => d.id).join(",");
 
   const { data, isLoading } = useQuery({
-    queryKey: ["sender-inventory", targetIds],
+    queryKey: ["sender-inventory", targetIds, windowDays],
     queryFn: async () => {
-      const results = await Promise.all(targetDomains.map(fetchDomainInventory));
+      const results = await Promise.all(targetDomains.map((d) => fetchDomainInventory(d, windowDays)));
       // Worst first (volume x fail rate), not raw volume — the same
       // "top failing" ordering OutboundTable uses.
       return results.flat().sort((a, b) => riskScore(b) - riskScore(a));
@@ -91,7 +107,11 @@ export default function SenderInventory({ domainId, domains }: { domainId: strin
   });
 
   const allRows = data ?? [];
-  const filteredRows = allRows.filter((r) => matchesFilter(r, filter));
+  // Archived senders are hidden everywhere except the explicit "Archived"
+  // filter — that's the whole point of archiving one.
+  const filteredRows = allRows.filter(
+    (r) => matchesFilter(r, filter) && (filter === "archived" || r.status !== "archived"),
+  );
   const rows = filteredRows.filter((r) => !(r.status === "blocked" && r.volume < BLOCKED_LOW_VOLUME_THRESHOLD));
   const collapsedBlockedRows = filteredRows.filter(
     (r) => r.status === "blocked" && r.volume < BLOCKED_LOW_VOLUME_THRESHOLD,
@@ -99,8 +119,21 @@ export default function SenderInventory({ domainId, domains }: { domainId: strin
 
   return (
     <div className="card">
-      <div className="card-header">
+      <div className="card-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem" }}>
         <h3>Sender inventory</h3>
+        <select
+          className="input"
+          style={{ padding: "0.25rem 0.5rem", fontSize: "0.8rem", width: "auto" }}
+          value={windowDays ?? "all"}
+          onChange={(e) => setWindowDays(e.target.value === "all" ? null : Number(e.target.value))}
+          title="Senders with no traffic in this window drop off — retired hosts stop cluttering the list."
+        >
+          {WINDOW_OPTIONS.map((o) => (
+            <option key={o.label} value={o.days ?? "all"}>
+              {o.label}
+            </option>
+          ))}
+        </select>
       </div>
       {!isLoading && allRows.length > 0 && (
         <div className="chip-row" style={{ marginBottom: "0.9rem" }}>
@@ -177,6 +210,7 @@ const STATUS_ROLE: Record<SenderReviewStatus, "good" | "warning" | "serious" | "
   approved: "good",
   ignored: "neutral",
   blocked: "critical",
+  archived: "neutral",
 };
 
 // Per-IP reverse-DNS detail shown in the expanded sender view: the PTR
@@ -200,6 +234,25 @@ function FcrdnsCell({ ip }: { ip: SenderSourceIp }) {
           not confirmed
         </span>
       )}
+    </span>
+  );
+}
+
+// Per-address-family reverse-DNS status shown on an approved sender's row, so a
+// clean IPv4 vs a broken IPv6 (the case Gmail/Microsoft actually junk) reads at
+// a glance without expanding.
+function FamilyRdnsBadge({ family, status }: { family: "IPv4" | "IPv6"; status: "pass" | "partial" | "fail" }) {
+  const role = status === "pass" ? "good" : status === "fail" ? "serious" : "warning";
+  const glyph = status === "pass" ? "✓" : status === "fail" ? "✗" : "⚠";
+  const title =
+    status === "pass"
+      ? `Every ${family} sending IP has forward-confirmed reverse DNS.`
+      : status === "fail"
+        ? `No ${family} sending IP has forward-confirmed reverse DNS (PTR pointing back to the IP)${family === "IPv6" ? " — Gmail/Microsoft commonly junk or reject IPv6 mail without it." : "."}`
+        : `Some ${family} sending IPs lack forward-confirmed reverse DNS.`;
+  return (
+    <span className={`badge badge--${role}`} style={{ marginLeft: "0.4rem" }} title={title}>
+      {family} {glyph}
     </span>
   );
 }
@@ -255,16 +308,18 @@ function SenderInventoryRowView({
               </span>
             )}
             {row.status === "approved" && row.fcrdns_status !== "pass" && (
+              <>
+                {row.fcrdns_status_v4 !== null && <FamilyRdnsBadge family="IPv4" status={row.fcrdns_status_v4} />}
+                {row.fcrdns_status_v6 !== null && <FamilyRdnsBadge family="IPv6" status={row.fcrdns_status_v6} />}
+              </>
+            )}
+            {row.sends_ipv6 && !(row.status === "approved" && row.fcrdns_status !== "pass") && (
               <span
-                className={`badge badge--${row.fcrdns_status === "fail" ? "serious" : "warning"}`}
+                className="badge badge--neutral"
                 style={{ marginLeft: "0.4rem" }}
-                title={
-                  row.fcrdns_status === "fail"
-                    ? "None of this sender's IPs have forward-confirmed reverse DNS (PTR pointing back to the IP) — a deliverability risk. Expand to see each IP."
-                    : "Some of this sender's IPs lack forward-confirmed reverse DNS (PTR pointing back to the IP). Expand to see which."
-                }
+                title="This sender uses IPv6. IPv6 senders face stricter deliverability rules (a valid PTR and, for Gmail/Microsoft, DKIM are effectively required)."
               >
-                {row.fcrdns_status === "fail" ? "rDNS fail" : "rDNS partial"}
+                IPv6
               </span>
             )}
           </div>
@@ -295,6 +350,7 @@ function SenderInventoryRowView({
               <option value="approved">approved</option>
               <option value="ignored">ignored</option>
               <option value="blocked">blocked</option>
+              <option value="archived">archived</option>
             </select>
           ) : (
             <span style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem" }}>
@@ -368,6 +424,11 @@ function SenderInventoryRowView({
                       <a href={`https://ipinfo.io/${ip.source_ip}`} target="_blank" rel="noreferrer">
                         {ip.source_ip}
                       </a>
+                      {ip.is_ipv6 && (
+                        <span className="badge badge--neutral" style={{ marginLeft: "0.35rem" }} title="IPv6 source">
+                          v6
+                        </span>
+                      )}
                     </td>
                     <td>
                       <FcrdnsCell ip={ip} />

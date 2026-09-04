@@ -6,13 +6,20 @@ the exact same "aggregate per source_ip, identify via PTR, roll up by
 service" computation, not three copies of it."""
 
 import uuid
+from datetime import datetime
 
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.dmarc_aggregate import DmarcAggregateRecord
+from app.models.dmarc_aggregate import DmarcAggregateRecord, DmarcAggregateReport
 from app.models.enums import AuthResult, Disposition
 from app.services.source_identification.service_identifier import identify_many
+
+
+def _is_ipv6(ip: str) -> bool:
+    # source_ip is stored as INET and rendered back as text; only IPv6
+    # literals contain a colon, IPv4 never does.
+    return ":" in ip
 
 # A service is "likely spoofed" when the receiver mostly didn't trust it
 # (quarantined/rejected) AND it's essentially unauthenticated on both
@@ -49,10 +56,15 @@ def _fcrdns_status(ip_rows: list[dict]) -> str:
     return "fail"
 
 
-async def service_breakdown(db: AsyncSession, domain_id: uuid.UUID) -> list[dict]:
+async def service_breakdown(db: AsyncSession, domain_id: uuid.UUID, *, since: datetime | None = None) -> list[dict]:
     """Volume/alignment/disposition aggregated per-IP in SQL, then grouped by
     identified service label in Python (simpler and more testable than an
     awkward GROUP BY over a value that only exists after a DNS lookup).
+
+    `since` windows the breakdown to reports whose traffic period begins on or
+    after it (joining the parent report's date_range_begin, the same recency
+    basis dmarc_trend uses) — so a decommissioned host or a retired sender with
+    no recent traffic simply drops out of the inventory. None = all-time.
 
     Does NOT commit — identify_many's cache upsert is executed but left
     uncommitted, deliberately. A commit here would end the calling request's
@@ -70,7 +82,7 @@ async def service_breakdown(db: AsyncSession, domain_id: uuid.UUID) -> list[dict
     def _sum_where(condition):
         return func.sum(case((condition, DmarcAggregateRecord.count), else_=0))
 
-    result = await db.execute(
+    query = (
         select(
             DmarcAggregateRecord.source_ip,
             func.sum(DmarcAggregateRecord.count),
@@ -84,6 +96,11 @@ async def service_breakdown(db: AsyncSession, domain_id: uuid.UUID) -> list[dict
         .where(DmarcAggregateRecord.domain_id == domain_id)
         .group_by(DmarcAggregateRecord.source_ip)
     )
+    if since is not None:
+        query = query.join(
+            DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id
+        ).where(DmarcAggregateReport.date_range_begin >= since)
+    result = await db.execute(query)
     per_ip = [
         {
             "source_ip": str(ip),
@@ -135,6 +152,8 @@ async def service_breakdown(db: AsyncSession, domain_id: uuid.UUID) -> list[dict
     def _service_dict(b: dict) -> dict:
         spf_aligned_pct = _pct(b["spf_pass"], b["volume"])
         dkim_aligned_pct = _pct(b["dkim_pass"], b["volume"])
+        v4_ips = [ip for ip in b["ips"] if not _is_ipv6(ip["source_ip"])]
+        v6_ips = [ip for ip in b["ips"] if _is_ipv6(ip["source_ip"])]
         return {
             "service_label": b["service_label"],
             "match_method": b["match_method"],
@@ -148,10 +167,17 @@ async def service_breakdown(db: AsyncSession, domain_id: uuid.UUID) -> list[dict
             "rejected": b["rejected"],
             "likely_spoofed": _is_likely_spoofed(b["volume"], b["quarantined"], b["rejected"], spf_aligned_pct, dkim_aligned_pct),
             "fcrdns_status": _fcrdns_status(b["ips"]),
+            # Per-family roll-ups too, since IPv6-without-valid-rDNS is the case
+            # Gmail/Microsoft actually junk or reject (v4 is far more forgiving),
+            # and a host's v4 and v6 can differ. None = no IPs of that family.
+            "fcrdns_status_v4": _fcrdns_status(v4_ips) if v4_ips else None,
+            "fcrdns_status_v6": _fcrdns_status(v6_ips) if v6_ips else None,
+            "sends_ipv6": bool(v6_ips),
             "source_ips": sorted(
                 (
                     {
                         "source_ip": ip_row["source_ip"],
+                        "is_ipv6": _is_ipv6(ip_row["source_ip"]),
                         "ptr_hostname": ip_row["ptr_hostname"],
                         "fcrdns_valid": ip_row["fcrdns_valid"],
                         "volume": ip_row["volume"],

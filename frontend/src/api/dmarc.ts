@@ -20,6 +20,8 @@ export interface DmarcOutboundService {
   rejected: number;
   // Forward-confirmed reverse DNS roll-up across the service's sending IPs.
   fcrdns_status: "pass" | "partial" | "fail";
+  // True if any of the service's sending IPs is IPv6.
+  sends_ipv6: boolean;
 }
 
 export interface InboundHostRow {

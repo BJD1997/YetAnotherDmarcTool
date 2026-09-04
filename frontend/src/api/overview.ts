@@ -72,10 +72,11 @@ export interface ActionItem {
   domain_id: string | null;
 }
 
-export type SenderReviewStatus = "pending" | "approved" | "ignored" | "blocked";
+export type SenderReviewStatus = "pending" | "approved" | "ignored" | "blocked" | "archived";
 
 export interface SenderSourceIp {
   source_ip: string;
+  is_ipv6: boolean;
   ptr_hostname: string | null;
   // Forward-confirmed reverse DNS: true = PTR points back to the IP,
   // false = a PTR exists but doesn't, null = no PTR to confirm.
@@ -104,6 +105,11 @@ export interface SenderInventoryRow {
   rejected: number;
   likely_spoofed: boolean;
   fcrdns_status: FcrdnsStatus;
+  // Per-address-family FCrDNS roll-ups; null when the sender has no IPs of
+  // that family. IPv6-without-valid-rDNS is the deliverability-critical case.
+  fcrdns_status_v4: FcrdnsStatus | null;
+  fcrdns_status_v6: FcrdnsStatus | null;
+  sends_ipv6: boolean;
   source_ips: SenderSourceIp[];
   status: SenderReviewStatus;
   owner: string | null;

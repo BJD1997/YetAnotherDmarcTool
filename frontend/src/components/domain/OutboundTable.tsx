@@ -57,6 +57,11 @@ export default function OutboundTable({ services }: { services: DmarcOutboundSer
                 <ServiceBadge label={s.service_label} />
                 {s.service_label}
                 {s.source_ip_count > 1 && <span className="muted" style={{ fontSize: "0.8rem" }}> ({s.source_ip_count} IPs)</span>}
+                {s.sends_ipv6 && (
+                  <span className="badge badge--neutral" style={{ marginLeft: "0.4rem" }} title="Sends over IPv6 — stricter deliverability rules (valid PTR, usually DKIM, required).">
+                    IPv6
+                  </span>
+                )}
               </td>
               <td><FcrdnsBadge status={s.fcrdns_status} /></td>
               <td className="num">{s.volume}</td>

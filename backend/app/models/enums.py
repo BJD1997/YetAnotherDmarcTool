@@ -123,3 +123,7 @@ class SenderReviewStatus(str, enum.Enum):
     approved = "approved"
     ignored = "ignored"
     blocked = "blocked"
+    # A sender that was legitimate but is no longer in use (e.g. a
+    # decommissioned host or an ESP you've stopped using) — kept for history
+    # but hidden from the active inventory view. See the sender-inventory UI.
+    archived = "archived"

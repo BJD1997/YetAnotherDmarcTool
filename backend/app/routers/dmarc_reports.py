@@ -150,15 +150,22 @@ def _sender_review_out(review: SenderReview) -> dict:
 
 @router.get("/domains/{domain_id}/dmarc/sender-inventory")
 async def sender_inventory(
-    domain_id: uuid.UUID, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
+    domain_id: uuid.UUID,
+    days: int | None = Query(None, ge=1, le=365),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ) -> list[dict]:
     """Richer sibling of /dmarc/sources: the same per-service breakdown,
     joined against sender_reviews for approval status/owner/notes. Any
     service seen here with no existing review row gets one lazily
     upserted with status=pending — this doubles as "new sender" detection
-    via the row's created_at, no separate first-seen tracking needed."""
+    via the row's created_at, no separate first-seen tracking needed.
+
+    `days` windows to senders with traffic in the last N days, so retired
+    senders/IPs (a decommissioned host) drop out of the view; omitted = all-time."""
     await _get_owned_domain(db, domain_id, user.organization_id)
-    services = await service_breakdown(db, domain_id)
+    since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
+    services = await service_breakdown(db, domain_id, since=since)
     if not services:
         return []
 
