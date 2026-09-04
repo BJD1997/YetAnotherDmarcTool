@@ -18,6 +18,8 @@ export interface DmarcOutboundService {
   accepted: number;
   quarantined: number;
   rejected: number;
+  // Forward-confirmed reverse DNS roll-up across the service's sending IPs.
+  fcrdns_status: "pass" | "partial" | "fail";
 }
 
 export interface InboundHostRow {

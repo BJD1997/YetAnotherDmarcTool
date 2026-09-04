@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Pencil, Plus } from "lucide-react";
 import { api } from "../../api/client";
 import type { Domain } from "../../api/types";
-import type { SenderInventoryRow, SenderReviewStatus, SenderReviewUpdate } from "../../api/overview";
+import type { SenderInventoryRow, SenderReviewStatus, SenderReviewUpdate, SenderSourceIp } from "../../api/overview";
 import { useAuth } from "../../auth/AuthContext";
 import { ServiceBadge, riskScore, passRateStyle } from "../domain/shared";
 
@@ -23,7 +23,7 @@ async function fetchDomainInventory(domain: Domain): Promise<MergedRow[]> {
   return rows.map((r) => ({ ...r, domain_id: domain.id, domain_name: domain.name }));
 }
 
-type FilterKey = "all" | "failing" | "unknown" | "approved" | "needs_owner" | "spoofed";
+type FilterKey = "all" | "failing" | "unknown" | "approved" | "needs_owner" | "spoofed" | "rdns";
 
 const FILTERS: { key: FilterKey; label: string }[] = [
   { key: "all", label: "All" },
@@ -32,6 +32,7 @@ const FILTERS: { key: FilterKey; label: string }[] = [
   { key: "approved", label: "Approved" },
   { key: "needs_owner", label: "Needs owner" },
   { key: "spoofed", label: "Likely spoofed" },
+  { key: "rdns", label: "rDNS issues" },
 ];
 
 function matchesFilter(row: MergedRow, filter: FilterKey): boolean {
@@ -48,6 +49,10 @@ function matchesFilter(row: MergedRow, filter: FilterKey): boolean {
       return row.owner === null;
     case "spoofed":
       return row.likely_spoofed;
+    case "rdns":
+      // Only meaningful for senders you've claimed as your own — a spoofer with
+      // no reverse DNS is expected, not a problem to fix.
+      return row.status === "approved" && row.fcrdns_status !== "pass";
   }
 }
 
@@ -174,6 +179,31 @@ const STATUS_ROLE: Record<SenderReviewStatus, "good" | "warning" | "serious" | "
   blocked: "critical",
 };
 
+// Per-IP reverse-DNS detail shown in the expanded sender view: the PTR
+// hostname, plus whether it forward-confirms back to the IP (FCrDNS).
+function FcrdnsCell({ ip }: { ip: SenderSourceIp }) {
+  if (ip.fcrdns_valid === null) {
+    return (
+      <span className="muted" title="This IP has no PTR (reverse DNS) record at all.">
+        no PTR
+      </span>
+    );
+  }
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", fontSize: "0.8rem" }}>
+      <span style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", wordBreak: "break-all" }}>{ip.ptr_hostname}</span>
+      {ip.fcrdns_valid === false && (
+        <span
+          className="badge badge--warning"
+          title="This PTR hostname does not resolve back to this IP — reverse DNS is not forward-confirmed (FCrDNS)."
+        >
+          not confirmed
+        </span>
+      )}
+    </span>
+  );
+}
+
 function SenderInventoryRowView({
   row,
   showDomain,
@@ -189,7 +219,9 @@ function SenderInventoryRowView({
   const [editingStatus, setEditingStatus] = useState(false);
   const [editingOwner, setEditingOwner] = useState(false);
   const [ownerDraft, setOwnerDraft] = useState(row.owner ?? "");
-  const canExpand = row.source_ips.length > 1;
+  // Expandable for multi-IP grouping (as before) or whenever there's a reverse-DNS
+  // issue worth inspecting per IP — including single-IP senders.
+  const canExpand = row.source_ips.length > 1 || row.fcrdns_status !== "pass";
   const colSpan = 5 + (showDomain ? 1 : 0);
 
   return (
@@ -220,6 +252,19 @@ function SenderInventoryRowView({
             {row.likely_spoofed && row.status === "pending" && (
               <span className="badge badge--critical" style={{ marginLeft: "0.4rem" }}>
                 likely spoofed
+              </span>
+            )}
+            {row.status === "approved" && row.fcrdns_status !== "pass" && (
+              <span
+                className={`badge badge--${row.fcrdns_status === "fail" ? "serious" : "warning"}`}
+                style={{ marginLeft: "0.4rem" }}
+                title={
+                  row.fcrdns_status === "fail"
+                    ? "None of this sender's IPs have forward-confirmed reverse DNS (PTR pointing back to the IP) — a deliverability risk. Expand to see each IP."
+                    : "Some of this sender's IPs lack forward-confirmed reverse DNS (PTR pointing back to the IP). Expand to see which."
+                }
+              >
+                {row.fcrdns_status === "fail" ? "rDNS fail" : "rDNS partial"}
               </span>
             )}
           </div>
@@ -307,6 +352,7 @@ function SenderInventoryRowView({
               <thead>
                 <tr>
                   <th>Source IP</th>
+                  <th>Reverse DNS</th>
                   <th>Volume</th>
                   <th>SPF aligned</th>
                   <th>DKIM aligned</th>
@@ -322,6 +368,9 @@ function SenderInventoryRowView({
                       <a href={`https://ipinfo.io/${ip.source_ip}`} target="_blank" rel="noreferrer">
                         {ip.source_ip}
                       </a>
+                    </td>
+                    <td>
+                      <FcrdnsCell ip={ip} />
                     </td>
                     <td className="num">{ip.volume.toLocaleString()}</td>
                     <td className="num">{ip.spf_aligned_pct === null ? "—" : `${ip.spf_aligned_pct}%`}</td>

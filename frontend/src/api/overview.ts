@@ -76,6 +76,10 @@ export type SenderReviewStatus = "pending" | "approved" | "ignored" | "blocked";
 
 export interface SenderSourceIp {
   source_ip: string;
+  ptr_hostname: string | null;
+  // Forward-confirmed reverse DNS: true = PTR points back to the IP,
+  // false = a PTR exists but doesn't, null = no PTR to confirm.
+  fcrdns_valid: boolean | null;
   volume: number;
   spf_aligned_pct: number | null;
   dkim_aligned_pct: number | null;
@@ -83,6 +87,9 @@ export interface SenderSourceIp {
   quarantined: number;
   rejected: number;
 }
+
+// Roll-up of a sender's per-IP FCrDNS across all its sending IPs.
+export type FcrdnsStatus = "pass" | "partial" | "fail";
 
 export interface SenderInventoryRow {
   service_label: string;
@@ -96,6 +103,7 @@ export interface SenderInventoryRow {
   quarantined: number;
   rejected: number;
   likely_spoofed: boolean;
+  fcrdns_status: FcrdnsStatus;
   source_ips: SenderSourceIp[];
   status: SenderReviewStatus;
   owner: string | null;

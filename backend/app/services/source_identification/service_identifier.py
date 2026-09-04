@@ -6,6 +6,7 @@ RLS, and patterns.py/registrable_domain.py for the matching logic itself."""
 
 import asyncio
 import dataclasses
+import ipaddress
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
@@ -14,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.enums import SourceMatchMethod
 from app.models.source_ip_identity import SourceIpIdentity
-from app.services.dns_checks.resolver import DnsLookupError, resolve_ptr
+from app.services.dns_checks.resolver import DnsLookupError, resolve_address, resolve_ptr
 from app.services.source_identification.patterns import match_known_service
 from app.services.source_identification.registrable_domain import registrable_domain
 
@@ -38,6 +39,35 @@ class SourceIdentity:
     service_label: str
     match_method: SourceMatchMethod
     ptr_hostname: str | None = None
+    # Forward-confirmed reverse DNS: None when there's no PTR to confirm
+    # (ip_fallback), else whether ptr_hostname resolves forward back to the IP.
+    fcrdns_valid: bool | None = None
+
+
+async def _forward_confirm(ip: str, ptr_hostname: str) -> bool | None:
+    """Whether ptr_hostname's A/AAAA records include `ip` — the "forward
+    confirm" half of FCrDNS. A PTR alone is trivially spoofable/stale (the IP's
+    owner controls it unilaterally); only a matching forward record proves the
+    hostname genuinely claims the IP too.
+
+    Returns True (forward record points back), False (the hostname resolves but
+    to other/no addresses — a definitive FCrDNS failure), or None when the
+    forward lookup itself couldn't be completed (timeout/SERVFAIL). None is
+    deliberately NOT cached as a failure: identify_many re-resolves a row whose
+    fcrdns_valid is NULL, so a transient blip is retried next time rather than
+    freezing a false "rDNS fail" onto a legitimate sender for the cache TTL."""
+    try:
+        addresses = await asyncio.wait_for(resolve_address(ptr_hostname), timeout=PER_LOOKUP_TIMEOUT)
+    except (DnsLookupError, asyncio.TimeoutError):
+        return None
+    target = ipaddress.ip_address(ip)
+    for addr in addresses:
+        try:
+            if ipaddress.ip_address(addr) == target:
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 async def _resolve_one(ip: str, semaphore: asyncio.Semaphore) -> tuple[str, SourceIdentity]:
@@ -50,14 +80,21 @@ async def _resolve_one(ip: str, semaphore: asyncio.Semaphore) -> tuple[str, Sour
         if ptr_hostname is None:
             return ip, SourceIdentity(service_label=ip, match_method=SourceMatchMethod.ip_fallback)
 
+        fcrdns_valid = await _forward_confirm(ip, ptr_hostname)
         known = match_known_service(ptr_hostname)
         if known:
-            return ip, SourceIdentity(service_label=known, match_method=SourceMatchMethod.pattern, ptr_hostname=ptr_hostname)
+            return ip, SourceIdentity(
+                service_label=known,
+                match_method=SourceMatchMethod.pattern,
+                ptr_hostname=ptr_hostname,
+                fcrdns_valid=fcrdns_valid,
+            )
 
         return ip, SourceIdentity(
             service_label=registrable_domain(ptr_hostname),
             match_method=SourceMatchMethod.ptr_domain,
             ptr_hostname=ptr_hostname,
+            fcrdns_valid=fcrdns_valid,
         )
 
 
@@ -100,9 +137,17 @@ async def identify_many(
     misses: list[str] = []
     for ip in unique_ips:
         row = cache_by_ip.get(ip)
-        if row is not None and row.resolved_at >= fresh_cutoff:
+        # A row with a ptr_hostname but no fcrdns_valid predates this column
+        # (or was seeded without it) — re-resolve so it gets forward-confirmed,
+        # rather than doing DNS from a migration. Rows with no ptr_hostname
+        # (ip_fallback) legitimately have NULL fcrdns_valid and are left alone.
+        needs_fcrdns = row is not None and row.ptr_hostname is not None and row.fcrdns_valid is None
+        if row is not None and row.resolved_at >= fresh_cutoff and not needs_fcrdns:
             results[ip] = SourceIdentity(
-                service_label=row.service_label, match_method=row.match_method, ptr_hostname=row.ptr_hostname
+                service_label=row.service_label,
+                match_method=row.match_method,
+                ptr_hostname=row.ptr_hostname,
+                fcrdns_valid=row.fcrdns_valid,
             )
         else:
             misses.append(ip)
@@ -135,6 +180,7 @@ async def identify_many(
                     "ptr_hostname": identity.ptr_hostname,
                     "service_label": identity.service_label,
                     "match_method": identity.match_method.value,
+                    "fcrdns_valid": identity.fcrdns_valid,
                     "resolved_at": now,
                 }
                 for ip, identity in resolved_now.items()
@@ -146,6 +192,7 @@ async def identify_many(
                 "ptr_hostname": stmt.excluded.ptr_hostname,
                 "service_label": stmt.excluded.service_label,
                 "match_method": stmt.excluded.match_method,
+                "fcrdns_valid": stmt.excluded.fcrdns_valid,
                 "resolved_at": stmt.excluded.resolved_at,
             },
         )

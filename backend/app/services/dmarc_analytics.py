@@ -32,6 +32,23 @@ def _is_likely_spoofed(volume: int, quarantined: int, rejected: int, spf_aligned
     return (spf_aligned_pct or 0) <= SPOOFED_ALIGNED_MAX_PCT and (dkim_aligned_pct or 0) <= SPOOFED_ALIGNED_MAX_PCT
 
 
+def _fcrdns_status(ip_rows: list[dict]) -> str:
+    """Roll a service's per-IP forward-confirmed-reverse-DNS states up into one
+    label: "pass" (every sending IP forward-confirms), "partial" (some do, some
+    don't), or "fail" (none do — whether because their PTR doesn't point back or
+    there's no PTR at all). Per-IP fcrdns_valid keeps the finer no-PTR (None) vs
+    bad-PTR (False) distinction for the expanded view; this is the at-a-glance
+    roll-up used to flag a sender the operator has claimed as their own."""
+    states = [ip["fcrdns_valid"] for ip in ip_rows]
+    has_pass = any(v is True for v in states)
+    has_unconfirmed = any(v is not True for v in states)  # False (bad PTR) or None (no PTR)
+    if has_pass and not has_unconfirmed:
+        return "pass"
+    if has_pass and has_unconfirmed:
+        return "partial"
+    return "fail"
+
+
 async def service_breakdown(db: AsyncSession, domain_id: uuid.UUID) -> list[dict]:
     """Volume/alignment/disposition aggregated per-IP in SQL, then grouped by
     identified service label in Python (simpler and more testable than an
@@ -91,6 +108,8 @@ async def service_breakdown(db: AsyncSession, domain_id: uuid.UUID) -> list[dict
     by_service: dict[str, dict] = {}
     for row in per_ip:
         identity = identities[row["source_ip"]]
+        row["ptr_hostname"] = identity.ptr_hostname
+        row["fcrdns_valid"] = identity.fcrdns_valid
         bucket = by_service.setdefault(
             identity.service_label,
             {
@@ -128,10 +147,13 @@ async def service_breakdown(db: AsyncSession, domain_id: uuid.UUID) -> list[dict
             "quarantined": b["quarantined"],
             "rejected": b["rejected"],
             "likely_spoofed": _is_likely_spoofed(b["volume"], b["quarantined"], b["rejected"], spf_aligned_pct, dkim_aligned_pct),
+            "fcrdns_status": _fcrdns_status(b["ips"]),
             "source_ips": sorted(
                 (
                     {
                         "source_ip": ip_row["source_ip"],
+                        "ptr_hostname": ip_row["ptr_hostname"],
+                        "fcrdns_valid": ip_row["fcrdns_valid"],
                         "volume": ip_row["volume"],
                         "spf_aligned_pct": _pct(ip_row["spf_pass"], ip_row["volume"]),
                         "dkim_aligned_pct": _pct(ip_row["dkim_pass"], ip_row["volume"]),

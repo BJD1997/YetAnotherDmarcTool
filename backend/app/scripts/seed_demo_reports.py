@@ -119,13 +119,19 @@ async def main() -> None:
         identity_rows = []
         for ip, label, ptr, _hf, _out, _w, _v in SOURCES:
             if label:
-                identity_rows.append({"source_ip": ip, "ptr_hostname": ptr, "service_label": label, "match_method": "pattern", "resolved_at": now})
+                # fcrdns_valid=True: the real services these mimic (M365, Google,
+                # SendGrid, …) all have proper forward-confirmed reverse DNS.
+                # Setting it explicitly also stops identify_many treating these
+                # seeded rows as a "needs forward-confirm" cache miss and doing a
+                # live PTR lookup that would clobber the friendly seeded labels.
+                identity_rows.append({"source_ip": ip, "ptr_hostname": ptr, "service_label": label, "match_method": "pattern", "fcrdns_valid": True, "resolved_at": now})
             else:
-                identity_rows.append({"source_ip": ip, "ptr_hostname": None, "service_label": ip, "match_method": "ip_fallback", "resolved_at": now})
+                # Spoofing infrastructure with no PTR -> nothing to forward-confirm.
+                identity_rows.append({"source_ip": ip, "ptr_hostname": None, "service_label": ip, "match_method": "ip_fallback", "fcrdns_valid": None, "resolved_at": now})
         stmt = pg_insert(SourceIpIdentity).values(identity_rows)
         stmt = stmt.on_conflict_do_update(
             index_elements=[SourceIpIdentity.source_ip],
-            set_={"ptr_hostname": stmt.excluded.ptr_hostname, "service_label": stmt.excluded.service_label, "match_method": stmt.excluded.match_method, "resolved_at": stmt.excluded.resolved_at},
+            set_={"ptr_hostname": stmt.excluded.ptr_hostname, "service_label": stmt.excluded.service_label, "match_method": stmt.excluded.match_method, "fcrdns_valid": stmt.excluded.fcrdns_valid, "resolved_at": stmt.excluded.resolved_at},
         )
         await db.execute(stmt)
 

@@ -5,6 +5,28 @@ function pct(value: number | null): string {
   return value === null ? "—" : `${value.toFixed(1)}%`;
 }
 
+function FcrdnsBadge({ status }: { status: "pass" | "partial" | "fail" }) {
+  if (status === "pass") {
+    return (
+      <span className="muted" title="Every sending IP has forward-confirmed reverse DNS (PTR resolves back to the IP).">
+        confirmed
+      </span>
+    );
+  }
+  return (
+    <span
+      className={`badge badge--${status === "fail" ? "serious" : "warning"}`}
+      title={
+        status === "fail"
+          ? "None of this sender's IPs have forward-confirmed reverse DNS (PTR pointing back to the IP)."
+          : "Some of this sender's IPs lack forward-confirmed reverse DNS (PTR pointing back to the IP)."
+      }
+    >
+      {status === "fail" ? "rDNS fail" : "rDNS partial"}
+    </span>
+  );
+}
+
 export default function OutboundTable({ services }: { services: DmarcOutboundService[] }) {
   if (services.length === 0) {
     return <p className="empty-state">No aggregate reports received yet for this domain.</p>;
@@ -18,6 +40,7 @@ export default function OutboundTable({ services }: { services: DmarcOutboundSer
         <thead>
           <tr>
             <th>Service</th>
+            <th>Reverse DNS</th>
             <th>Volume</th>
             <th>SPF aligned</th>
             <th>DKIM aligned</th>
@@ -35,6 +58,7 @@ export default function OutboundTable({ services }: { services: DmarcOutboundSer
                 {s.service_label}
                 {s.source_ip_count > 1 && <span className="muted" style={{ fontSize: "0.8rem" }}> ({s.source_ip_count} IPs)</span>}
               </td>
+              <td><FcrdnsBadge status={s.fcrdns_status} /></td>
               <td className="num">{s.volume}</td>
               <td className="num">{pct(s.spf_aligned_pct)}</td>
               <td className="num">{pct(s.dkim_aligned_pct)}</td>
