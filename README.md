@@ -265,6 +265,43 @@ rate — confirmed abuse shouldn't drag a domain's score down forever. This
 weighting is a first pass, meant to be checked against real domains and
 adjusted, not treated as final.
 
+## Production considerations
+
+This is built to run well at the scale it was designed for — one operator, one
+box, a modest number of domains — and it deliberately trades horizontal
+scalability for operational simplicity. The limits are worth knowing before you
+point it at a large fleet:
+
+- **The `worker` is a single in-process scheduler**, not a distributed queue.
+  All background work — DNS checks, mailbox polling, report ingestion, retention
+  purge — runs as cron-style jobs inside one [APScheduler](backend/app/workers/scheduler.py)
+  process (no Celery/Redis; see [tech stack](#infrastructure)). Running a second
+  `worker` replica would double-run every job, so **don't** — scale the box up,
+  not out. A single very large aggregate report (a busy domain's daily XML with
+  tens of thousands of `<record>` rows) is parsed and written serially; that's
+  fine for one operator's domains but is the first thing that would strain under,
+  say, an MSP ingesting for hundreds of high-volume domains at once.
+- **Rate limiting is per-process and in-memory** ([rate_limit.py](backend/app/services/auth/rate_limit.py)).
+  Correct for the single-`api`-container deployment here; if you ever run
+  multiple `api` replicas behind a load balancer, each counts requests
+  independently and the effective limit multiplies — move the limiter to a
+  shared store (Redis/Postgres) first, or keep the edge rate-limit (e.g.
+  Cloudflare) as the real ceiling.
+- **RLS binds a per-connection role, not a per-request identity.** Tenant
+  isolation is enforced by `SET LOCAL` GUCs inside each request's transaction
+  (see [Multi-tenancy](#multi-tenancy)); this is robust, but it means every app
+  connection is the same `dmarc_app` role and isolation correctness depends on
+  the app always setting org context — which is why the [RLS test suite](#tests)
+  exists to keep that guarantee honest.
+- **One Postgres, one resolver.** No read replicas, no connection pooler beyond
+  SQLAlchemy's; the DNSSEC-validating `resolver` is a single Unbound instance.
+  Comfortable for a self-hoster; size the host accordingly if you grow.
+
+Rough rule of thumb: this is happy self-hosting for one org or a handful, on a
+single well-specced VM. Past that — many tenants, very high report volume — the
+right move is a message queue and multiple workers, which is a deliberate
+non-goal here (see the [roadmap](#roadmap)).
+
 ## Getting started
 
 **Prerequisites**: Docker and Docker Compose, and something to terminate
@@ -426,12 +463,34 @@ Several of these tests exist specifically because the logic they cover had
 a real bug found and fixed during development; they're regression tests as
 much as documentation of the intended behavior.
 
-Doesn't yet cover anything that needs a real database (report ingestion,
-the routers, RLS) — for that, verification is still done by rebuilding,
-redeploying, and exercising the actual code path against real data (a real
-domain's real DNS, a real report already ingested), same as it always has
-been. CI (`.github/workflows/ci.yml`) runs the test suite and the frontend
-build on every push/PR.
+**Row-level security** — the actual multi-tenancy boundary — has its own
+integration suite (`backend/tests/test_rls.py`) that runs against a real
+Postgres **as the non-owner `dmarc_app` role** (the one `FORCE ROW LEVEL
+SECURITY` binds, and the one the app connects as), so it proves the same
+isolation that protects production rather than mocking it: cross-tenant reads
+are hidden, an unset org context fails closed, the platform-admin bypass works,
+a cross-tenant write is refused by the policy's `WITH CHECK`, and a meta-guard
+asserts **every** table with an `organization_id` column has `FORCE` RLS and a
+policy — so a PR that adds a tenant-owned table but forgets its policy fails CI
+instead of silently shipping a hole.
+
+Those tests are gated on a `TEST_DATABASE_URL` env var; without it they skip, so
+the default `pytest` run stays fast and needs no database. To run them locally:
+
+```bash
+docker run -d --name dmarc-test-db -e POSTGRES_PASSWORD=postgres \
+    -e POSTGRES_DB=dmarc_test -p 55432:5432 postgres:16-alpine
+TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:55432/dmarc_test pytest
+```
+
+CI (`.github/workflows/ci.yml`) sets `TEST_DATABASE_URL` against a Postgres
+service container, so the RLS suite runs on every push/PR alongside the unit
+tests and the frontend build. (A `postgres` service container is used rather
+than `testcontainers-python` to avoid adding a Python test dependency — the
+trade-off is that running the DB tests locally means starting the throwaway
+Postgres yourself, as above.) Still not covered by automated tests: the full
+report-ingestion pipeline and the HTTP routers — those are still verified by
+exercising the deployed code path against real data.
 
 New Alembic revisions go in `backend/alembic/versions/`, hand-written rather
 than relying purely on autogenerate — see any existing migration for the
@@ -441,6 +500,24 @@ new tenant-owned table).
 Issues and PRs are welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 Found a security issue? See [`SECURITY.md`](SECURITY.md) rather than
 opening a public issue.
+
+## Roadmap
+
+Rough direction, not promises:
+
+- **IMAP report ingestion (top priority).** Today, mailbox-based report
+  ingestion goes exclusively through Microsoft Graph (Entra app-only) — great if
+  you're on Microsoft 365, but it turns away anyone on Google Workspace, a
+  self-hosted Postfix/Dovecot mailbox, Fastmail, or any plain IMAP box. Adding a
+  generic **IMAP** connector (app-password auth, plus OAuth2 for Google/Microsoft
+  where available) would let this ingest from essentially any mailbox and is the
+  single biggest lever for broader self-hosted adoption. DNS-checks-only use
+  already needs no mailbox at all; this is about the report side.
+- **Horizontal scale-out** — a real message queue and multiple workers, for the
+  many-tenant / very-high-volume case that the current single in-process
+  scheduler deliberately doesn't target (see [Production considerations](#production-considerations)).
+- **Broader automated coverage** — extend the database-backed test suite (which
+  now covers [RLS](#tests)) to the report-ingestion pipeline and HTTP routers.
 
 ## License
 
