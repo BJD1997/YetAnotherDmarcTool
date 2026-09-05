@@ -2196,6 +2196,7 @@ git commit -m "Migrate action_queue router onto the repository layer"
 
 **Files:**
 - Modify: `backend/app/routers/admin_updates.py`
+- Modify: `backend/tests/conftest.py`
 - Create: `backend/app/schemas/admin_updates.py`
 - Create: `backend/tests/routers/test_admin_updates.py`
 
