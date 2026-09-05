@@ -28,9 +28,11 @@ import subprocess
 import uuid
 from pathlib import Path
 
+import app.main as main_module
 import httpx
 import pytest
 import pytest_asyncio
+from app.db import session as session_module
 from httpx import ASGITransport
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
@@ -133,11 +135,13 @@ async def api(migrated_db):
     need to set it per-test. Requests run through app.db.session.get_db
     overridden to connect as the non-owner dmarc_app role — the same role
     FORCE ROW LEVEL SECURITY binds in prod — so RLS is genuinely exercised,
-    not bypassed. `owner_factory` is for test setup that must bypass RLS
-    (seeding orgs/users directly), same superuser role rls_sessions uses.
+    not bypassed. Also patches async_session_factory in both session_module
+    and main_module (main imports it directly, so both need patching) so
+    middlewares like enforce_demo_read_only that use it directly (not via
+    dependency injection) connect to the test database, not prod.
+    `owner_factory` is for test setup that must bypass RLS (seeding orgs/users
+    directly), same superuser role rls_sessions uses.
     """
-    from app.db import session as session_module
-    import app.main as main_module
 
     owner_engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
     app_engine = create_async_engine(_app_url(), poolclass=NullPool)
@@ -168,6 +172,8 @@ async def api(migrated_db):
     app.dependency_overrides.pop(get_db, None)
     session_module.async_session_factory = original_session_factory
     main_module.async_session_factory = original_main_factory
+    await app_engine.dispose()
+    await owner_engine.dispose()
 
 
 async def seed_org_and_user(
