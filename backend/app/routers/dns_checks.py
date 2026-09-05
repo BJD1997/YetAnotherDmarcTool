@@ -2,18 +2,19 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user, require_org_admin
 from app.models.dns_check import DnsCheckResult
-from app.models.domain import Domain
 from app.models.enums import DomainVerificationStatus
 from app.models.mailbox_connection import MailboxConnection
 from app.models.organization import Organization
 from app.models.tls_rpt import TlsRptReport
 from app.models.user import User
+from app.repositories.dns_checks import list_latest_check_results
+from app.repositories.domains import get_owned_domain
 from app.services.dns_checks.base import is_null_mx
 from app.services.dns_checks.dmarc_record import check_rua_destination
 from app.services.dns_checks.inbound_view import build_inbound_hosts
@@ -23,13 +24,6 @@ from app.services.dns_checks.scheduled_recheck import run_and_persist_checks
 from app.services.dns_checks.tls_rpt_check import check_tls_rpt_rua_destination, fetch_current_tls_rpt_record
 
 router = APIRouter(tags=["dns-checks"])
-
-
-async def _get_owned_domain(db: AsyncSession, domain_id: uuid.UUID, organization_id: uuid.UUID) -> Domain:
-    domain = await db.get(Domain, domain_id)
-    if domain is None or domain.organization_id != organization_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "domain not found")
-    return domain
 
 
 def _result_out(r: DnsCheckResult) -> dict:
@@ -49,34 +43,16 @@ def _result_out(r: DnsCheckResult) -> dict:
 async def list_latest_checks(
     domain_id: uuid.UUID, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
 ) -> list[dict]:
-    await _get_owned_domain(db, domain_id, user.organization_id)
-
-    # NOT distinct-on (check_type, subject): a single check_type routinely
-    # produces several findings sharing the same subject (SPF's lookup-count
-    # finding and its 'all'-qualifier finding both have subject=NULL, same
-    # for DMARC's several structural notes) — DISTINCT ON would silently
-    # collapse those down to one row each. Every row from one recheck() call
-    # shares the exact same checked_at (set once per call, see
-    # recheck_domain below), so "the latest run's results" is simply every
-    # row at the max checked_at for this domain.
-    latest_ts = (
-        select(func.max(DnsCheckResult.checked_at))
-        .where(DnsCheckResult.domain_id == domain_id)
-        .scalar_subquery()
-    )
-    result = await db.execute(
-        select(DnsCheckResult)
-        .where(DnsCheckResult.domain_id == domain_id, DnsCheckResult.checked_at == latest_ts)
-        .order_by(DnsCheckResult.check_type, DnsCheckResult.subject.nulls_first())
-    )
-    return [_result_out(r) for r in result.scalars().all()]
+    await get_owned_domain(db, domain_id, user.organization_id)
+    rows = await list_latest_check_results(db, domain_id)
+    return [_result_out(r) for r in rows]
 
 
 @router.get("/domains/{domain_id}/dmarc/inbound")
 async def inbound_hosts(
     domain_id: uuid.UUID, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
 ) -> list[dict]:
-    await _get_owned_domain(db, domain_id, user.organization_id)
+    await get_owned_domain(db, domain_id, user.organization_id)
     rows = await build_inbound_hosts(db, domain_id)
     return [
         {
@@ -154,7 +130,7 @@ async def tls_rpt_summary(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict:
-    await _get_owned_domain(db, domain_id, user.organization_id)
+    await get_owned_domain(db, domain_id, user.organization_id)
     rows = await _fetch_tls_rpt_rows(
         db, domain_id, days=days, org_name=org_name, result_type=result_type, failures_only=failures_only
     )
@@ -188,7 +164,7 @@ async def tls_rpt_reports(
     """Row granularity is one TlsRptReport (one policy-domain within one
     report) — no further pagination, unlike the DMARC equivalents, since
     real volume here doesn't need it (see _fetch_tls_rpt_rows)."""
-    await _get_owned_domain(db, domain_id, user.organization_id)
+    await get_owned_domain(db, domain_id, user.organization_id)
     return await _fetch_tls_rpt_rows(
         db, domain_id, days=days, org_name=org_name, result_type=result_type, failures_only=failures_only
     )
@@ -204,7 +180,7 @@ async def tls_rpt_by_sender(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> list[dict]:
-    await _get_owned_domain(db, domain_id, user.organization_id)
+    await get_owned_domain(db, domain_id, user.organization_id)
     rows = await _fetch_tls_rpt_rows(
         db, domain_id, days=days, org_name=org_name, result_type=result_type, failures_only=failures_only
     )
@@ -249,7 +225,7 @@ async def dmarc_rua_check(
     mailbox? A domain can be verified with a clean DNS baseline and still
     never send this product a single report if rua= was never set (or was
     later changed) to point here — see dmarc_record.py."""
-    domain = await _get_owned_domain(db, domain_id, user.organization_id)
+    domain = await get_owned_domain(db, domain_id, user.organization_id)
     connection = (
         await db.execute(select(MailboxConnection).where(MailboxConnection.organization_id == user.organization_id))
     ).scalar_one_or_none()
@@ -269,7 +245,7 @@ async def dmarc_rua_check(
 async def recheck_domain(
     domain_id: uuid.UUID, db: AsyncSession = Depends(get_db), user: User = Depends(require_org_admin)
 ) -> list[dict]:
-    domain = await _get_owned_domain(db, domain_id, user.organization_id)
+    domain = await get_owned_domain(db, domain_id, user.organization_id)
 
     if domain.verification_status != DomainVerificationStatus.verified:
         raise HTTPException(
@@ -296,7 +272,7 @@ async def mta_sts_builder(
     wildcard is actively worse than none (the exact bug found against a
     real Microsoft 365 customer domain during development: mx: *.mx.microsoft
     looked plausible but didn't actually cover the real two-label MX host)."""
-    domain = await _get_owned_domain(db, domain_id, user.organization_id)
+    domain = await get_owned_domain(db, domain_id, user.organization_id)
 
     try:
         mx_records = await resolve_mx(domain.name)
@@ -358,7 +334,7 @@ async def tls_rpt_builder(
     POST /domains/{id}/hosted-report-address) — one hosted mailbox per
     domain receives both DMARC aggregate and TLS-RPT reports, not two
     separate addresses."""
-    domain = await _get_owned_domain(db, domain_id, user.organization_id)
+    domain = await get_owned_domain(db, domain_id, user.organization_id)
 
     connection = (
         await db.execute(select(MailboxConnection).where(MailboxConnection.organization_id == user.organization_id))
