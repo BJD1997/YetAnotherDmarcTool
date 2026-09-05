@@ -18,7 +18,7 @@ param location string = resourceGroup().location
 param namePrefix string = 'yadt'
 
 @description('Container image tag to deploy (the released version, or "latest").')
-param imageTag string = 'latest'
+param imageTag string = 'v0.1.4-beta1'
 
 // --- required secrets ---
 @description('Postgres administrator login.')

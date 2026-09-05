@@ -29,7 +29,7 @@
         "name": "imageTag",
         "type": "Microsoft.Common.TextBox",
         "label": "Image tag",
-        "defaultValue": "latest",
+        "defaultValue": "v0.1.4-beta1",
         "toolTip": "Container image tag to deploy, e.g. a release like v0.1.4 or 'latest'.",
         "constraints": {
           "required": true

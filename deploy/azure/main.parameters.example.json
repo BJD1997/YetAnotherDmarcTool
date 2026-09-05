@@ -3,7 +3,7 @@
   "contentVersion": "1.0.0.0",
   "parameters": {
     "namePrefix": { "value": "yadt" },
-    "imageTag": { "value": "latest" },
+    "imageTag": { "value": "v0.1.4-beta1" },
     "administratorLogin": { "value": "dmarcadmin" },
     "administratorPassword": { "value": "REPLACE-with-a-strong-password" },
     "dmarcAppDbPassword": { "value": "REPLACE-with-a-strong-password" },

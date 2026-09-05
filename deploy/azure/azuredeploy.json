@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.46.1.21595",
-      "templateHash": "14428323071606808178"
+      "templateHash": "17725421621824836536"
     }
   },
   "parameters": {
@@ -27,7 +27,7 @@
     },
     "imageTag": {
       "type": "string",
-      "defaultValue": "latest",
+      "defaultValue": "v0.1.4-beta1",
       "metadata": {
         "description": "Container image tag to deploy (the released version, or \"latest\")."
       }

@@ -5,7 +5,7 @@ with a **private (VNet-integrated) PostgreSQL Flexible Server** and **Azure Key 
 Bicep is the source of truth (`main.bicep` + `modules/`); `azuredeploy.json` is the
 compiled ARM the Portal button uses.
 
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FBJD1997%2FYetAnotherDmarcTool%2Fmaster%2Fdeploy%2Fazure%2Fazuredeploy.json/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2FBJD1997%2FYetAnotherDmarcTool%2Fmaster%2Fdeploy%2Fazure%2FcreateUiDefinition.json)
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FBJD1997%2FYetAnotherDmarcTool%2Fv0.1.4-beta%2Fdeploy%2Fazure%2Fazuredeploy.json/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2FBJD1997%2FYetAnotherDmarcTool%2Fv0.1.4-beta%2Fdeploy%2Fazure%2FcreateUiDefinition.json)
 
 ## What it creates
 - **VNet** with two delegated subnets (Container Apps, Postgres) + a `privatelink.postgres.database.azure.com` private DNS zone.
