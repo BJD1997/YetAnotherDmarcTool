@@ -97,8 +97,8 @@
             "toolTip": "Encrypts TOTP secrets/credentials at rest. Generate with: openssl rand -base64 32 | tr '+/' '-_'",
             "constraints": {
               "required": true,
-              "regex": "^[A-Za-z0-9_-]{43,44}$",
-              "validationMessage": "A url-safe base64 32-byte key (43-44 chars). Generate: openssl rand -base64 32 | tr '+/' '-_'"
+              "regex": "^[A-Za-z0-9_-]{43}=$",
+              "validationMessage": "A url-safe base64 32-byte Fernet key (43 chars + a trailing '='). Generate: openssl rand -base64 32 | tr '+/' '-_'"
             },
             "options": {
               "hideConfirmation": true
