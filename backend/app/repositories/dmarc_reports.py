@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID
 
@@ -41,3 +42,12 @@ async def failed_message_volume_for_domain(db: AsyncSession, domain_id: UUID) ->
         )
     )
     return result.scalar_one()
+
+
+async def list_auth_results_for_domain(db: AsyncSession, domain_id: UUID) -> Sequence[tuple]:
+    result = await db.execute(
+        select(DmarcAggregateRecord.auth_results, DmarcAggregateRecord.report_id, DmarcAggregateRecord.count).where(
+            DmarcAggregateRecord.domain_id == domain_id
+        )
+    )
+    return result.all()
