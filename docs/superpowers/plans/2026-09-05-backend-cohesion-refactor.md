@@ -1235,7 +1235,7 @@ from datetime import datetime, timezone
 
 from app.models.dns_check import DnsCheckResult
 from app.models.domain import Domain
-from app.models.enums import CheckStatus, CheckType, DomainVerificationStatus
+from app.models.enums import CheckStatus, CheckType, UserRole
 
 from tests.conftest import login_as, seed_org_and_user
 
@@ -1326,8 +1326,6 @@ async def test_recheck_domain_requires_verified(api):
 
     assert response.status_code == 409
 ```
-
-Note: this last test needs `from app.models.enums import UserRole` added to the imports above.
 
 - [ ] **Step 2: Run tests, confirm pass**
 
@@ -2445,7 +2443,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user, require_org_admin
-from app.models.enums import AuthMethod
+from app.models.enums import AuthMethod, UserRole
 from app.models.organization import Organization
 from app.models.password_setup_token import PasswordSetupToken
 from app.models.user import User
@@ -2541,8 +2539,6 @@ async def update_user(
     return _user_out(target)
 ```
 
-Note: `UserRole` needs importing too (`from app.models.enums import AuthMethod, UserRole`) for the self-demote check.
-
 - [ ] **Step 6: Run tests, confirm still passing**
 
 Run: `cd backend && pytest tests/routers/test_users.py -v`
@@ -2574,6 +2570,8 @@ git commit -m "Extract users schema/repository layer"
 - [ ] **Step 1: Write `test_main.py` against the current `main.py`**
 
 ```python
+from app.models.enums import UserRole
+
 from tests.conftest import login_as, seed_org_and_user
 
 
@@ -2607,8 +2605,6 @@ async def test_demo_read_only_blocks_mutation(api):
     assert response.status_code == 403
     assert "read-only" in response.json()["detail"]
 ```
-
-Add `from app.models.enums import UserRole` to the imports for the last test.
 
 Note: `test_csrf_header_required_for_post` sends an explicitly-empty header rather than omitting it, because the `api` fixture's `httpx.AsyncClient` has `CSRF_HEADERS` set as default headers — per-request `headers=` on `httpx` merges with, rather than replaces, client-level defaults unless the same key is set to override it, and setting it to `""` here does override it to a value the middleware rejects, exercising the same 403 path as a client that never sent the header at all.
 
