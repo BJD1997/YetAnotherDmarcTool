@@ -12,3 +12,9 @@ frontend/vite.config.js
 frontend/vite.config.d.ts
 *.egg-info/
 backups/
+
+# Claude Code Graph
+.graph/
+
+# Claude Code worktrees
+.claude/worktrees/
