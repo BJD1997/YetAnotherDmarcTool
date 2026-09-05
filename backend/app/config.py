@@ -126,6 +126,24 @@ class Settings(BaseSettings):
     updater_url: str | None = None
     updater_shared_secret: str | None = None
 
+    # --- Scale-out (multi-replica) ---
+    # Auth rate-limiter backend: "memory" (per-process, correct for a single api
+    # container — the default) or "postgres" (shared across replicas). See
+    # app/services/auth/rate_limit.py. Switch to "postgres" when running >1 api replica.
+    rate_limit_backend: str = "memory"
+
+    # Worker (app/workers/scheduler.py): every replica runs this many concurrent
+    # queue-consumer loops; the queue is polled this often when idle. The leader
+    # reclaims jobs stuck "running" longer than worker_job_stale_seconds (a crashed
+    # worker) — must exceed the longest expected job runtime. worker_health_port
+    # serves the liveness endpoint (app/workers/health.py). leader_lock_key is the
+    # Postgres advisory-lock key elected on ("YADT").
+    worker_concurrency: int = 4
+    worker_queue_poll_interval_seconds: float = 5.0
+    worker_job_stale_seconds: int = 1800
+    worker_health_port: int = 8080
+    leader_lock_key: int = 0x59414454
+
     @property
     def entra_sso_redirect_uri(self) -> str:
         return f"{self.public_base_url}/api/auth/callback"

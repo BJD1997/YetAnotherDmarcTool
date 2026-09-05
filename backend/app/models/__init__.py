@@ -2,6 +2,7 @@
 alembic/env.py needs for autogenerate and which the initial migration's
 hand-written DDL is kept in sync with."""
 
+from app.models.background_job import BackgroundJob
 from app.models.dkim_selector import DkimSelector
 from app.models.dismissed_detected_domain import DismissedDetectedDomain
 from app.models.dmarc_aggregate import DmarcAggregateRecord, DmarcAggregateReport
@@ -27,6 +28,7 @@ from app.models.user import User
 from app.models.user_recovery_code import UserRecoveryCode
 
 __all__ = [
+    "BackgroundJob",
     "DkimSelector",
     "DismissedDetectedDomain",
     "DmarcAggregateRecord",
