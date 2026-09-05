@@ -2008,6 +2008,11 @@ router = APIRouter(prefix="/onboarding", tags=["onboarding"])
 
 @router.get("/status")
 async def onboarding_status(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)) -> dict:
+    """Stateless setup-completeness snapshot, recomputed from existing data
+    on every call — no separate "has this org finished onboarding" flag is
+    stored anywhere, the same "no dismiss/acknowledge state" philosophy the
+    action queue already uses. Drives both the onboarding wizard (which
+    step to resume at) and Overview's onboarding-aware rendering."""
     org = await get_organization(db, user.organization_id)
     connection = await get_org_mailbox_connection(db, user.organization_id)
 
@@ -2154,6 +2159,10 @@ async def action_queue(
 
     items = list(await mailbox_stopped_receiving_reports(db, user.organization_id))
 
+    # enforcement_readiness_notice is inherently org-wide (not "0 out of the
+    # 1 domain you happen to have selected") — only evaluated, and only
+    # added, when no domain_id filter is active. `domains` is already the
+    # full org list in that case.
     if domain_id is None:
         items += await enforcement_readiness_notice(db, domains)
 
@@ -2161,6 +2170,9 @@ async def action_queue(
     mailbox_address = connection.mailbox_address if connection is not None else None
 
     for domain in domains:
+        # Computed once per domain and shared by the two rules that need a
+        # per-service breakdown, rather than each calling service_breakdown
+        # itself and doubling the aggregation query.
         services = await service_breakdown(db, domain.id)
         items += await unknown_sender_above_threshold(db, domain, services)
         items += await likely_spoofed_sender(db, domain, services)
@@ -2172,8 +2184,17 @@ async def action_queue(
         items += await rua_destination_broken(db, domain, mailbox_address)
         items += await parked_domain_not_locked_down(domain)
 
+    # service_breakdown resolves any not-yet-cached source IPs as it goes
+    # but never commits (see its docstring) — one commit here, after every
+    # rule has run, persists those cache rows without dropping RLS context
+    # mid-loop.
     await db.commit()
 
+    # Category first (how urgent/high-signal the kind of problem is — see
+    # CATEGORY_* in rules.py), severity second within a category. A
+    # critical DNS-blocking item still sorts after a warning-level
+    # high-volume-failure item, since the category itself already encodes
+    # "this kind of problem matters more."
     items.sort(key=lambda i: (i.category, _SEVERITY_ORDER.get(i.severity, 5)))
     return [dataclasses.asdict(i) for i in items]
 ```
@@ -2479,6 +2500,11 @@ async def create_local_user(
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_org_admin),
 ) -> dict:
+    """Lets a local-auth org's own admin add teammates the same way a
+    platform admin bootstraps that org's first user (see
+    platform_admin.create_local_user) — gives local-auth orgs the same
+    "admin shares a link, no operator involvement per teammate" parity
+    Entra orgs already have via Team.tsx's ShareSignInLink."""
     org = await db.get(Organization, admin.organization_id)
     if org is None or org.entra_tenant_id is not None:
         raise HTTPException(
@@ -2509,6 +2535,10 @@ async def create_local_user(
             expires_at=now + timedelta(hours=settings.password_setup_token_timeout_hours),
         )
     )
+    # refresh() must run before commit() — users is RLS-protected, and
+    # commit ends the SET LOCAL app.current_org_id context this transaction
+    # needs for the refresh's SELECT to see the row at all (see
+    # app/db/rls.py's own docstring on this exact gotcha).
     await db.flush()
     await db.refresh(new_user)
     await db.commit()
@@ -2623,6 +2653,14 @@ from fastapi import Request
 
 from app.config import settings
 
+# Response hardening headers applied to every response. Only the CSP
+# directives that can't affect script/style/img loading are set here, so this
+# can't break the SPA: frame-ancestors (clickjacking), base-uri (<base>
+# injection), object-src (plugin embedding), form-action (form hijacking). A
+# full script-src/style-src CSP is a deliberate follow-up — index.html has an
+# inline theme-bootstrap <script> that would need its sha256 hash allow-listed
+# first, and there's no way to verify a strict CSP doesn't break rendering
+# without a browser in the loop.
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
@@ -2646,6 +2684,15 @@ Create `backend/app/middleware/csrf.py`:
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
+# CSRF defense: cookies are SameSite=Lax (blocks cross-site *form* submits,
+# but not e.g. a cross-site <script> doing a same-site-adjacent GET-triggered
+# nav). State-changing requests additionally require this custom header,
+# which only same-origin `fetch()`/XHR can set — a bare cross-site form POST
+# cannot. The OAuth callback is a real cross-site GET navigation from
+# Microsoft and is exempted (GETs are excluded below anyway; it does nothing
+# state-changing on its own request line besides setting the session cookie
+# it just issued, which is the intended, unauthenticated-by-design step of
+# the login flow itself).
 CSRF_HEADER = "X-Requested-With"
 CSRF_HEADER_VALUE = "yetanotherdmarctool"
 UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
@@ -2754,11 +2801,25 @@ from pathlib import Path
 
 from fastapi.responses import FileResponse
 
+# no-store on both branches: the JS/CSS under /assets/ (mounted separately in
+# main.py) are content-hashed per build and fine to cache hard, but everything
+# served through here — index.html, LICENSE, robots.txt — isn't, and
+# Starlette's FileResponse sets no Cache-Control by default, leaving
+# browsers to apply their own heuristic caching. That's exactly what
+# made the mta-sts hostname fix look "flaky" live: a browser that had
+# cached the SPA shell from before restrict_mta_sts_hostname existed
+# kept serving it back across refreshes, even though the server was
+# already answering consistently.
 NO_STORE = {"Cache-Control": "no-store"}
 
 
 def make_serve_spa(static_dir: Path):
     async def serve_spa(full_path: str) -> FileResponse:
+        # Contain to the static root: resolve() collapses any `..`/encoded
+        # traversal and symlinks, and is_relative_to() rejects anything that
+        # escaped the directory (e.g. /%2e%2e/app/config.py, //etc/passwd).
+        # Without this, `STATIC_DIR / full_path` served arbitrary files —
+        # `FileResponse` will happily read /etc/passwd or the app source.
         root = static_dir.resolve()
         candidate = (root / full_path).resolve()
         if full_path and candidate.is_file() and candidate.is_relative_to(root):
@@ -2871,6 +2932,10 @@ async def mta_sts_policy(request: Request) -> PlainTextResponse:
     )
 
 
+# Serve the built SPA's static assets (JS/CSS/etc.) if present. In Phase 0 the
+# image always contains a build (see backend/Dockerfile); this guard just keeps
+# `uvicorn app.main:app --reload` usable when running the backend outside Docker
+# without having run `npm run build` locally.
 if STATIC_DIR.exists():
     assets_dir = STATIC_DIR / "assets"
     if assets_dir.exists():
