@@ -424,6 +424,20 @@ redeploy the stack — Portainer re-pulls the image. (The in-app "Update now"
 button is for the CLI deployment only; it isn't wired into the Portainer
 path, which is why the `updater` service is omitted from this compose file.)
 
+### Deploy on Azure (Container Apps)
+
+For a managed, autoscaling cloud deployment — a private (VNet-integrated) Postgres,
+Key Vault, and Container Apps that scale the api on HTTP concurrency and the worker
+on the background-job queue depth:
+
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FBJD1997%2FYetAnotherDmarcTool%2Fmaster%2Fdeploy%2Fazure%2Fazuredeploy.json/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2FBJD1997%2FYetAnotherDmarcTool%2Fmaster%2Fdeploy%2Fazure%2FcreateUiDefinition.json)
+
+The button opens a parameter form in the Azure Portal (admin credentials, a Fernet
+key, optional Entra). It provisions everything and runs the database migration
+automatically. Full details, prerequisites, the manual `az deployment` path, and
+custom-domain setup are in [`deploy/azure/README.md`](deploy/azure/README.md). The
+Bicep templates there are the source of truth; `azuredeploy.json` is compiled from them.
+
 ## Configuration
 
 Every environment variable is documented inline in

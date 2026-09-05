@@ -1,0 +1,14 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "namePrefix": { "value": "yadt" },
+    "imageTag": { "value": "latest" },
+    "administratorLogin": { "value": "dmarcadmin" },
+    "administratorPassword": { "value": "REPLACE-with-a-strong-password" },
+    "dmarcAppDbPassword": { "value": "REPLACE-with-a-strong-password" },
+    "fernetKey": { "value": "REPLACE-openssl-rand-base64-32-then-tr-+/-_" },
+    "platformAdminBootstrapEmail": { "value": "admin@example.com" },
+    "platformAdminBootstrapPassword": { "value": "REPLACE-with-a-strong-password" }
+  }
+}
