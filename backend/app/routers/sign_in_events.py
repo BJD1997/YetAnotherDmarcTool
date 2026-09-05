@@ -35,6 +35,9 @@ async def list_sign_in_events_route(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_org_admin),
 ) -> dict:
+    """Org-admin only — this surfaces every member's attempted emails/IPs,
+    not just the viewer's own, same admin-only bar Settings.tsx already
+    applies to its other sections."""
     events = await list_sign_in_events(
         db, user.organization_id, limit=limit, before_id=before_id, result=result, auth_method=auth_method
     )

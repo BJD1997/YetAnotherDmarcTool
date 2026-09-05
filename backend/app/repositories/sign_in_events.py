@@ -17,6 +17,9 @@ async def list_sign_in_events(
     result: SignInResult | None,
     auth_method: AuthMethod | None,
 ) -> Sequence[SignInEvent]:
+    """Keyset-paginated on (created_at, id), same shape as dmarc_reports_by_day,
+    rather than OFFSET — this table only grows, and an admin scrolling through
+    pages shouldn't see rows shift around as new sign-ins land between requests."""
     query = select(SignInEvent).where(SignInEvent.organization_id == organization_id)
     if result is not None:
         query = query.where(SignInEvent.result == result)
