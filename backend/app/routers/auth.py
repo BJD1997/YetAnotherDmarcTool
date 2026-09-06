@@ -13,7 +13,6 @@ from app.middleware.tenant_context import get_current_user
 from app.models.enums import AuthMethod, OrganizationStatus, SignInResult, UserRole, UserStatus
 from app.models.mfa_pending_challenge import MfaPendingChallenge
 from app.models.organization import Organization
-from app.models.password_setup_token import PasswordSetupToken
 from app.models.user import User
 from app.models.user_recovery_code import UserRecoveryCode
 from app.repositories.auth import (
@@ -240,8 +239,7 @@ async def _get_pending_user(request: Request, db: AsyncSession) -> tuple[User, M
     if not raw_token:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "no pending login")
     token_hash = hash_token(raw_token)
-    result = await db.execute(select(MfaPendingChallenge).where(MfaPendingChallenge.token_hash == token_hash))
-    challenge = result.scalar_one_or_none()
+    challenge = await get_mfa_pending_challenge(db, token_hash)
     if challenge is None or challenge.expires_at <= datetime.now(timezone.utc):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "pending login expired — sign in again")
     # users is RLS-protected and there's no org context yet at this point in
@@ -260,10 +258,7 @@ async def _get_pending_user(request: Request, db: AsyncSession) -> tuple[User, M
 async def local_login(body: LocalLoginRequest, request: Request, db: AsyncSession = Depends(get_db)) -> Response:
     ip_address, user_agent = client_network_info(request)
     await set_platform_admin_context(db, is_admin=True)
-    result = await db.execute(
-        select(User).where(func.lower(User.email) == body.email.strip().lower(), User.auth_method == AuthMethod.local)
-    )
-    user = result.scalar_one_or_none()
+    user = await get_local_user_by_email(db, body.email)
     if user is None:
         # Spend the same Argon2 cost as a real verify so response timing
         # doesn't reveal whether this email exists (user enumeration).
@@ -296,7 +291,7 @@ async def local_login(body: LocalLoginRequest, request: Request, db: AsyncSessio
         await db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
 
-    org = await db.get(Organization, user.organization_id)
+    org = await get_organization(db, user.organization_id)
     if org is None or org.status == OrganizationStatus.suspended:
         await record_sign_in_event(
             db, result=SignInResult.failure, auth_method=AuthMethod.local,
@@ -369,14 +364,7 @@ async def verify_otp(body: VerifyOtpRequest, request: Request, db: AsyncSession 
     code = body.code.strip()
     if not totp.verify_code(user.otp_secret, code):
         code_hash = totp.hash_recovery_code_for_lookup(code)
-        result = await db.execute(
-            select(UserRecoveryCode).where(
-                UserRecoveryCode.user_id == user.id,
-                UserRecoveryCode.code_hash == code_hash,
-                UserRecoveryCode.used_at.is_(None),
-            )
-        )
-        recovery = result.scalar_one_or_none()
+        recovery = await get_unused_recovery_code(db, user.id, code_hash)
         if recovery is None:
             await record_sign_in_event(
                 db, result=SignInResult.failure, auth_method=AuthMethod.local,
@@ -417,8 +405,7 @@ async def verify_otp(body: VerifyOtpRequest, request: Request, db: AsyncSession 
 @router.post("/set-password")
 async def set_password(body: SetPasswordRequest, db: AsyncSession = Depends(get_db)) -> JSONResponse:
     token_hash = hash_token(body.token)
-    result = await db.execute(select(PasswordSetupToken).where(PasswordSetupToken.token_hash == token_hash))
-    setup_token = result.scalar_one_or_none()
+    setup_token = await get_password_setup_token(db, token_hash)
     now = datetime.now(timezone.utc)
     if setup_token is None or setup_token.used_at is not None or setup_token.expires_at <= now:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "this link is invalid or has expired")

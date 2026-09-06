@@ -43,3 +43,164 @@ async def test_logout_clears_session(api):
 
     me_response = await client.get("/api/auth/me")
     assert me_response.status_code == 401
+
+
+import pyotp
+import pytest
+from cryptography.fernet import Fernet
+
+from app.config import settings
+from app.models.enums import UserRole, UserStatus
+from app.models.user import User
+from app.services.auth.password import hash_password
+from app.services.crypto import secrets as crypto_secrets
+
+
+@pytest.fixture(autouse=True)
+def _fernet_key_for_totp_encryption(monkeypatch):
+    """User.otp_secret is transparently encrypted at rest (see
+    app/services/auth/totp_secret.py) and fails closed without a FERNET_KEY —
+    same requirement production has. The enroll-otp/confirm flow below writes
+    that column for real, so it needs one; same monkeypatch pattern as
+    tests/services/test_totp_secret.py's `fernet_key` fixture, just autouse
+    here since most tests in this module exercise that path."""
+    monkeypatch.setattr(settings, "fernet_key", Fernet.generate_key().decode())
+    crypto_secrets._fernet.cache_clear()
+    yield
+    crypto_secrets._fernet.cache_clear()
+
+
+async def _seed_local_user_with_password(owner_factory, org, *, password: str = "correct horse battery staple"):
+    async with owner_factory() as db:
+        user = User(
+            organization_id=org.id,
+            email="local-login-test@example.com",
+            role=UserRole.member,
+            status=UserStatus.active,
+            auth_method="local",
+            password_hash=hash_password(password),
+        )
+        db.add(user)
+        await db.flush()
+        await db.refresh(user)
+        await db.commit()
+        return user
+
+
+async def test_local_login_invalid_credentials_wrong_password(api):
+    client, owner_factory = api
+    org, _user = await seed_org_and_user(owner_factory, entra=False)
+    local_user = await _seed_local_user_with_password(owner_factory, org)
+
+    response = await client.post(
+        "/api/auth/local-login", json={"email": local_user.email, "password": "wrong password entirely"}
+    )
+
+    assert response.status_code == 401
+
+
+async def test_local_login_unknown_email(api):
+    client, owner_factory = api
+    _org, _user = await seed_org_and_user(owner_factory)
+
+    response = await client.post(
+        "/api/auth/local-login", json={"email": "nobody-here@example.com", "password": "whatever"}
+    )
+
+    assert response.status_code == 401
+
+
+async def test_local_login_needs_enrollment_when_no_totp(api):
+    client, owner_factory = api
+    org, _user = await seed_org_and_user(owner_factory, entra=False)
+    local_user = await _seed_local_user_with_password(owner_factory, org)
+
+    response = await client.post(
+        "/api/auth/local-login", json={"email": local_user.email, "password": "correct horse battery staple"}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"needs_enrollment": True}
+    assert "dmarc_mfa_pending" in response.cookies or any(
+        "mfa_pending" in c for c in response.cookies
+    )
+
+
+async def test_full_local_login_enroll_and_verify_flow(api):
+    """Exercises the whole chain: local-login -> enroll-otp -> enroll-otp/confirm
+    -> logout -> local-login again -> verify-otp, proving a real session is
+    reachable end to end and that a second login correctly demands the code
+    from the now-enrolled secret."""
+    client, owner_factory = api
+    org, _user = await seed_org_and_user(owner_factory, entra=False)
+    local_user = await _seed_local_user_with_password(owner_factory, org)
+
+    login_response = await client.post(
+        "/api/auth/local-login", json={"email": local_user.email, "password": "correct horse battery staple"}
+    )
+    assert login_response.status_code == 200
+    assert login_response.json()["needs_enrollment"] is True
+
+    enroll_response = await client.post("/api/auth/enroll-otp")
+    assert enroll_response.status_code == 200
+    secret = enroll_response.json()["secret"]
+
+    confirm_response = await client.post(
+        "/api/auth/enroll-otp/confirm", json={"secret": secret, "code": pyotp.TOTP(secret).now()}
+    )
+    assert confirm_response.status_code == 200
+    assert len(confirm_response.json()["recovery_codes"]) == 10
+
+    me_response = await client.get("/api/auth/me")
+    assert me_response.status_code == 200
+    assert me_response.json()["email"] == local_user.email
+
+    await client.post("/api/auth/logout")
+
+    second_login = await client.post(
+        "/api/auth/local-login", json={"email": local_user.email, "password": "correct horse battery staple"}
+    )
+    assert second_login.status_code == 200
+    assert second_login.json()["needs_enrollment"] is False
+
+    verify_response = await client.post("/api/auth/verify-otp", json={"code": pyotp.TOTP(secret).now()})
+    assert verify_response.status_code == 204
+
+    final_me = await client.get("/api/auth/me")
+    assert final_me.status_code == 200
+
+
+async def test_verify_otp_rejects_wrong_code(api):
+    client, owner_factory = api
+    org, _user = await seed_org_and_user(owner_factory, entra=False)
+    local_user = await _seed_local_user_with_password(owner_factory, org)
+    await client.post("/api/auth/local-login", json={"email": local_user.email, "password": "correct horse battery staple"})
+    secret = (await client.post("/api/auth/enroll-otp")).json()["secret"]
+    await client.post("/api/auth/enroll-otp/confirm", json={"secret": secret, "code": pyotp.TOTP(secret).now()})
+    await client.post("/api/auth/logout")
+    await client.post("/api/auth/local-login", json={"email": local_user.email, "password": "correct horse battery staple"})
+
+    response = await client.post("/api/auth/verify-otp", json={"code": "000000"})
+
+    assert response.status_code == 401
+
+
+async def test_verify_otp_no_pending_challenge(api):
+    client, _owner_factory = api
+    response = await client.post("/api/auth/verify-otp", json={"code": "123456"})
+    assert response.status_code == 401
+
+
+async def test_local_login_demo_read_only_skips_mfa(api):
+    client, owner_factory = api
+    org, _user = await seed_org_and_user(owner_factory, entra=False, is_demo_read_only=True)
+    local_user = await _seed_local_user_with_password(owner_factory, org)
+
+    response = await client.post(
+        "/api/auth/local-login", json={"email": local_user.email, "password": "correct horse battery staple"}
+    )
+
+    assert response.status_code == 204
+
+    me_response = await client.get("/api/auth/me")
+    assert me_response.status_code == 200
