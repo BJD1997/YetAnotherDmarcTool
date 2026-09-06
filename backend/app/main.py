@@ -2,13 +2,15 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request, status
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
-from app.db.rls import set_org_context
-from app.db.session import async_session_factory
-from app.models.organization import Organization
+from app.middleware.csrf import enforce_csrf_header
+from app.middleware.demo_read_only import enforce_demo_read_only
+from app.middleware.mta_sts_routing import restrict_mta_sts_hostname
+from app.middleware.security_headers import add_security_headers
+from app.middleware.spa_static import make_serve_spa
 from app.routers import (
     action_queue,
     admin_updates,
@@ -24,132 +26,15 @@ from app.routers import (
     sign_in_events,
     users,
 )
-from app.services.auth import session_manager
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 app = FastAPI(title="YetAnotherDmarcTool API")
 
-# CSRF defense: cookies are SameSite=Lax (blocks cross-site *form* submits,
-# but not e.g. a cross-site <script> doing a same-site-adjacent GET-triggered
-# nav). State-changing requests additionally require this custom header,
-# which only same-origin `fetch()`/XHR can set — a bare cross-site form POST
-# cannot. The OAuth callback is a real cross-site GET navigation from
-# Microsoft and is exempted (GETs are excluded below anyway; it does nothing
-# state-changing on its own request line besides setting the session cookie
-# it just issued, which is the intended, unauthenticated-by-design step of
-# the login flow itself).
-_CSRF_HEADER = "X-Requested-With"
-_CSRF_HEADER_VALUE = "yetanotherdmarctool"
-_UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
-
-
-# Response hardening headers applied to every response. Only the CSP
-# directives that can't affect script/style/img loading are set here, so this
-# can't break the SPA: frame-ancestors (clickjacking), base-uri (<base>
-# injection), object-src (plugin embedding), form-action (form hijacking). A
-# full script-src/style-src CSP is a deliberate follow-up — index.html has an
-# inline theme-bootstrap <script> that would need its sha256 hash allow-listed
-# first, and there's no way to verify a strict CSP doesn't break rendering
-# without a browser in the loop.
-_SECURITY_HEADERS = {
-    "X-Content-Type-Options": "nosniff",
-    "X-Frame-Options": "DENY",
-    "Referrer-Policy": "strict-origin-when-cross-origin",
-    "Content-Security-Policy": "frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'",
-}
-
-
-@app.middleware("http")
-async def add_security_headers(request: Request, call_next):
-    response = await call_next(request)
-    for header, value in _SECURITY_HEADERS.items():
-        response.headers.setdefault(header, value)
-    # HSTS only when this instance is actually served over HTTPS (every real
-    # deployment, behind NPM) — never on plain-http localhost smoke testing.
-    if settings.public_base_url.startswith("https://"):
-        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
-    return response
-
-
-@app.middleware("http")
-async def enforce_csrf_header(request: Request, call_next):
-    if (
-        request.method in _UNSAFE_METHODS
-        and request.url.path.startswith("/api/")
-        and request.headers.get(_CSRF_HEADER) != _CSRF_HEADER_VALUE
-    ):
-        return JSONResponse({"detail": "missing or invalid X-Requested-With header"}, status_code=403)
-    return await call_next(request)
-
-
-@app.middleware("http")
-async def enforce_demo_read_only(request: Request, call_next):
-    """Organizations flagged is_demo_read_only (see the Organization model
-    — the one intended use is a published public demo login) can't perform
-    any state-changing action. /api/auth/ is exempt so a demo visitor can
-    still log in/out/enroll TOTP etc.; everything else under /api/ with an
-    unsafe method is blocked.
-
-    /api/admin/ is also exempt — platform-admin auth is a completely
-    separate realm from the org-scoped session this check keys off of
-    (session_cookie_name, not platform_admin_session_cookie_name), so it
-    was never meant to be in scope here. Without this, a stray regular
-    dmarc_session cookie left over from ever trying the public demo login
-    in the same browser blocks even POST /api/admin/login itself, purely
-    because that leftover cookie happens to resolve to the read-only demo
-    org — confirmed live: the platform admin couldn't log into their own
-    demo instance's admin console because of an unrelated cookie.
-
-    Checked here at the middleware level — not only inside get_current_user/
-    require_org_admin — as defense in depth: coverage this way doesn't
-    depend on every current and future mutating route correctly using
-    those dependencies, the same reasoning restrict_mta_sts_hostname above
-    is checked at this layer rather than per-route."""
-    if (
-        request.method in _UNSAFE_METHODS
-        and request.url.path.startswith("/api/")
-        and not request.url.path.startswith("/api/auth/")
-        and not request.url.path.startswith("/api/admin/")
-    ):
-        raw_token = request.cookies.get(settings.session_cookie_name)
-        if raw_token:
-            async with async_session_factory() as db:
-                session = await session_manager.get_active_user_session(db, raw_token)
-                if session is not None:
-                    await set_org_context(db, session.organization_id)
-                    org = await db.get(Organization, session.organization_id)
-                    if org is not None and org.is_demo_read_only:
-                        return JSONResponse(
-                            {"detail": "This is a read-only public demo — changes aren't saved."},
-                            status_code=status.HTTP_403_FORBIDDEN,
-                        )
-    return await call_next(request)
-
-
-@app.middleware("http")
-async def restrict_mta_sts_hostname(request: Request, call_next):
-    """If this instance serves its own MTA-STS policy (mta_sts_policy_* in
-    config.py), that hostname must serve *only* that one file — a reverse
-    proxy pointed at this same app for mta-sts.<domain> would otherwise
-    also expose the full dashboard/login page and API there too, since
-    nothing else in this app routes by Host header. 404s everything else
-    on that exact Host rather than falling through to the SPA/API."""
-    host = (request.headers.get("host") or "").split(":")[0].lower()
-    if (
-        settings.mta_sts_policy_hostname
-        and host == settings.mta_sts_policy_hostname
-        and request.url.path != "/.well-known/mta-sts.txt"
-    ):
-        # no-store: browsers/CDNs heuristically caching a *blocked* response
-        # (or, before this middleware existed, the real SPA/login page that
-        # used to be here) is exactly what made this flaky to diagnose live —
-        # this hostname's responses should never be cached, blocked or not.
-        return JSONResponse(
-            {"detail": "not found"}, status_code=status.HTTP_404_NOT_FOUND, headers={"Cache-Control": "no-store"}
-        )
-    return await call_next(request)
-
+app.middleware("http")(add_security_headers)
+app.middleware("http")(enforce_csrf_header)
+app.middleware("http")(enforce_demo_read_only)
+app.middleware("http")(restrict_mta_sts_hostname)
 
 api_router = APIRouter(prefix="/api")
 
@@ -218,26 +103,4 @@ if STATIC_DIR.exists():
     if assets_dir.exists():
         app.mount("/assets", StaticFiles(directory=assets_dir), name="spa-assets")
 
-    # no-store on both branches: the JS/CSS under /assets/ (mounted above)
-    # are content-hashed per build and fine to cache hard, but everything
-    # served through here — index.html, LICENSE, robots.txt — isn't, and
-    # Starlette's FileResponse sets no Cache-Control by default, leaving
-    # browsers to apply their own heuristic caching. That's exactly what
-    # made the mta-sts hostname fix look "flaky" live: a browser that had
-    # cached the SPA shell from before restrict_mta_sts_hostname existed
-    # kept serving it back across refreshes, even though the server was
-    # already answering consistently.
-    _NO_STORE = {"Cache-Control": "no-store"}
-
-    @app.get("/{full_path:path}")
-    async def serve_spa(full_path: str) -> FileResponse:
-        # Contain to the static root: resolve() collapses any `..`/encoded
-        # traversal and symlinks, and is_relative_to() rejects anything that
-        # escaped the directory (e.g. /%2e%2e/app/config.py, //etc/passwd).
-        # Without this, `STATIC_DIR / full_path` served arbitrary files —
-        # `FileResponse` will happily read /etc/passwd or the app source.
-        root = STATIC_DIR.resolve()
-        candidate = (root / full_path).resolve()
-        if full_path and candidate.is_file() and candidate.is_relative_to(root):
-            return FileResponse(candidate, headers=_NO_STORE)
-        return FileResponse(root / "index.html", headers=_NO_STORE)
+    app.get("/{full_path:path}")(make_serve_spa(STATIC_DIR))

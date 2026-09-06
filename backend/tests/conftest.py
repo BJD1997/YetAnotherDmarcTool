@@ -28,7 +28,7 @@ import subprocess
 import uuid
 from pathlib import Path
 
-import app.main as main_module
+import app.middleware.demo_read_only as demo_read_only_module
 import httpx
 import pytest
 import pytest_asyncio
@@ -131,14 +131,15 @@ async def api(migrated_db):
     """Yields (client, owner_factory) for HTTP-level router tests. `client` is
     an httpx.AsyncClient wired directly to the real ASGI app (no network
     socket) via ASGITransport, with the CSRF header pre-set (see
-    enforce_csrf_header in app/main.py) so POST/PUT/PATCH/DELETE calls don't
-    need to set it per-test. Requests run through app.db.session.get_db
+    enforce_csrf_header in app/middleware/csrf.py) so POST/PUT/PATCH/DELETE
+    calls don't need to set it per-test. Requests run through app.db.session.get_db
     overridden to connect as the non-owner dmarc_app role — the same role
     FORCE ROW LEVEL SECURITY binds in prod — so RLS is genuinely exercised,
     not bypassed. Also patches async_session_factory in both session_module
-    and main_module (main imports it directly, so both need patching) so
-    middlewares like enforce_demo_read_only that use it directly (not via
-    dependency injection) connect to the test database, not prod.
+    and demo_read_only_module (app.middleware.demo_read_only imports it
+    directly, so both need patching) so middlewares like enforce_demo_read_only
+    that use it directly (not via dependency injection) connect to the test
+    database, not prod.
     `owner_factory` is for test setup that must bypass RLS (seeding orgs/users
     directly), same superuser role rls_sessions uses.
     """
@@ -158,12 +159,13 @@ async def api(migrated_db):
 
     # Override both the dependency-injected get_db and the global async_session_factory
     # (used by middlewares like enforce_demo_read_only that don't use dependency injection).
-    # Must replace in both session_module AND main_module since main imported it directly.
+    # Must replace in both session_module AND demo_read_only_module since
+    # app.middleware.demo_read_only imported it directly.
     app.dependency_overrides[get_db] = _override_get_db
     original_session_factory = session_module.async_session_factory
-    original_main_factory = main_module.async_session_factory
+    original_demo_read_only_factory = demo_read_only_module.async_session_factory
     session_module.async_session_factory = app_factory
-    main_module.async_session_factory = app_factory
+    demo_read_only_module.async_session_factory = app_factory
 
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=CSRF_HEADERS) as client:
@@ -171,7 +173,7 @@ async def api(migrated_db):
 
     app.dependency_overrides.pop(get_db, None)
     session_module.async_session_factory = original_session_factory
-    main_module.async_session_factory = original_main_factory
+    demo_read_only_module.async_session_factory = original_demo_read_only_factory
     await app_engine.dispose()
     await owner_engine.dispose()
 
