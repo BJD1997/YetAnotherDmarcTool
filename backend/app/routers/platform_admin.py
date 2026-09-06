@@ -14,7 +14,7 @@ from app.middleware.tenant_context import (
     get_current_platform_admin,
     get_current_platform_admin_local,
 )
-from app.models.enums import AuthMethod, ConsentStatus, JobStatus, JobType, OrganizationStatus, UserRole
+from app.models.enums import AuthMethod, ConsentStatus, JobStatus, JobType, OrganizationStatus
 from app.models.mailbox_connection import MailboxConnection
 from app.models.organization import Organization
 from app.models.password_setup_token import PasswordSetupToken
@@ -502,7 +502,14 @@ async def list_job_runs_route(
     _admin: AdminPrincipal = Depends(get_current_platform_admin),
 ) -> list[dict]:
     limit = max(1, min(limit, 200))
-    runs = await list_job_runs(db, limit=limit, organization_id=organization_id, job_type=job_type, status_filter=status_filter, since_days=since_days)
+    runs = await list_job_runs(
+        db,
+        limit=limit,
+        organization_id=organization_id,
+        job_type=job_type,
+        status_filter=status_filter,
+        since_days=since_days,
+    )
     return [
         {
             "id": str(run.id),

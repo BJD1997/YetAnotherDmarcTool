@@ -1,3 +1,10 @@
+"""Platform-admin repository functions — every function below is
+cross-tenant by design (no organization_id filter of its own) and assumes
+the caller has already established the platform-admin RLS bypass via
+get_current_platform_admin (sets app.is_platform_admin=true on the
+transaction) before calling. None of these functions are safe to call
+from a regular org-scoped request context."""
+
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
@@ -50,10 +57,10 @@ async def list_all_organizations(db: AsyncSession) -> Sequence[Organization]:
 async def org_aggregates(db: AsyncSession, org_ids: list[UUID]) -> dict[UUID, dict]:
     """Batched per-org rollups for the admin organizations list — one GROUP
     BY query per metric across every org at once, not N queries per org.
-    RLS is bypassed here the same way it is everywhere else in this router:
-    get_current_platform_admin already set app.is_platform_admin=true on
-    this transaction, which is what lets a query with no organization_id
-    filter of its own see rows across every tenant."""
+    RLS is bypassed here because the caller must have already run
+    `get_current_platform_admin` (see the module docstring above), which is
+    what lets a query with no organization_id filter of its own see rows
+    across every tenant."""
     if not org_ids:
         return {}
 

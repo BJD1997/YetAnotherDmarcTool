@@ -270,7 +270,10 @@ async def seed_platform_admin_with_totp(owner_factory) -> tuple:
     """Creates a local PlatformAdmin WITH a TOTP secret already enrolled
     (unlike login_as_platform_admin, which logs straight in with no MFA
     step at all) — returns (admin, secret) so tests can compute valid
-    codes with pyotp.TOTP(secret).now()."""
+    codes with pyotp.TOTP(secret).now(). Requires an active FERNET_KEY in
+    settings (see test_platform_admin.py's `_fernet_key_for_totp_encryption`
+    autouse fixture) — otp_secret is a Fernet-encrypted column and fails
+    closed without one."""
     import pyotp
 
     from app.models.platform_admin import PlatformAdmin

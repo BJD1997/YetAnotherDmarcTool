@@ -5,9 +5,10 @@ import pytest
 from cryptography.fernet import Fernet
 
 from app.config import settings
+from app.models.enums import UserRole
 from app.models.organization import Organization
 from app.services.crypto import secrets as crypto_secrets
-from tests.conftest import login_as_platform_admin, seed_platform_admin_with_totp
+from tests.conftest import login_as, login_as_platform_admin, seed_org_and_user, seed_platform_admin_with_totp
 
 
 @pytest.fixture(autouse=True)
@@ -64,12 +65,7 @@ async def test_admin_verify_otp_rejects_wrong_code(api):
 
 async def test_admin_enroll_otp_flow(api):
     client, owner_factory = api
-    await login_as_platform_admin(client, owner_factory)  # this helper's admin has NO TOTP enrolled yet — wrong tool here
 
-    # login_as_platform_admin bypasses the MFA-pending step entirely (mints a
-    # real session directly), so it can't be used to test enroll-otp, which
-    # needs a pending-MFA cookie. Re-seed a fresh not-yet-enrolled admin and
-    # drive it through /login for real instead.
     from app.services.auth.password import hash_password
     from app.models.platform_admin import PlatformAdmin
 
@@ -108,6 +104,7 @@ async def test_admin_enroll_otp_flow(api):
 
     me_response = await client.get("/api/admin/me")
     assert me_response.status_code == 200
+    assert me_response.json()["email"] == admin.email
 
 
 async def test_admin_logout(api):
@@ -123,7 +120,7 @@ async def test_admin_logout(api):
     assert me_response.status_code == 401
 
 
-async def test_change_password_requires_local_session(api):
+async def test_change_password_succeeds_for_local_admin(api):
     client, owner_factory = api
     admin, secret = await seed_platform_admin_with_totp(owner_factory)
     await client.post("/api/admin/login", json={"email": admin.email, "password": "correct horse battery staple"})
@@ -135,6 +132,65 @@ async def test_change_password_requires_local_session(api):
     )
 
     assert response.status_code == 204
+
+
+async def test_change_password_rejects_non_local_session(api):
+    """change_password depends on get_current_platform_admin_local, which is
+    strict to the local platform_admin_session cookie — a regular org-user
+    session (here, an Entra-backed operator-org admin) has no such cookie at
+    all, the same situation as any operator-org Entra admin trying to hit
+    this endpoint."""
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin, entra=True)
+    await login_as(client, owner_factory, user)
+
+    response = await client.post(
+        "/api/admin/change-password",
+        json={"current_password": "whatever", "new_password": "a brand new password entirely"},
+    )
+
+    assert response.status_code == 401
+
+
+async def test_admin_verify_otp_accepts_recovery_code_once(api):
+    """A recovery code is a full TOTP bypass — mirrors
+    test_verify_otp_accepts_recovery_code_once in test_auth.py but for the
+    platform-admin router. Drives the real /login -> /enroll-otp ->
+    /enroll-otp/confirm flow (same pattern as test_admin_enroll_otp_flow)
+    to get a real recovery code, since seed_platform_admin_with_totp seeds
+    otp_secret directly and never inserts any PlatformAdminRecoveryCode
+    rows."""
+    client, owner_factory = api
+    from app.models.platform_admin import PlatformAdmin
+    from app.services.auth.password import hash_password
+
+    async with owner_factory() as db:
+        admin = PlatformAdmin(
+            email=f"recovery-admin+{uuid.uuid4()}@platform.example",
+            password_hash=hash_password("correct horse battery staple"),
+            is_active=True,
+        )
+        db.add(admin)
+        await db.flush()
+        await db.refresh(admin)
+        await db.commit()
+
+    await client.post("/api/admin/login", json={"email": admin.email, "password": "correct horse battery staple"})
+    secret = (await client.post("/api/admin/enroll-otp")).json()["secret"]
+    confirm_response = await client.post(
+        "/api/admin/enroll-otp/confirm", json={"secret": secret, "code": pyotp.TOTP(secret).now()}
+    )
+    recovery_code = confirm_response.json()["recovery_codes"][0]
+
+    await client.post("/api/admin/logout")
+    await client.post("/api/admin/login", json={"email": admin.email, "password": "correct horse battery staple"})
+    first_use = await client.post("/api/admin/verify-otp", json={"code": recovery_code})
+    assert first_use.status_code == 204
+
+    await client.post("/api/admin/logout")
+    await client.post("/api/admin/login", json={"email": admin.email, "password": "correct horse battery staple"})
+    second_use = await client.post("/api/admin/verify-otp", json={"code": recovery_code})
+    assert second_use.status_code == 401
 
 
 async def test_list_organizations_requires_admin(api):

@@ -1,4 +1,4 @@
-from tests.conftest import login_as, seed_org_and_user
+from tests.conftest import login_as, login_as_platform_admin, seed_org_and_user
 
 
 async def test_auth_config_sso_disabled(api):
@@ -44,6 +44,8 @@ async def test_logout_clears_session(api):
     me_response = await client.get("/api/auth/me")
     assert me_response.status_code == 401
 
+
+from urllib.parse import parse_qs, urlparse
 
 import pyotp
 import pytest
@@ -185,6 +187,31 @@ async def test_verify_otp_rejects_wrong_code(api):
     assert response.status_code == 401
 
 
+async def test_verify_otp_accepts_recovery_code_once(api):
+    """A recovery code is a full TOTP bypass — the security-relevant branch
+    here is that it actually works once and is burned after use, not just
+    that a wrong code is rejected (see test_verify_otp_rejects_wrong_code)."""
+    client, owner_factory = api
+    org, _user = await seed_org_and_user(owner_factory, entra=False)
+    local_user = await _seed_local_user_with_password(owner_factory, org)
+    await client.post("/api/auth/local-login", json={"email": local_user.email, "password": "correct horse battery staple"})
+    secret = (await client.post("/api/auth/enroll-otp")).json()["secret"]
+    confirm_response = await client.post(
+        "/api/auth/enroll-otp/confirm", json={"secret": secret, "code": pyotp.TOTP(secret).now()}
+    )
+    recovery_code = confirm_response.json()["recovery_codes"][0]
+    await client.post("/api/auth/logout")
+    await client.post("/api/auth/local-login", json={"email": local_user.email, "password": "correct horse battery staple"})
+
+    first_use = await client.post("/api/auth/verify-otp", json={"code": recovery_code})
+    assert first_use.status_code == 204
+
+    await client.post("/api/auth/logout")
+    await client.post("/api/auth/local-login", json={"email": local_user.email, "password": "correct horse battery staple"})
+    second_use = await client.post("/api/auth/verify-otp", json={"code": recovery_code})
+    assert second_use.status_code == 401
+
+
 async def test_verify_otp_no_pending_challenge(api):
     client, _owner_factory = api
     response = await client.post("/api/auth/verify-otp", json={"code": "123456"})
@@ -204,6 +231,37 @@ async def test_local_login_demo_read_only_skips_mfa(api):
 
     me_response = await client.get("/api/auth/me")
     assert me_response.status_code == 200
+
+
+async def test_set_password_success_and_replay_rejected(api):
+    """Exercises the real set-password flow end to end: a platform admin
+    provisions a local user (POST /api/admin/organizations/{org_id}/users,
+    already covered from the admin side by test_create_local_user_for_org in
+    test_platform_admin.py), the returned setup_link's token is redeemed
+    against /api/auth/set-password, and a second redemption of the same
+    token is rejected (the `used_at is not None` branch)."""
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+    org_id = (await client.post("/api/admin/organizations", json={"name": "Local Auth Org"})).json()["id"]
+
+    create_response = await client.post(
+        f"/api/admin/organizations/{org_id}/users", json={"email": "new-local-user@example.com"}
+    )
+    assert create_response.status_code == 201
+    setup_link = create_response.json()["setup_link"]
+    token = parse_qs(urlparse(setup_link).query)["token"][0]
+
+    first_use = await client.post(
+        "/api/auth/set-password", json={"token": token, "new_password": "a brand new password entirely"}
+    )
+    assert first_use.status_code == 200
+    assert first_use.json() == {"needs_enrollment": True}
+    assert "dmarc_mfa_pending" in first_use.cookies or any("mfa_pending" in c for c in first_use.cookies)
+
+    second_use = await client.post(
+        "/api/auth/set-password", json={"token": token, "new_password": "a different password entirely"}
+    )
+    assert second_use.status_code == 400
 
 
 async def _mock_entra_success(monkeypatch, *, tenant_id: str, object_id: str, email: str, name: str = "Test User"):
