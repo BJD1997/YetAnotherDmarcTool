@@ -217,9 +217,38 @@ async def _mock_entra_success(monkeypatch, *, tenant_id: str, object_id: str, em
     monkeypatch.setattr("app.routers.auth.entra_oidc.validate_id_token", _fake_validate)
 
 
-async def test_callback_creates_first_user_as_org_admin(api, monkeypatch):
+async def test_callback_first_user_becomes_org_admin(api, monkeypatch):
     client, owner_factory = api
-    org, _user = await seed_org_and_user(owner_factory, entra=True)
+    from app.models.organization import Organization
+    from app.models.enums import OrganizationStatus
+    import uuid
+
+    tenant_id = str(uuid.uuid4())
+    async with owner_factory() as db:
+        org = Organization(name="Fresh Org", entra_tenant_id=tenant_id, status=OrganizationStatus.active)
+        db.add(org)
+        await db.commit()
+
+    await _mock_entra_success(monkeypatch, tenant_id=tenant_id, object_id="first-object-id", email="first@example.com")
+    client.cookies.set("oauth_state", "matching-state")
+    client.cookies.set("oauth_verifier", "some-verifier")
+
+    response = await client.get(
+        "/api/auth/callback",
+        params={"code": "auth-code", "state": "matching-state"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 302
+    assert "dmarc_session" in response.cookies
+
+    me_response = await client.get("/api/auth/me")
+    assert me_response.status_code == 200
+    assert me_response.json()["role"] == "org_admin"
+
+
+async def test_callback_creates_returning_org_user_as_member(api, monkeypatch):
+    client, owner_factory = api
+    org, _existing_user = await seed_org_and_user(owner_factory, entra=True)
     tenant_id = str(org.entra_tenant_id)
     await _mock_entra_success(monkeypatch, tenant_id=tenant_id, object_id="new-object-id", email="newperson@example.com")
 
@@ -235,6 +264,10 @@ async def test_callback_creates_first_user_as_org_admin(api, monkeypatch):
     assert response.status_code == 302
     assert response.headers["location"] == "/"
     assert "dmarc_session" in response.cookies
+
+    me_response = await client.get("/api/auth/me")
+    assert me_response.status_code == 200
+    assert me_response.json()["role"] == "member"
 
 
 async def test_callback_organization_not_provisioned(api, monkeypatch):
