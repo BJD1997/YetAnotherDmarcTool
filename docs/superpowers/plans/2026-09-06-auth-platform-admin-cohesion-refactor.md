@@ -1219,6 +1219,19 @@ with:
     connection = await get_org_mailbox_connection(db, org_id)
 ```
 
+**`upsert_mailbox_connection` has its own SEPARATE inline `select(MailboxConnection)` query — a second, distinct occurrence from `_mailbox_out`'s, easy to miss since both look identical.** Replace:
+```python
+    result = await db.execute(
+        select(MailboxConnection).where(MailboxConnection.organization_id == org_id)
+    )
+    connection = result.scalar_one_or_none()
+```
+with:
+```python
+    connection = await get_org_mailbox_connection(db, org_id)
+```
+This is the exact same query, reused for its "does a connection already exist" upsert check — `get_org_mailbox_connection` returning `None` when there's no row yet is exactly what this function's `if connection is None:` branch already expects, so this is a pure substitution, not a behavior change.
+
 - [ ] **Step 4: Run tests, confirm all still pass**
 
 Run: `cd backend && pytest tests/routers/test_platform_admin.py -v`
