@@ -204,3 +204,72 @@ async def test_local_login_demo_read_only_skips_mfa(api):
 
     me_response = await client.get("/api/auth/me")
     assert me_response.status_code == 200
+
+
+async def _mock_entra_success(monkeypatch, *, tenant_id: str, object_id: str, email: str, name: str = "Test User"):
+    async def _fake_exchange(**kwargs):
+        return {"id_token": "fake-id-token", "access_token": "fake-access-token"}
+
+    async def _fake_validate(id_token):
+        return {"tid": tenant_id, "oid": object_id, "preferred_username": email, "name": name}
+
+    monkeypatch.setattr("app.routers.auth.entra_oidc.exchange_code_for_tokens", _fake_exchange)
+    monkeypatch.setattr("app.routers.auth.entra_oidc.validate_id_token", _fake_validate)
+
+
+async def test_callback_creates_first_user_as_org_admin(api, monkeypatch):
+    client, owner_factory = api
+    org, _user = await seed_org_and_user(owner_factory, entra=True)
+    tenant_id = str(org.entra_tenant_id)
+    await _mock_entra_success(monkeypatch, tenant_id=tenant_id, object_id="new-object-id", email="newperson@example.com")
+
+    client.cookies.set("oauth_state", "matching-state")
+    client.cookies.set("oauth_verifier", "some-verifier")
+
+    response = await client.get(
+        "/api/auth/callback",
+        params={"code": "auth-code", "state": "matching-state"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/"
+    assert "dmarc_session" in response.cookies
+
+
+async def test_callback_organization_not_provisioned(api, monkeypatch):
+    client, _owner_factory = api
+    await _mock_entra_success(monkeypatch, tenant_id="00000000-0000-0000-0000-000000000000", object_id="oid", email="a@example.com")
+    client.cookies.set("oauth_state", "matching-state")
+    client.cookies.set("oauth_verifier", "verifier")
+
+    response = await client.get(
+        "/api/auth/callback",
+        params={"code": "auth-code", "state": "matching-state"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    assert "organization_not_provisioned" in response.headers["location"]
+
+
+async def test_callback_invalid_state(api):
+    client, _owner_factory = api
+    client.cookies.set("oauth_state", "cookie-state")
+    client.cookies.set("oauth_verifier", "verifier")
+
+    response = await client.get(
+        "/api/auth/callback",
+        params={"code": "auth-code", "state": "different-state"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    assert "invalid_state" in response.headers["location"]
+
+
+async def test_callback_entra_error_param(api):
+    client, _owner_factory = api
+    response = await client.get("/api/auth/callback", params={"error": "access_denied"}, follow_redirects=False)
+    assert response.status_code == 302
+    assert "access_denied" in response.headers["location"]

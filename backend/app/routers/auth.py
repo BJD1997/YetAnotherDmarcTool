@@ -3,7 +3,6 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, RedirectResponse
-from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -12,7 +11,6 @@ from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user
 from app.models.enums import AuthMethod, OrganizationStatus, SignInResult, UserRole, UserStatus
 from app.models.mfa_pending_challenge import MfaPendingChallenge
-from app.models.organization import Organization
 from app.models.user import User
 from app.models.user_recovery_code import UserRecoveryCode
 from app.repositories.auth import (
@@ -109,8 +107,7 @@ async def callback(request: Request, db: AsyncSession = Depends(get_db)) -> Redi
     email = claims.get("preferred_username") or claims.get("email") or ""
     display_name = claims.get("name")
 
-    result = await db.execute(select(Organization).where(Organization.entra_tenant_id == tenant_id))
-    org = result.scalar_one_or_none()
+    org = await get_organization_by_entra_tenant_id(db, tenant_id)
     if org is None:
         # Deliberate: orgs are provisioned by a platform admin ahead of time,
         # never auto-created just because some Entra tenant signed in.
@@ -134,16 +131,10 @@ async def callback(request: Request, db: AsyncSession = Depends(get_db)) -> Redi
         await db.commit()
         return RedirectResponse("/login?error=organization_suspended", status_code=302)
 
-    result = await db.execute(
-        select(User).where(User.organization_id == org.id, User.entra_object_id == object_id)
-    )
-    user = result.scalar_one_or_none()
+    user = await get_user_by_org_and_entra_object_id(db, org.id, object_id)
 
     if user is None:
-        count_result = await db.execute(
-            select(func.count()).select_from(User).where(User.organization_id == org.id)
-        )
-        is_first_user = count_result.scalar_one() == 0
+        is_first_user = await count_users_for_org(db, org.id) == 0
         user = User(
             organization_id=org.id,
             entra_object_id=object_id,
