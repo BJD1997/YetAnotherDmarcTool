@@ -259,3 +259,55 @@ async def test_update_sender_review_requires_org_admin(api):
     )
 
     assert response.status_code == 403
+
+
+async def test_dmarc_trend_buckets_by_day(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org)
+    day = datetime.now(timezone.utc) - timedelta(days=2)
+    report = await _add_aggregate_report(owner_factory, org, domain, date_range_begin=day)
+    await _add_aggregate_record(owner_factory, org, domain, report, count=6, spf_result=AuthResult.pass_, dkim_result=AuthResult.pass_)
+    await _add_aggregate_record(owner_factory, org, domain, report, count=4, disposition=Disposition.reject, spf_result=AuthResult.fail, dkim_result=AuthResult.fail)
+
+    response = await client.get("/api/dmarc/trend")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["total"] == 10
+    assert body[0]["dmarc_pass"] == 6
+    assert body[0]["rejected"] == 4
+
+
+async def test_dmarc_posture_no_domains(api):
+    client, owner_factory = api
+    _org, user = await seed_org_and_user(owner_factory)
+    await login_as(client, owner_factory, user)
+
+    response = await client.get("/api/dmarc/posture")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["compliance_pct"] is None
+    assert body["failed_volume"] == 0
+    assert body["report_freshness_hours"] is None
+    assert body["new_sender_count"] == 0
+    assert body["ready_to_enforce_count"] == 0
+
+
+async def test_dmarc_posture_reports_freshness_and_failed_volume(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org, verification_status=DomainVerificationStatus.verified)
+    report = await _add_aggregate_report(owner_factory, org, domain)
+    await _add_aggregate_record(owner_factory, org, domain, report, count=3, spf_result=AuthResult.fail, dkim_result=AuthResult.fail)
+
+    response = await client.get(f"/api/dmarc/posture?domain_id={domain.id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["failed_volume"] == 3
+    assert body["report_freshness_hours"] is not None

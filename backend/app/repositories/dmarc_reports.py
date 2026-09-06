@@ -7,7 +7,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.dmarc_aggregate import DmarcAggregateRecord, DmarcAggregateReport
-from app.models.enums import AuthResult, SenderReviewStatus
+from app.models.enums import AuthResult, Disposition, SenderReviewStatus
 from app.models.sender_review import SenderReview
 
 
@@ -147,3 +147,75 @@ async def create_sender_review(db: AsyncSession, *, organization_id: UUID, domai
     review = SenderReview(organization_id=organization_id, domain_id=domain_id, service_label=service_label)
     db.add(review)
     return review
+
+
+async def dmarc_trend_by_day(
+    db: AsyncSession, organization_id: UUID, *, domain_id: UUID | None, since: datetime
+) -> Sequence:
+    """One row per calendar day: total volume, dmarc-pass volume, spf-aligned
+    volume, dkim-aligned volume, rejected volume — the /dmarc/trend chart's
+    entire data source in one grouped query."""
+    dmarc_pass = (DmarcAggregateRecord.dkim_result == AuthResult.pass_) | (
+        DmarcAggregateRecord.spf_result == AuthResult.pass_
+    )
+
+    def _sum_where(condition):
+        return func.coalesce(func.sum(case((condition, DmarcAggregateRecord.count), else_=0)), 0)
+
+    day = func.date_trunc("day", DmarcAggregateReport.date_range_begin)
+    query = (
+        select(
+            day.label("day"),
+            func.coalesce(func.sum(DmarcAggregateRecord.count), 0),
+            _sum_where(dmarc_pass),
+            _sum_where(DmarcAggregateRecord.spf_result == AuthResult.pass_),
+            _sum_where(DmarcAggregateRecord.dkim_result == AuthResult.pass_),
+            _sum_where(DmarcAggregateRecord.disposition == Disposition.reject),
+        )
+        .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
+        .where(
+            DmarcAggregateRecord.organization_id == organization_id,
+            DmarcAggregateReport.date_range_begin >= since,
+        )
+        .group_by(day)
+        .order_by(day)
+    )
+    if domain_id is not None:
+        query = query.where(DmarcAggregateRecord.domain_id == domain_id)
+    return (await db.execute(query)).all()
+
+
+async def failed_message_volume_for_org_since(
+    db: AsyncSession, organization_id: UUID, since: datetime, *, domain_id: UUID | None = None
+) -> int:
+    """Distinct from failed_message_volume_for_domain above: that one is
+    domain-scoped/all-time (used by the Domains list card); this is
+    org-wide-or-domain-scoped AND date-windowed, for /dmarc/posture."""
+    dmarc_pass = (DmarcAggregateRecord.dkim_result == AuthResult.pass_) | (
+        DmarcAggregateRecord.spf_result == AuthResult.pass_
+    )
+    query = select(func.coalesce(func.sum(case((~dmarc_pass, DmarcAggregateRecord.count), else_=0)), 0)).where(
+        DmarcAggregateRecord.organization_id == organization_id
+    )
+    if domain_id is not None:
+        query = query.join(
+            DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id
+        ).where(DmarcAggregateRecord.domain_id == domain_id, DmarcAggregateReport.date_range_begin >= since)
+    else:
+        query = query.join(
+            DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id
+        ).where(DmarcAggregateReport.date_range_begin >= since)
+    return (await db.execute(query)).scalar_one()
+
+
+async def count_new_pending_senders_since(
+    db: AsyncSession, organization_id: UUID, since: datetime, *, domain_id: UUID | None = None
+) -> int:
+    query = select(func.count()).select_from(SenderReview).where(
+        SenderReview.organization_id == organization_id,
+        SenderReview.status == SenderReviewStatus.pending,
+        SenderReview.created_at >= since,
+    )
+    if domain_id is not None:
+        query = query.where(SenderReview.domain_id == domain_id)
+    return (await db.execute(query)).scalar_one()

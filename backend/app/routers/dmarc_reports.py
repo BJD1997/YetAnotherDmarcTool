@@ -20,7 +20,7 @@ from app.models.source_ip_identity import SourceIpIdentity
 from app.models.tls_rpt import TlsRptReport
 from app.models.user import User
 from app.repositories import dmarc_reports as dmarc_reports_repo
-from app.repositories.domains import get_owned_domain
+from app.repositories.domains import get_owned_domain, list_domains_for_org
 from app.schemas.dmarc_reports import SenderReviewUpdateRequest
 from app.services.action_queue.rules import reviewed_service_labels, unreviewed_high_volume_senders
 from app.services.dmarc_analytics import service_breakdown
@@ -184,37 +184,8 @@ async def dmarc_trend(
     if domain_id is not None:
         await get_owned_domain(db, domain_id, user.organization_id)
 
-    dmarc_pass = (DmarcAggregateRecord.dkim_result == AuthResult.pass_) | (
-        DmarcAggregateRecord.spf_result == AuthResult.pass_
-    )
-
-    def _sum_where(condition):
-        return func.coalesce(func.sum(case((condition, DmarcAggregateRecord.count), else_=0)), 0)
-
     since = datetime.now(timezone.utc) - timedelta(days=days)
-    day = func.date_trunc("day", DmarcAggregateReport.date_range_begin)
-
-    query = (
-        select(
-            day.label("day"),
-            func.coalesce(func.sum(DmarcAggregateRecord.count), 0),
-            _sum_where(dmarc_pass),
-            _sum_where(DmarcAggregateRecord.spf_result == AuthResult.pass_),
-            _sum_where(DmarcAggregateRecord.dkim_result == AuthResult.pass_),
-            _sum_where(DmarcAggregateRecord.disposition == Disposition.reject),
-        )
-        .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
-        .where(
-            DmarcAggregateRecord.organization_id == user.organization_id,
-            DmarcAggregateReport.date_range_begin >= since,
-        )
-        .group_by(day)
-        .order_by(day)
-    )
-    if domain_id is not None:
-        query = query.where(DmarcAggregateRecord.domain_id == domain_id)
-
-    rows = (await db.execute(query)).all()
+    rows = await dmarc_reports_repo.dmarc_trend_by_day(db, user.organization_id, domain_id=domain_id, since=since)
     return [
         {
             "date": d.date().isoformat(),
@@ -241,8 +212,7 @@ async def dmarc_posture(
     if domain_id is not None:
         domains = [await get_owned_domain(db, domain_id, user.organization_id)]
     else:
-        result = await db.execute(select(Domain).where(Domain.organization_id == user.organization_id))
-        domains = result.scalars().all()
+        domains = await list_domains_for_org(db, user.organization_id)
 
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
@@ -276,34 +246,16 @@ async def dmarc_posture(
         weight_total = sum(max(total, 1) for _, total in scored)
         compliance_pct = round(weighted_sum / weight_total, 1)
 
-    dmarc_pass = (DmarcAggregateRecord.dkim_result == AuthResult.pass_) | (
-        DmarcAggregateRecord.spf_result == AuthResult.pass_
-    )
-    failed_volume_query = select(
-        func.coalesce(func.sum(case((~dmarc_pass, DmarcAggregateRecord.count), else_=0)), 0)
-    ).where(DmarcAggregateRecord.organization_id == user.organization_id)
-    freshness_query = select(func.max(DmarcAggregateReport.received_at)).where(
-        DmarcAggregateReport.organization_id == user.organization_id
-    )
-    new_sender_query = select(func.count()).select_from(SenderReview).where(
-        SenderReview.organization_id == user.organization_id,
-        SenderReview.status == SenderReviewStatus.pending,
-        SenderReview.created_at >= since,
+    failed_volume = await dmarc_reports_repo.failed_message_volume_for_org_since(
+        db, user.organization_id, since, domain_id=domain_id
     )
     if domain_id is not None:
-        failed_volume_query = failed_volume_query.join(
-            DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id
-        ).where(DmarcAggregateRecord.domain_id == domain_id, DmarcAggregateReport.date_range_begin >= since)
-        freshness_query = freshness_query.where(DmarcAggregateReport.domain_id == domain_id)
-        new_sender_query = new_sender_query.where(SenderReview.domain_id == domain_id)
+        last_received_at = await dmarc_reports_repo.last_report_received_at_for_domain(db, domain_id)
     else:
-        failed_volume_query = failed_volume_query.join(
-            DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id
-        ).where(DmarcAggregateReport.date_range_begin >= since)
-
-    failed_volume = (await db.execute(failed_volume_query)).scalar_one()
-    last_received_at = (await db.execute(freshness_query)).scalar_one_or_none()
-    new_sender_count = (await db.execute(new_sender_query)).scalar_one()
+        last_received_at = await dmarc_reports_repo.last_report_received_at_for_org(db, user.organization_id)
+    new_sender_count = await dmarc_reports_repo.count_new_pending_senders_since(
+        db, user.organization_id, since, domain_id=domain_id
+    )
 
     report_freshness_hours = (
         round((datetime.now(timezone.utc) - last_received_at).total_seconds() / 3600, 1)
