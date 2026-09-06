@@ -439,3 +439,72 @@ async def test_dmarc_record_detail_404_for_different_domain(api):
     response = await client.get(f"/api/domains/{domain_b.id}/dmarc/records/{record_a.id}")
 
     assert response.status_code == 404
+
+
+async def test_dmarc_reports_summary_totals_and_top_failing(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org)
+    report = await _add_aggregate_report(owner_factory, org, domain)
+    await _add_aggregate_record(owner_factory, org, domain, report, source_ip="203.0.113.10", count=8, spf_result=AuthResult.pass_, dkim_result=AuthResult.pass_)
+    await _add_aggregate_record(owner_factory, org, domain, report, source_ip="198.51.100.20", count=2, disposition=Disposition.reject, spf_result=AuthResult.fail, dkim_result=AuthResult.fail)
+
+    response = await client.get(f"/api/domains/{domain.id}/dmarc/reports/summary")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_messages"] == 10
+    assert body["total_reports"] == 1
+    assert body["dmarc_pass_pct"] == 80.0
+    assert body["top_failing_source"]["source_ip"] == "198.51.100.20"
+    assert body["top_failing_source"]["failed_count"] == 2
+
+
+async def test_dmarc_reports_summary_no_top_failing_when_all_pass(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org)
+    report = await _add_aggregate_report(owner_factory, org, domain)
+    await _add_aggregate_record(owner_factory, org, domain, report, count=5, spf_result=AuthResult.pass_, dkim_result=AuthResult.pass_)
+
+    response = await client.get(f"/api/domains/{domain.id}/dmarc/reports/summary")
+
+    assert response.status_code == 200
+    assert response.json()["top_failing_source"] is None
+
+
+async def test_dmarc_reports_grouped_by_disposition(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org)
+    report = await _add_aggregate_report(owner_factory, org, domain)
+    await _add_aggregate_record(owner_factory, org, domain, report, count=6, disposition=Disposition.none)
+    await _add_aggregate_record(owner_factory, org, domain, report, count=4, disposition=Disposition.reject)
+
+    response = await client.get(f"/api/domains/{domain.id}/dmarc/reports/grouped?by=disposition")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body[0]["key"] == "none"
+    assert body[0]["message_count"] == 6
+    assert body[1]["key"] == "reject"
+    assert body[1]["message_count"] == 4
+
+
+async def test_dmarc_reports_grouped_by_source(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org)
+    report = await _add_aggregate_report(owner_factory, org, domain)
+    await _add_aggregate_record(owner_factory, org, domain, report, source_ip="203.0.113.10", count=3)
+
+    response = await client.get(f"/api/domains/{domain.id}/dmarc/reports/grouped?by=source")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body[0]["key"] == "203.0.113.10"
+    assert body[0]["label"] == "203.0.113.10"  # ip_fallback identity

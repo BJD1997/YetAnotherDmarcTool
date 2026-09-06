@@ -20,7 +20,6 @@ from app.models.source_ip_identity import SourceIpIdentity
 from app.models.tls_rpt import TlsRptReport
 from app.models.user import User
 from app.repositories import dmarc_reports as dmarc_reports_repo
-from app.repositories.dmarc_reports import _apply_report_filters
 from app.repositories.domains import get_owned_domain, list_domains_for_org
 from app.schemas.dmarc_reports import SenderReviewUpdateRequest
 from app.services.action_queue.rules import reviewed_service_labels, unreviewed_high_volume_senders
@@ -352,70 +351,15 @@ async def dmarc_reports_summary(
     together."""
     await get_owned_domain(db, domain_id, user.organization_id)
     since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
-
-    dmarc_pass = (DmarcAggregateRecord.dkim_result == AuthResult.pass_) | (
-        DmarcAggregateRecord.spf_result == AuthResult.pass_
+    filter_kwargs = dict(
+        since=since, disposition=disposition, spf_result=spf_result, dkim_result=dkim_result,
+        reporter=reporter, source_ip=source_ip,
     )
 
-    totals_query = (
-        select(
-            func.coalesce(func.sum(DmarcAggregateRecord.count), 0),
-            func.coalesce(func.sum(case((dmarc_pass, DmarcAggregateRecord.count), else_=0)), 0),
-            func.coalesce(
-                func.sum(case((DmarcAggregateRecord.disposition == Disposition.none, DmarcAggregateRecord.count), else_=0)),
-                0,
-            ),
-            func.coalesce(
-                func.sum(
-                    case((DmarcAggregateRecord.disposition == Disposition.quarantine, DmarcAggregateRecord.count), else_=0)
-                ),
-                0,
-            ),
-            func.coalesce(
-                func.sum(case((DmarcAggregateRecord.disposition == Disposition.reject, DmarcAggregateRecord.count), else_=0)),
-                0,
-            ),
-            func.count(func.distinct(DmarcAggregateRecord.report_id)),
-            func.max(DmarcAggregateReport.received_at),
-        )
-        .select_from(DmarcAggregateRecord)
-        .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
-        .where(DmarcAggregateRecord.domain_id == domain_id)
-    )
-    totals_query = _apply_report_filters(
-        totals_query,
-        since=since,
-        disposition=disposition,
-        spf_result=spf_result,
-        dkim_result=dkim_result,
-        reporter=reporter,
-        source_ip=source_ip,
-    )
     total, passed, accepted, quarantined, rejected, report_count, last_received_at = (
-        await db.execute(totals_query)
-    ).one()
-
-    failed_sum = func.coalesce(func.sum(case((~dmarc_pass, DmarcAggregateRecord.count), else_=0)), 0)
-    top_failing_query = (
-        select(DmarcAggregateRecord.source_ip, failed_sum.label("failed"))
-        .select_from(DmarcAggregateRecord)
-        .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
-        .where(DmarcAggregateRecord.domain_id == domain_id)
-        .group_by(DmarcAggregateRecord.source_ip)
-        .having(failed_sum > 0)
-        .order_by(failed_sum.desc())
-        .limit(1)
+        await dmarc_reports_repo.report_totals(db, domain_id, **filter_kwargs)
     )
-    top_failing_query = _apply_report_filters(
-        top_failing_query,
-        since=since,
-        disposition=disposition,
-        spf_result=spf_result,
-        dkim_result=dkim_result,
-        reporter=reporter,
-        source_ip=source_ip,
-    )
-    top_failing_row = (await db.execute(top_failing_query)).first()
+    top_failing_row = await dmarc_reports_repo.top_failing_source_row(db, domain_id, **filter_kwargs)
 
     top_failing_source = None
     if top_failing_row is not None:
@@ -440,13 +384,6 @@ async def dmarc_reports_summary(
     }
 
 
-_GROUPED_BY_COLUMNS = {
-    "source": DmarcAggregateRecord.source_ip,
-    "reporter": DmarcAggregateReport.org_name,
-    "disposition": DmarcAggregateRecord.disposition,
-}
-
-
 @router.get("/domains/{domain_id}/dmarc/reports/grouped")
 async def dmarc_reports_grouped(
     domain_id: uuid.UUID,
@@ -465,39 +402,10 @@ async def dmarc_reports_grouped(
     await get_owned_domain(db, domain_id, user.organization_id)
     since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
 
-    dmarc_pass = (DmarcAggregateRecord.dkim_result == AuthResult.pass_) | (
-        DmarcAggregateRecord.spf_result == AuthResult.pass_
+    rows = await dmarc_reports_repo.report_records_grouped(
+        db, domain_id, by, since=since, disposition=disposition, spf_result=spf_result,
+        dkim_result=dkim_result, reporter=reporter, source_ip=source_ip,
     )
-    group_col = _GROUPED_BY_COLUMNS[by]
-
-    def _sum_where(condition):
-        return func.coalesce(func.sum(case((condition, DmarcAggregateRecord.count), else_=0)), 0)
-
-    query = (
-        select(
-            group_col,
-            func.coalesce(func.sum(DmarcAggregateRecord.count), 0),
-            func.count(func.distinct(DmarcAggregateRecord.report_id)),
-            _sum_where(DmarcAggregateRecord.disposition == Disposition.none),
-            _sum_where(DmarcAggregateRecord.disposition == Disposition.quarantine),
-            _sum_where(DmarcAggregateRecord.disposition == Disposition.reject),
-            _sum_where(dmarc_pass),
-        )
-        .select_from(DmarcAggregateRecord)
-        .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
-        .where(DmarcAggregateRecord.domain_id == domain_id)
-        .group_by(group_col)
-    )
-    query = _apply_report_filters(
-        query,
-        since=since,
-        disposition=disposition,
-        spf_result=spf_result,
-        dkim_result=dkim_result,
-        reporter=reporter,
-        source_ip=source_ip,
-    )
-    rows = (await db.execute(query)).all()
 
     identities = {}
     if by == "source":
