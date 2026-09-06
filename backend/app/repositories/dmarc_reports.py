@@ -1,12 +1,14 @@
 from collections.abc import Sequence
 from datetime import datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import case, func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.dmarc_aggregate import DmarcAggregateRecord, DmarcAggregateReport
-from app.models.enums import AuthResult
+from app.models.enums import AuthResult, SenderReviewStatus
+from app.models.sender_review import SenderReview
 
 
 async def count_reports_for_org(db: AsyncSession, organization_id: UUID) -> int:
@@ -100,3 +102,48 @@ async def latest_published_policy_for_domain(db: AsyncSession, domain_id: UUID) 
             .limit(1)
         )
     ).scalar_one_or_none()
+
+
+async def list_sender_reviews_for_domain(db: AsyncSession, domain_id: UUID) -> Sequence[SenderReview]:
+    result = await db.execute(select(SenderReview).where(SenderReview.domain_id == domain_id))
+    return result.scalars().all()
+
+
+async def upsert_missing_sender_reviews(
+    db: AsyncSession, organization_id: UUID, domain_id: UUID, service_labels: list[str]
+) -> None:
+    """Lazily creates a pending SenderReview row for every label in
+    `service_labels` that doesn't already have one. ON CONFLICT DO NOTHING
+    rather than get-then-insert — two orgs' (or two tabs') page-loads racing
+    on the same (domain_id, service_label) shouldn't 500 on the unique
+    constraint, same race-tolerant spirit as identify_many's cache upsert."""
+    if not service_labels:
+        return
+    stmt = pg_insert(SenderReview).values(
+        [
+            {
+                "id": uuid4(),
+                "organization_id": organization_id,
+                "domain_id": domain_id,
+                "service_label": label,
+                "status": SenderReviewStatus.pending.value,
+            }
+            for label in service_labels
+        ]
+    )
+    stmt = stmt.on_conflict_do_nothing(index_elements=["domain_id", "service_label"])
+    await db.execute(stmt)
+    await db.flush()
+
+
+async def get_sender_review(db: AsyncSession, domain_id: UUID, service_label: str) -> SenderReview | None:
+    result = await db.execute(
+        select(SenderReview).where(SenderReview.domain_id == domain_id, SenderReview.service_label == service_label)
+    )
+    return result.scalar_one_or_none()
+
+
+async def create_sender_review(db: AsyncSession, *, organization_id: UUID, domain_id: UUID, service_label: str) -> SenderReview:
+    review = SenderReview(organization_id=organization_id, domain_id=domain_id, service_label=service_label)
+    db.add(review)
+    return review

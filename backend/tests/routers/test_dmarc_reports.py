@@ -1,11 +1,32 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import pytest_asyncio
+
 from app.models.dmarc_aggregate import DmarcAggregateRecord, DmarcAggregateReport
 from app.models.domain import Domain
 from app.models.enums import AuthResult, Disposition, DomainVerificationStatus, UserRole
 
 from tests.conftest import login_as, seed_org_and_user
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _fast_ip_fallback(monkeypatch):
+    """Every source_ip in this file resolves via identify_many, which does a
+    real reverse-DNS lookup through app.services.dns_checks.resolver — that
+    module talks to a hostname ("resolver") that only exists on the real
+    Docker network. Unpatched, the first call in the whole test run raises
+    socket.gaierror. Patching resolve_ptr to return None (matching the
+    "no PTR record" branch _resolve_one already handles) makes every source_ip
+    resolve to a deterministic ip_fallback identity (service_label == the IP
+    itself) with no network I/O at all — same idiom as
+    tests/services/source_identification/test_forward_confirm.py."""
+    from app.services.source_identification import service_identifier
+
+    async def _no_ptr(ip: str) -> str | None:
+        return None
+
+    monkeypatch.setattr(service_identifier, "resolve_ptr", _no_ptr)
 
 
 async def _add_domain(owner_factory, org, *, name: str = "example.com", **kwargs) -> Domain:
@@ -171,3 +192,70 @@ async def test_dmarc_sources_empty(api):
 
     assert response.status_code == 200
     assert response.json() == []
+
+
+async def test_sender_inventory_lazily_creates_pending_reviews(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org)
+    report = await _add_aggregate_report(owner_factory, org, domain)
+    await _add_aggregate_record(owner_factory, org, domain, report, source_ip="203.0.113.10", count=5)
+
+    response = await client.get(f"/api/domains/{domain.id}/dmarc/sender-inventory")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["service_label"] == "203.0.113.10"  # ip_fallback label == the IP
+    assert body[0]["status"] == "pending"
+    assert body[0]["owner"] is None
+
+
+async def test_sender_inventory_second_call_reuses_existing_review(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org)
+    report = await _add_aggregate_report(owner_factory, org, domain)
+    await _add_aggregate_record(owner_factory, org, domain, report, source_ip="203.0.113.10")
+
+    first = await client.get(f"/api/domains/{domain.id}/dmarc/sender-inventory")
+    await client.patch(
+        f"/api/domains/{domain.id}/dmarc/sender-inventory/203.0.113.10", json={"status": "approved", "owner": "IT"}
+    )
+    second = await client.get(f"/api/domains/{domain.id}/dmarc/sender-inventory")
+
+    assert first.status_code == 200 and second.status_code == 200
+    assert second.json()[0]["status"] == "approved"
+    assert second.json()[0]["owner"] == "IT"
+
+
+async def test_update_sender_review_creates_row_when_missing(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org)
+
+    response = await client.patch(
+        f"/api/domains/{domain.id}/dmarc/sender-inventory/some-service", json={"status": "blocked"}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["service_label"] == "some-service"
+    assert body["status"] == "blocked"
+    assert body["reviewed_at"] is not None
+
+
+async def test_update_sender_review_requires_org_admin(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory, role=UserRole.member)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org)
+
+    response = await client.patch(
+        f"/api/domains/{domain.id}/dmarc/sender-inventory/some-service", json={"status": "approved"}
+    )
+
+    assert response.status_code == 403

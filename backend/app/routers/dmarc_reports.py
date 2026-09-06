@@ -3,7 +3,6 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
 from sqlalchemy import case, func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -128,35 +127,13 @@ async def sender_inventory(
     if not services:
         return []
 
-    review_rows = (
-        (await db.execute(select(SenderReview).where(SenderReview.domain_id == domain_id))).scalars().all()
-    )
+    review_rows = await dmarc_reports_repo.list_sender_reviews_for_domain(db, domain_id)
     reviews_by_label = {r.service_label: r for r in review_rows}
 
     missing_labels = [s["service_label"] for s in services if s["service_label"] not in reviews_by_label]
     if missing_labels:
-        stmt = pg_insert(SenderReview).values(
-            [
-                {
-                    "id": uuid.uuid4(),
-                    "organization_id": user.organization_id,
-                    "domain_id": domain_id,
-                    "service_label": label,
-                    "status": SenderReviewStatus.pending.value,
-                }
-                for label in missing_labels
-            ]
-        )
-        # ON CONFLICT DO NOTHING rather than get-then-insert — two orgs'
-        # (or two tabs') page-loads racing on the same (domain_id,
-        # service_label) shouldn't 500 on the unique constraint, same
-        # race-tolerant spirit as identify_many's cache upsert.
-        stmt = stmt.on_conflict_do_nothing(index_elements=["domain_id", "service_label"])
-        await db.execute(stmt)
-        await db.flush()
-        review_rows = (
-            (await db.execute(select(SenderReview).where(SenderReview.domain_id == domain_id))).scalars().all()
-        )
+        await dmarc_reports_repo.upsert_missing_sender_reviews(db, user.organization_id, domain_id, missing_labels)
+        review_rows = await dmarc_reports_repo.list_sender_reviews_for_domain(db, domain_id)
         reviews_by_label = {r.service_label: r for r in review_rows}
     await db.commit()
 
@@ -173,16 +150,14 @@ async def update_sender_review(
 ) -> dict:
     await get_owned_domain(db, domain_id, user.organization_id)
 
-    result = await db.execute(
-        select(SenderReview).where(SenderReview.domain_id == domain_id, SenderReview.service_label == service_label)
-    )
-    review = result.scalar_one_or_none()
+    review = await dmarc_reports_repo.get_sender_review(db, domain_id, service_label)
     if review is None:
         # The sender-inventory GET hasn't lazily created this row yet (e.g.
         # a client patching straight from action-queue data) — create it
         # here too rather than 404ing on a service that legitimately exists.
-        review = SenderReview(organization_id=user.organization_id, domain_id=domain_id, service_label=service_label)
-        db.add(review)
+        review = await dmarc_reports_repo.create_sender_review(
+            db, organization_id=user.organization_id, domain_id=domain_id, service_label=service_label
+        )
 
     if body.status is not None:
         review.status = body.status
