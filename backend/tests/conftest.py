@@ -25,14 +25,28 @@ trade-off is that local DB-test runs need a Postgres you start yourself.)
 import asyncio
 import os
 import subprocess
+import uuid
 from pathlib import Path
 
+import app.middleware.demo_read_only as demo_read_only_module
+import app.workers.jobs.mailbox_poll_job as mailbox_poll_job_module
+import httpx
 import pytest
 import pytest_asyncio
+from app.db import session as session_module
+from httpx import ASGITransport
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
+
+from app.config import settings
+from app.db.session import get_db
+from app.main import app
+from app.models.enums import AuthMethod, OrganizationStatus, UserRole, UserStatus
+from app.models.organization import Organization
+from app.models.user import User
+from app.services.auth import session_manager
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
 _APP_ROLE = "dmarc_app"
@@ -108,3 +122,137 @@ async def rls_sessions(migrated_db):
             yield owner, app
     await app_engine.dispose()
     await owner_engine.dispose()
+
+
+CSRF_HEADERS = {"X-Requested-With": "yetanotherdmarctool"}
+
+
+@pytest_asyncio.fixture
+async def api(migrated_db):
+    """Yields (client, owner_factory) for HTTP-level router tests. `client` is
+    an httpx.AsyncClient wired directly to the real ASGI app (no network
+    socket) via ASGITransport, with the CSRF header pre-set (see
+    enforce_csrf_header in app/middleware/csrf.py) so POST/PUT/PATCH/DELETE
+    calls don't need to set it per-test. Requests run through app.db.session.get_db
+    overridden to connect as the non-owner dmarc_app role — the same role
+    FORCE ROW LEVEL SECURITY binds in prod — so RLS is genuinely exercised,
+    not bypassed. Also patches async_session_factory in session_module,
+    demo_read_only_module, AND mailbox_poll_job_module (plus mailbox_poll_job_module's
+    own copy of `engine`), since each of those modules imports directly from
+    app.db.session rather than going through dependency injection:
+    demo_read_only's enforce_demo_read_only middleware, and mailbox_poll_job's
+    poll_org_mailbox — which set_mailbox_connection/resync_mailbox_connection
+    dispatch as a real BackgroundTask that DOES execute under ASGITransport,
+    so without this patch it would try to reach the prod database.
+    `owner_factory` is for test setup that must bypass RLS (seeding orgs/users
+    directly), same superuser role rls_sessions uses.
+    """
+
+    owner_engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
+    app_engine = create_async_engine(_app_url(), poolclass=NullPool)
+    owner_factory = async_sessionmaker(owner_engine, expire_on_commit=False)
+    app_factory = async_sessionmaker(app_engine, expire_on_commit=False)
+
+    async with owner_factory() as owner:
+        await owner.execute(text("TRUNCATE organizations CASCADE"))
+        await owner.commit()
+
+    async def _override_get_db():
+        async with app_factory() as session:
+            yield session
+
+    # Override both the dependency-injected get_db and the global async_session_factory
+    # (used by middlewares like enforce_demo_read_only that don't use dependency injection).
+    # Must replace in session_module, demo_read_only_module, AND mailbox_poll_job_module
+    # since app.middleware.demo_read_only and app.workers.jobs.mailbox_poll_job both
+    # imported it directly. mailbox_poll_job also imports `engine` directly (for its
+    # advisory-lock connection), so that needs patching here too.
+    app.dependency_overrides[get_db] = _override_get_db
+    original_session_factory = session_module.async_session_factory
+    original_demo_read_only_factory = demo_read_only_module.async_session_factory
+    original_mailbox_poll_job_factory = mailbox_poll_job_module.async_session_factory
+    original_mailbox_poll_job_engine = mailbox_poll_job_module.engine
+    session_module.async_session_factory = app_factory
+    demo_read_only_module.async_session_factory = app_factory
+    mailbox_poll_job_module.async_session_factory = app_factory
+    mailbox_poll_job_module.engine = app_engine
+
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=CSRF_HEADERS) as client:
+        yield client, owner_factory
+
+    app.dependency_overrides.pop(get_db, None)
+    session_module.async_session_factory = original_session_factory
+    demo_read_only_module.async_session_factory = original_demo_read_only_factory
+    mailbox_poll_job_module.async_session_factory = original_mailbox_poll_job_factory
+    mailbox_poll_job_module.engine = original_mailbox_poll_job_engine
+    await app_engine.dispose()
+    await owner_engine.dispose()
+
+
+async def seed_org_and_user(
+    owner_factory,
+    *,
+    role: UserRole = UserRole.org_admin,
+    entra: bool = False,
+    is_demo_read_only: bool = False,
+) -> tuple[Organization, User]:
+    """Inserts an Organization + User directly via the RLS-bypassing owner
+    role — same idea as _seed_two_orgs in test_rls.py."""
+    async with owner_factory() as db:
+        org = Organization(
+            name="Test Org",
+            status=OrganizationStatus.active,
+            entra_tenant_id=uuid.uuid4() if entra else None,
+            is_demo_read_only=is_demo_read_only,
+        )
+        db.add(org)
+        await db.flush()
+        user = User(
+            organization_id=org.id,
+            email="admin@test.example",
+            display_name="Test Admin",
+            role=role,
+            status=UserStatus.active,
+            auth_method=AuthMethod.entra if entra else AuthMethod.local,
+        )
+        db.add(user)
+        await db.flush()
+        await db.refresh(org)
+        await db.refresh(user)
+        await db.commit()
+        return org, user
+
+
+async def login_as(client: httpx.AsyncClient, owner_factory, user: User) -> None:
+    """Mints a real session (via the same session_manager the app uses) and
+    sets it as a cookie on `client` — user_sessions is RLS-exempt, so the
+    owner role is fine here."""
+    async with owner_factory() as db:
+        _, raw_token = await session_manager.create_user_session(
+            db, user_id=user.id, organization_id=user.organization_id, ip_address="127.0.0.1", user_agent="pytest",
+        )
+        await db.commit()
+    client.cookies.set(settings.session_cookie_name, raw_token)
+
+
+async def login_as_platform_admin(client: httpx.AsyncClient, owner_factory) -> None:
+    """Creates a local PlatformAdmin and logs the client in as them. password_hash
+    is a placeholder, not a real hash — this mints a session directly via
+    session_manager, the same bypass a real password login would produce,
+    without ever calling verify_password, so the placeholder is never checked."""
+    from app.models.platform_admin import PlatformAdmin
+
+    async with owner_factory() as db:
+        admin = PlatformAdmin(
+            email=f"admin+{uuid.uuid4()}@platform.example",
+            password_hash="unused",
+            is_active=True,
+        )
+        db.add(admin)
+        await db.flush()
+        _, raw_token = await session_manager.create_platform_admin_session(
+            db, platform_admin_id=admin.id, ip_address="127.0.0.1", user_agent="pytest",
+        )
+        await db.commit()
+    client.cookies.set(settings.platform_admin_session_cookie_name, raw_token)

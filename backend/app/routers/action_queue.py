@@ -1,15 +1,14 @@
 import dataclasses
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user
-from app.models.domain import Domain
-from app.models.mailbox_connection import MailboxConnection
 from app.models.user import User
+from app.repositories.domains import get_owned_domain, list_domains_for_org
+from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.services.dmarc_analytics import service_breakdown
 from app.services.action_queue.rules import (
     domain_ready_for_stricter_policy,
@@ -37,13 +36,9 @@ async def action_queue(
     user: User = Depends(get_current_user),
 ) -> list[dict]:
     if domain_id is not None:
-        domain = await db.get(Domain, domain_id)
-        if domain is None or domain.organization_id != user.organization_id:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "domain not found")
-        domains = [domain]
+        domains = [await get_owned_domain(db, domain_id, user.organization_id)]
     else:
-        result = await db.execute(select(Domain).where(Domain.organization_id == user.organization_id))
-        domains = result.scalars().all()
+        domains = await list_domains_for_org(db, user.organization_id)
 
     items = list(await mailbox_stopped_receiving_reports(db, user.organization_id))
 
@@ -54,9 +49,7 @@ async def action_queue(
     if domain_id is None:
         items += await enforcement_readiness_notice(db, domains)
 
-    connection = (
-        await db.execute(select(MailboxConnection).where(MailboxConnection.organization_id == user.organization_id))
-    ).scalar_one_or_none()
+    connection = await get_org_mailbox_connection(db, user.organization_id)
     mailbox_address = connection.mailbox_address if connection is not None else None
 
     for domain in domains:

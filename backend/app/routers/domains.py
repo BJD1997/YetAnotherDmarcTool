@@ -1,23 +1,27 @@
-import re
 import secrets
 import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, field_validator
-from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user, require_org_admin
-from app.models.dmarc_aggregate import DmarcAggregateRecord, DmarcAggregateReport
 from app.models.domain import Domain
-from app.models.enums import AuthResult, CheckType, DomainMailProfile, DomainVerificationStatus
-from app.models.mailbox_connection import MailboxConnection
+from app.models.enums import CheckType, DomainMailProfile, DomainVerificationStatus
 from app.models.organization import Organization
 from app.models.user import User
+from app.repositories.dmarc_reports import (
+    count_reports_for_domain,
+    failed_message_volume_for_domain,
+    last_report_received_at_for_domain,
+)
+from app.repositories.domains import count_subdomains, get_owned_domain, list_domains_for_org
+from app.repositories.mailbox_connections import get_org_mailbox_connection
+from app.repositories.organizations import get_organization
+from app.schemas.domains import DomainCreateRequest, DomainUpdateRequest
 from app.services.cloudflare.dns_provisioner import ensure_authorization_record
 from app.services.dns_checks.dmarc_record import check_rua_destination
 from app.services.dns_checks.domain_verification import apply_domain_verification, verification_record_name
@@ -26,31 +30,6 @@ from app.services.rating.domain_rating import compute_domain_rating, domain_poli
 from app.services.rating.score import tally_worst_status
 
 router = APIRouter(prefix="/domains", tags=["domains"])
-
-_DOMAIN_NAME_RE = re.compile(
-    r"^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))+$"
-)
-
-
-class DomainCreateRequest(BaseModel):
-    name: str
-    parent_domain_id: uuid.UUID | None = None
-    notes: str | None = None
-    mail_profile: DomainMailProfile | None = None
-
-    @field_validator("name")
-    @classmethod
-    def validate_name(cls, value: str) -> str:
-        value = value.strip().lower().rstrip(".")
-        if not _DOMAIN_NAME_RE.match(value):
-            raise ValueError("not a valid domain name")
-        return value
-
-
-class DomainUpdateRequest(BaseModel):
-    notes: str | None = None
-    is_active: bool | None = None
-    mail_profile: DomainMailProfile | None = None
 
 
 def _domain_out(domain: Domain) -> dict:
@@ -74,10 +53,8 @@ def _domain_out(domain: Domain) -> dict:
 
 @router.get("")
 async def list_domains(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)) -> list[dict]:
-    result = await db.execute(
-        select(Domain).where(Domain.organization_id == user.organization_id).order_by(Domain.name)
-    )
-    return [_domain_out(d) for d in result.scalars().all()]
+    domains = await list_domains_for_org(db, user.organization_id)
+    return [_domain_out(d) for d in domains]
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -160,20 +137,11 @@ async def ranked_domains(db: AsyncSession = Depends(get_db), user: User = Depend
     which is a bigger unknown than a low score on a domain that has been
     checked. Verified-but-no-traffic domains sort last — nothing's wrong,
     there's just nothing to score yet."""
-    result = await db.execute(
-        select(Domain).where(Domain.organization_id == user.organization_id).order_by(Domain.name)
-    )
-    domains = result.scalars().all()
-
-    dmarc_pass = (DmarcAggregateRecord.dkim_result == AuthResult.pass_) | (
-        DmarcAggregateRecord.spf_result == AuthResult.pass_
-    )
+    domains = await list_domains_for_org(db, user.organization_id)
 
     # Fetched once, not per-domain — only actually used below for domains
     # that turn out to have no report data yet (see the no-data signals).
-    connection = (
-        await db.execute(select(MailboxConnection).where(MailboxConnection.organization_id == user.organization_id))
-    ).scalar_one_or_none()
+    connection = await get_org_mailbox_connection(db, user.organization_id)
     mailbox_address = connection.mailbox_address if connection is not None else None
 
     items = []
@@ -222,18 +190,8 @@ async def ranked_domains(db: AsyncSession = Depends(get_db), user: User = Depend
                     rua_result = await check_rua_destination(domain.name, mailbox_address)
                     rua_status = rua_result.status
 
-        last_report_at = (
-            await db.execute(
-                select(func.max(DmarcAggregateReport.received_at)).where(DmarcAggregateReport.domain_id == domain.id)
-            )
-        ).scalar_one_or_none()
-        failed_volume = (
-            await db.execute(
-                select(func.coalesce(func.sum(case((~dmarc_pass, DmarcAggregateRecord.count), else_=0)), 0)).where(
-                    DmarcAggregateRecord.domain_id == domain.id
-                )
-            )
-        ).scalar_one()
+        last_report_at = await last_report_received_at_for_domain(db, domain.id)
+        failed_volume = await failed_message_volume_for_domain(db, domain.id)
 
         items.append(
             {
@@ -271,9 +229,7 @@ async def ranked_domains(db: AsyncSession = Depends(get_db), user: User = Depend
 async def get_domain(
     domain_id: uuid.UUID, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
 ) -> dict:
-    domain = await db.get(Domain, domain_id)
-    if domain is None or domain.organization_id != user.organization_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "domain not found")
+    domain = await get_owned_domain(db, domain_id, user.organization_id)
     return _domain_out(domain)
 
 
@@ -281,9 +237,7 @@ async def get_domain(
 async def verify_domain(
     domain_id: uuid.UUID, db: AsyncSession = Depends(get_db), user: User = Depends(require_org_admin)
 ) -> dict:
-    domain = await db.get(Domain, domain_id)
-    if domain is None or domain.organization_id != user.organization_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "domain not found")
+    domain = await get_owned_domain(db, domain_id, user.organization_id)
 
     ok = await apply_domain_verification(db, domain)
     if not ok:
@@ -302,9 +256,7 @@ async def update_domain(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_org_admin),
 ) -> dict:
-    domain = await db.get(Domain, domain_id)
-    if domain is None or domain.organization_id != user.organization_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "domain not found")
+    domain = await get_owned_domain(db, domain_id, user.organization_id)
     if body.notes is not None:
         domain.notes = body.notes
     if body.is_active is not None:
@@ -321,20 +273,12 @@ async def update_domain(
 async def delete_domain(
     domain_id: uuid.UUID, db: AsyncSession = Depends(get_db), user: User = Depends(require_org_admin)
 ) -> None:
-    domain = await db.get(Domain, domain_id)
-    if domain is None or domain.organization_id != user.organization_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "domain not found")
+    domain = await get_owned_domain(db, domain_id, user.organization_id)
 
-    subdomain_count = await db.execute(
-        select(func.count()).select_from(Domain).where(Domain.parent_domain_id == domain_id)
-    )
-    if subdomain_count.scalar_one() > 0:
+    if await count_subdomains(db, domain_id) > 0:
         raise HTTPException(status.HTTP_409_CONFLICT, "remove or reassign subdomains first")
 
-    report_count = await db.execute(
-        select(func.count()).select_from(DmarcAggregateReport).where(DmarcAggregateReport.domain_id == domain_id)
-    )
-    if report_count.scalar_one() > 0:
+    if await count_reports_for_domain(db, domain_id) > 0:
         raise HTTPException(
             status.HTTP_409_CONFLICT, "domain has report history — archive it instead (PATCH is_active=false)"
         )
@@ -360,11 +304,9 @@ async def get_or_create_hosted_report_address(
     operator-hosted rua= address for customers with no mailbox of their
     own to dedicate — see app/workers/jobs/hosted_reports_poll_job.py for
     how mail sent to it gets attributed back to this domain."""
-    domain = await db.get(Domain, domain_id)
-    if domain is None or domain.organization_id != user.organization_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "domain not found")
+    domain = await get_owned_domain(db, domain_id, user.organization_id)
 
-    org = await db.get(Organization, user.organization_id)
+    org = await get_organization(db, user.organization_id)
     if not _hosted_mailbox_available(org):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "hosted mailbox isn't enabled for your organization — see Settings")
 

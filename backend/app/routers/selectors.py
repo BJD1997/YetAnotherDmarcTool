@@ -1,38 +1,20 @@
-import re
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, field_validator
-from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user, require_org_admin
 from app.models.dkim_selector import DkimSelector
-from app.models.dmarc_aggregate import DmarcAggregateRecord
-from app.models.domain import Domain
 from app.models.user import User
+from app.repositories.dmarc_reports import list_auth_results_for_domain
+from app.repositories.domains import get_owned_domain
+from app.repositories.selectors import known_selector_names, list_selectors_for_domain
+from app.schemas.selectors import SelectorCreateRequest
 from app.services.dmarc_narrative import describe_alignment
 
 router = APIRouter(prefix="/domains/{domain_id}/selectors", tags=["dkim-selectors"])
-
-# DKIM selectors are a DNS label sequence (RFC 6376 "selector"); allow the
-# usual hostname-label characters plus dots for multi-label selectors.
-_SELECTOR_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])?(\.[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])?)*$")
-
-
-class SelectorCreateRequest(BaseModel):
-    selector: str
-    description: str | None = None
-
-    @field_validator("selector")
-    @classmethod
-    def validate_selector(cls, value: str) -> str:
-        value = value.strip()
-        if not _SELECTOR_RE.match(value):
-            raise ValueError("not a valid DKIM selector")
-        return value
 
 
 def _selector_out(sel: DkimSelector) -> dict:
@@ -45,22 +27,13 @@ def _selector_out(sel: DkimSelector) -> dict:
     }
 
 
-async def _get_owned_domain(db: AsyncSession, domain_id: uuid.UUID, organization_id: uuid.UUID) -> Domain:
-    domain = await db.get(Domain, domain_id)
-    if domain is None or domain.organization_id != organization_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "domain not found")
-    return domain
-
-
 @router.get("")
 async def list_selectors(
     domain_id: uuid.UUID, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
 ) -> list[dict]:
-    await _get_owned_domain(db, domain_id, user.organization_id)
-    result = await db.execute(
-        select(DkimSelector).where(DkimSelector.domain_id == domain_id).order_by(DkimSelector.selector)
-    )
-    return [_selector_out(s) for s in result.scalars().all()]
+    await get_owned_domain(db, domain_id, user.organization_id)
+    selectors = await list_selectors_for_domain(db, domain_id)
+    return [_selector_out(s) for s in selectors]
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -70,7 +43,7 @@ async def create_selector(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_org_admin),
 ) -> dict:
-    await _get_owned_domain(db, domain_id, user.organization_id)
+    await get_owned_domain(db, domain_id, user.organization_id)
 
     selector = DkimSelector(
         organization_id=user.organization_id,
@@ -102,18 +75,9 @@ async def detected_selectors(
     if the DKIM d= aligns with this domain (see describe_alignment) — a
     passing DKIM signature from an unrelated third party (e.g. an ESP
     signing its own envelope) isn't this domain's selector to add."""
-    domain = await _get_owned_domain(db, domain_id, user.organization_id)
-
-    known = set(
-        (await db.execute(select(DkimSelector.selector).where(DkimSelector.domain_id == domain_id))).scalars().all()
-    )
-
-    rows = (
-        await db.execute(
-            select(DmarcAggregateRecord.auth_results, DmarcAggregateRecord.report_id, DmarcAggregateRecord.count)
-            .where(DmarcAggregateRecord.domain_id == domain_id)
-        )
-    ).all()
+    domain = await get_owned_domain(db, domain_id, user.organization_id)
+    known = await known_selector_names(db, domain_id)
+    rows = await list_auth_results_for_domain(db, domain_id)
 
     stats: dict[str, dict] = {}
     for auth_results, report_id, count in rows:
@@ -143,7 +107,7 @@ async def delete_selector(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_org_admin),
 ) -> None:
-    await _get_owned_domain(db, domain_id, user.organization_id)
+    await get_owned_domain(db, domain_id, user.organization_id)
     selector = await db.get(DkimSelector, selector_id)
     if selector is None or selector.domain_id != domain_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "selector not found")

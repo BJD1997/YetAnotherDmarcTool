@@ -1,22 +1,16 @@
 from fastapi import APIRouter, Depends
-from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user
-from app.models.dmarc_aggregate import DmarcAggregateReport
-from app.models.dns_check import DnsCheckResult
-from app.models.domain import Domain
-from app.models.enums import DomainVerificationStatus
-from app.models.mailbox_connection import MailboxConnection
-from app.models.organization import Organization
+from app.repositories.dmarc_reports import count_reports_for_org
+from app.repositories.dns_checks import count_dns_checks_for_org
+from app.repositories.domains import count_domains_for_org, count_verified_domains_for_org
+from app.repositories.mailbox_connections import get_org_mailbox_connection
+from app.repositories.organizations import get_organization
 from app.models.user import User
 
 router = APIRouter(prefix="/onboarding", tags=["onboarding"])
-
-
-async def _count(db: AsyncSession, model, *conditions) -> int:
-    return (await db.execute(select(func.count()).select_from(model).where(*conditions))).scalar_one()
 
 
 @router.get("/status")
@@ -26,26 +20,13 @@ async def onboarding_status(db: AsyncSession = Depends(get_db), user: User = Dep
     stored anywhere, the same "no dismiss/acknowledge state" philosophy the
     action queue already uses. Drives both the onboarding wizard (which
     step to resume at) and Overview's onboarding-aware rendering."""
-    org = await db.get(Organization, user.organization_id)
+    org = await get_organization(db, user.organization_id)
+    connection = await get_org_mailbox_connection(db, user.organization_id)
 
-    connection = (
-        await db.execute(select(MailboxConnection).where(MailboxConnection.organization_id == user.organization_id))
-    ).scalar_one_or_none()
-
-    has_domain = await _count(db, Domain, Domain.organization_id == user.organization_id) > 0
-    has_verified_domain = (
-        await _count(
-            db,
-            Domain,
-            Domain.organization_id == user.organization_id,
-            Domain.verification_status == DomainVerificationStatus.verified,
-        )
-        > 0
-    )
-    has_dns_baseline = await _count(db, DnsCheckResult, DnsCheckResult.organization_id == user.organization_id) > 0
-    has_any_report = (
-        await _count(db, DmarcAggregateReport, DmarcAggregateReport.organization_id == user.organization_id) > 0
-    )
+    has_domain = await count_domains_for_org(db, user.organization_id) > 0
+    has_verified_domain = await count_verified_domains_for_org(db, user.organization_id) > 0
+    has_dns_baseline = await count_dns_checks_for_org(db, user.organization_id) > 0
+    has_any_report = await count_reports_for_org(db, user.organization_id) > 0
 
     # A local-auth org (no entra_tenant_id) has no Entra tenant to grant
     # Mail Access consent from, so a MailboxConnection is never possible for
