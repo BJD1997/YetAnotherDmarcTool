@@ -3,21 +3,15 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import case, func, select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user, require_org_admin
-from app.models.dismissed_detected_domain import DismissedDetectedDomain
-from app.models.dmarc_aggregate import DmarcAggregateRecord, DmarcAggregateReport
-from app.models.dmarc_forensic import DmarcForensicReport
 from app.models.domain import Domain
-from app.models.enums import AuthResult, Disposition, DomainMailProfile, DomainVerificationStatus, SenderReviewStatus
+from app.models.enums import AuthResult, Disposition, DomainMailProfile, DomainVerificationStatus
 from app.models.mailbox_connection import MailboxConnection
 from app.models.sender_review import SenderReview
-from app.models.source_ip_identity import SourceIpIdentity
-from app.models.tls_rpt import TlsRptReport
 from app.models.user import User
 from app.repositories import dmarc_reports as dmarc_reports_repo
 from app.repositories.domains import get_owned_domain, list_domains_for_org
@@ -497,12 +491,7 @@ async def unmatched_reports(
     """Aggregate reports whose policy_published domain didn't match any
     registered Domain in this org — surfaced rather than silently dropped
     (see domain_matcher.py)."""
-    result = await db.execute(
-        select(DmarcAggregateReport)
-        .where(DmarcAggregateReport.organization_id == user.organization_id, DmarcAggregateReport.domain_id.is_(None))
-        .order_by(DmarcAggregateReport.received_at.desc())
-        .limit(limit)
-    )
+    reports = await dmarc_reports_repo.list_unmatched_aggregate_reports(db, user.organization_id, limit)
     return [
         {
             "id": str(r.id),
@@ -511,7 +500,7 @@ async def unmatched_reports(
             "policy_published_domain": r.policy_published_domain,
             "received_at": r.received_at.isoformat(),
         }
-        for r in result.scalars().all()
+        for r in reports
     ]
 
 
@@ -538,113 +527,33 @@ async def detected_domains(
     # that case, e.g. a subdomain sending real mail whose parent is
     # registered but which itself never was, exactly the gap that left
     # a real customer subdomain invisible until its mail started bouncing.
-    registered_result = await db.execute(
-        select(Domain.id, Domain.name).where(Domain.organization_id == user.organization_id)
-    )
-    registered = {name: domain_id for domain_id, name in registered_result.all()}
+    registered = await dmarc_reports_repo.registered_domains_by_name(db, user.organization_id)
     registered_names = set(registered.keys())
 
-    dismissed_names = set(
-        (
-            await db.execute(
-                select(DismissedDetectedDomain.name).where(
-                    DismissedDetectedDomain.organization_id == user.organization_id
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
+    dismissed_names = await dmarc_reports_repo.dismissed_domain_names(db, user.organization_id)
 
-    agg_result = await db.execute(
-        select(
-            DmarcAggregateReport.policy_published_domain,
-            func.count(func.distinct(DmarcAggregateReport.id)),
-            func.coalesce(func.sum(DmarcAggregateRecord.count), 0),
-        )
-        .outerjoin(DmarcAggregateRecord, DmarcAggregateRecord.report_id == DmarcAggregateReport.id)
-        .where(
-            DmarcAggregateReport.organization_id == user.organization_id,
-            DmarcAggregateReport.domain_id.is_(None),
-        )
-        .group_by(DmarcAggregateReport.policy_published_domain)
-    )
-    for name, report_count, message_volume in agg_result.all():
+    for name, report_count, message_volume in await dmarc_reports_repo.unmatched_aggregate_domain_counts(
+        db, user.organization_id
+    ):
         detected[name] = {"report_count": report_count, "message_volume": int(message_volume)}
 
-    # A report can match a registered domain (policy_published/domain — e.g.
-    # the organizational domain, whose policy a subdomain's mail is
-    # evaluated under) while individual records within it don't — RFC 7489
-    # §7.2 keeps header_from separate per record for exactly this reason.
-    # Not filtering by domain_id here (unlike the other three queries in this
-    # function): match_domain's ancestor walk means a record's header_from
-    # almost always resolves to *some* domain_id once its parent is
-    # registered, even though header_from itself was never registered — so
-    # domain_id IS NULL would systematically miss this case. Filtering out
-    # exact registered names below is what actually catches it.
-    #
-    # Also excludes records whose source_ip is already reviewed and marked
-    # "blocked" for the domain_id they resolved to — same idiom
-    # domain_rating.py's _windowed_totals uses for the rating itself, just
-    # correlated per-row instead of pinned to one domain_id, since each
-    # header_from here can resolve to a different ancestor. A sender the org
-    # has already dealt with (confirmed spoofing/abuse) shouldn't keep
-    # prompting "add this domain" forever.
-    blocked_source_ips_for_row = (
-        select(SourceIpIdentity.source_ip)
-        .join(SenderReview, SenderReview.service_label == SourceIpIdentity.service_label)
-        .where(
-            SenderReview.domain_id == DmarcAggregateRecord.domain_id,
-            SenderReview.status == SenderReviewStatus.blocked,
-        )
-        .correlate(DmarcAggregateRecord)
-    )
-    unmatched_records_result = await db.execute(
-        select(
-            DmarcAggregateRecord.header_from,
-            func.count(func.distinct(DmarcAggregateRecord.report_id)),
-            func.coalesce(func.sum(DmarcAggregateRecord.count), 0),
-        )
-        .where(
-            DmarcAggregateRecord.organization_id == user.organization_id,
-            DmarcAggregateRecord.source_ip.not_in(blocked_source_ips_for_row),
-        )
-        .group_by(DmarcAggregateRecord.header_from)
-    )
-    for name, report_count, message_volume in unmatched_records_result.all():
+    for name, report_count, message_volume in await dmarc_reports_repo.unmatched_record_header_from_counts(
+        db, user.organization_id
+    ):
         if name in registered_names:
             continue
         entry = detected.setdefault(name, {"report_count": 0, "message_volume": 0})
         entry["report_count"] += report_count
         entry["message_volume"] += int(message_volume)
 
-    tls_result = await db.execute(
-        select(
-            TlsRptReport.policy_domain,
-            func.count(func.distinct(TlsRptReport.id)),
-            func.coalesce(
-                func.sum(TlsRptReport.summary_success_count + TlsRptReport.summary_failure_count), 0
-            ),
-        )
-        .where(TlsRptReport.organization_id == user.organization_id, TlsRptReport.domain_id.is_(None))
-        .group_by(TlsRptReport.policy_domain)
-    )
-    for name, report_count, message_volume in tls_result.all():
+    for name, report_count, message_volume in await dmarc_reports_repo.unmatched_tls_rpt_domain_counts(
+        db, user.organization_id
+    ):
         entry = detected.setdefault(name, {"report_count": 0, "message_volume": 0})
         entry["report_count"] += report_count
         entry["message_volume"] += int(message_volume)
 
-    forensic_result = await db.execute(
-        select(DmarcForensicReport.reported_domain, func.count())
-        .where(
-            DmarcForensicReport.organization_id == user.organization_id,
-            DmarcForensicReport.domain_id.is_(None),
-            DmarcForensicReport.reported_domain.is_not(None),
-            DmarcForensicReport.reported_domain != "",
-        )
-        .group_by(DmarcForensicReport.reported_domain)
-    )
-    for name, report_count in forensic_result.all():
+    for name, report_count in await dmarc_reports_repo.unmatched_forensic_domain_counts(db, user.organization_id):
         entry = detected.setdefault(name, {"report_count": 0, "message_volume": 0})
         entry["report_count"] += report_count
 
@@ -699,15 +608,9 @@ async def dismiss_detected_domain(
     surfacing — for lookalikes, unrelated senders, or anything else the org
     has looked at and decided isn't worth registering as a domain."""
     name = name.strip().lower().rstrip(".")
-    # ON CONFLICT DO NOTHING rather than add()-then-catch: dismissing an
-    # already-dismissed name (e.g. a retried click) is a no-op, not an
-    # error — same race-tolerant idiom as sender_inventory's SenderReview
-    # upsert above.
-    stmt = pg_insert(DismissedDetectedDomain).values(
-        organization_id=user.organization_id, name=name, dismissed_by=user.id
+    await dmarc_reports_repo.dismiss_detected_domain_name(
+        db, organization_id=user.organization_id, name=name, dismissed_by=user.id
     )
-    stmt = stmt.on_conflict_do_nothing(index_elements=["organization_id", "name"])
-    await db.execute(stmt)
     await db.commit()
 
 

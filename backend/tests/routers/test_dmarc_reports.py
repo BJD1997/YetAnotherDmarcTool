@@ -508,3 +508,70 @@ async def test_dmarc_reports_grouped_by_source(api):
     body = response.json()
     assert body[0]["key"] == "203.0.113.10"
     assert body[0]["label"] == "203.0.113.10"  # ip_fallback identity
+
+
+async def test_unmatched_reports_lists_only_domainless_reports(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org)
+    await _add_aggregate_report(owner_factory, org, domain, org_name="matched-reporter.com")
+    await _add_aggregate_report(owner_factory, org, None, org_name="unmatched-reporter.com")
+
+    response = await client.get("/api/dmarc/unmatched")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["org_name"] == "unmatched-reporter.com"
+
+
+async def test_detected_domains_surfaces_unregistered_header_from(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    await login_as(client, owner_factory, user)
+    report = await _add_aggregate_report(owner_factory, org, None, org_name="reporter.com")
+    await _add_aggregate_record(owner_factory, org, None, report, header_from="spoofed.example", count=15)
+
+    response = await client.get("/api/dmarc/detected-domains")
+
+    assert response.status_code == 200
+    body = response.json()
+    names = {item["name"] for item in body}
+    assert "spoofed.example" in names
+    entry = next(item for item in body if item["name"] == "spoofed.example")
+    assert entry["message_volume"] == 15
+    assert entry["relationship"] == "apex"
+
+
+async def test_detected_domains_flags_subdomain_of_registered(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    await login_as(client, owner_factory, user)
+    parent = await _add_domain(owner_factory, org, name="example.com")
+    report = await _add_aggregate_report(owner_factory, org, None, org_name="reporter.com")
+    await _add_aggregate_record(owner_factory, org, None, report, header_from="mail.example.com", count=5)
+
+    response = await client.get("/api/dmarc/detected-domains")
+
+    assert response.status_code == 200
+    entry = next(item for item in response.json() if item["name"] == "mail.example.com")
+    assert entry["relationship"] == "subdomain_of_registered"
+    assert entry["suggested_parent_id"] == str(parent.id)
+
+
+async def test_dismiss_detected_domain_removes_it_and_is_idempotent(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin)
+    await login_as(client, owner_factory, user)
+    report = await _add_aggregate_report(owner_factory, org, None, org_name="reporter.com")
+    await _add_aggregate_record(owner_factory, org, None, report, header_from="lookalike.example", count=3)
+
+    dismiss_response = await client.post("/api/dmarc/detected-domains/lookalike.example/dismiss")
+    assert dismiss_response.status_code == 204
+
+    after = await client.get("/api/dmarc/detected-domains")
+    assert "lookalike.example" not in {item["name"] for item in after.json()}
+
+    repeat_dismiss = await client.post("/api/dmarc/detected-domains/lookalike.example/dismiss")
+    assert repeat_dismiss.status_code == 204  # idempotent, not a 409/500

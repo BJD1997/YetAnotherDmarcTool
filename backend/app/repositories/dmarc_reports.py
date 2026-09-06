@@ -6,9 +6,14 @@ from sqlalchemy import case, func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.dismissed_detected_domain import DismissedDetectedDomain
 from app.models.dmarc_aggregate import DmarcAggregateRecord, DmarcAggregateReport
+from app.models.dmarc_forensic import DmarcForensicReport
+from app.models.domain import Domain
 from app.models.enums import AuthResult, Disposition, SenderReviewStatus
 from app.models.sender_review import SenderReview
+from app.models.source_ip_identity import SourceIpIdentity
+from app.models.tls_rpt import TlsRptReport
 
 
 def _apply_report_filters(
@@ -441,3 +446,126 @@ async def report_records_grouped(
         reporter=reporter, source_ip=source_ip,
     )
     return (await db.execute(query)).all()
+
+
+async def list_unmatched_aggregate_reports(
+    db: AsyncSession, organization_id: UUID, limit: int
+) -> Sequence[DmarcAggregateReport]:
+    """Aggregate reports whose policy_published domain didn't match any
+    registered Domain in this org — surfaced rather than silently dropped
+    (see domain_matcher.py)."""
+    result = await db.execute(
+        select(DmarcAggregateReport)
+        .where(DmarcAggregateReport.organization_id == organization_id, DmarcAggregateReport.domain_id.is_(None))
+        .order_by(DmarcAggregateReport.received_at.desc())
+        .limit(limit)
+    )
+    return result.scalars().all()
+
+
+async def registered_domains_by_name(db: AsyncSession, organization_id: UUID) -> dict[str, UUID]:
+    result = await db.execute(select(Domain.id, Domain.name).where(Domain.organization_id == organization_id))
+    return {name: domain_id for domain_id, name in result.all()}
+
+
+async def dismissed_domain_names(db: AsyncSession, organization_id: UUID) -> set[str]:
+    result = await db.execute(
+        select(DismissedDetectedDomain.name).where(DismissedDetectedDomain.organization_id == organization_id)
+    )
+    return set(result.scalars().all())
+
+
+async def unmatched_aggregate_domain_counts(db: AsyncSession, organization_id: UUID) -> Sequence:
+    result = await db.execute(
+        select(
+            DmarcAggregateReport.policy_published_domain,
+            func.count(func.distinct(DmarcAggregateReport.id)),
+            func.coalesce(func.sum(DmarcAggregateRecord.count), 0),
+        )
+        .outerjoin(DmarcAggregateRecord, DmarcAggregateRecord.report_id == DmarcAggregateReport.id)
+        .where(DmarcAggregateReport.organization_id == organization_id, DmarcAggregateReport.domain_id.is_(None))
+        .group_by(DmarcAggregateReport.policy_published_domain)
+    )
+    return result.all()
+
+
+async def unmatched_record_header_from_counts(db: AsyncSession, organization_id: UUID) -> Sequence:
+    """A report can match a registered domain (policy_published/domain — e.g.
+    the organizational domain, whose policy a subdomain's mail is
+    evaluated under) while individual records within it don't — RFC 7489
+    §7.2 keeps header_from separate per record for exactly this reason.
+    Not filtering by domain_id here (unlike the sibling functions above):
+    match_domain's ancestor walk means a record's header_from almost always
+    resolves to *some* domain_id once its parent is registered, even though
+    header_from itself was never registered — so domain_id IS NULL would
+    systematically miss this case. The caller filters out exact registered
+    names instead, which is what actually catches it.
+
+    Also excludes records whose source_ip is already reviewed and marked
+    "blocked" for the domain_id they resolved to — same idiom
+    domain_rating.py's _windowed_totals uses for the rating itself, just
+    correlated per-row instead of pinned to one domain_id, since each
+    header_from here can resolve to a different ancestor. A sender the org
+    has already dealt with (confirmed spoofing/abuse) shouldn't keep
+    prompting "add this domain" forever."""
+    blocked_source_ips_for_row = (
+        select(SourceIpIdentity.source_ip)
+        .join(SenderReview, SenderReview.service_label == SourceIpIdentity.service_label)
+        .where(
+            SenderReview.domain_id == DmarcAggregateRecord.domain_id,
+            SenderReview.status == SenderReviewStatus.blocked,
+        )
+        .correlate(DmarcAggregateRecord)
+    )
+    result = await db.execute(
+        select(
+            DmarcAggregateRecord.header_from,
+            func.count(func.distinct(DmarcAggregateRecord.report_id)),
+            func.coalesce(func.sum(DmarcAggregateRecord.count), 0),
+        )
+        .where(
+            DmarcAggregateRecord.organization_id == organization_id,
+            DmarcAggregateRecord.source_ip.not_in(blocked_source_ips_for_row),
+        )
+        .group_by(DmarcAggregateRecord.header_from)
+    )
+    return result.all()
+
+
+async def unmatched_tls_rpt_domain_counts(db: AsyncSession, organization_id: UUID) -> Sequence:
+    result = await db.execute(
+        select(
+            TlsRptReport.policy_domain,
+            func.count(func.distinct(TlsRptReport.id)),
+            func.coalesce(func.sum(TlsRptReport.summary_success_count + TlsRptReport.summary_failure_count), 0),
+        )
+        .where(TlsRptReport.organization_id == organization_id, TlsRptReport.domain_id.is_(None))
+        .group_by(TlsRptReport.policy_domain)
+    )
+    return result.all()
+
+
+async def unmatched_forensic_domain_counts(db: AsyncSession, organization_id: UUID) -> Sequence:
+    result = await db.execute(
+        select(DmarcForensicReport.reported_domain, func.count())
+        .where(
+            DmarcForensicReport.organization_id == organization_id,
+            DmarcForensicReport.domain_id.is_(None),
+            DmarcForensicReport.reported_domain.is_not(None),
+            DmarcForensicReport.reported_domain != "",
+        )
+        .group_by(DmarcForensicReport.reported_domain)
+    )
+    return result.all()
+
+
+async def dismiss_detected_domain_name(db: AsyncSession, *, organization_id: UUID, name: str, dismissed_by: UUID) -> None:
+    """ON CONFLICT DO NOTHING rather than add()-then-catch: dismissing an
+    already-dismissed name (e.g. a retried click) is a no-op, not an
+    error — same race-tolerant idiom as sender_inventory's SenderReview
+    upsert."""
+    stmt = pg_insert(DismissedDetectedDomain).values(
+        organization_id=organization_id, name=name, dismissed_by=dismissed_by
+    )
+    stmt = stmt.on_conflict_do_nothing(index_elements=["organization_id", "name"])
+    await db.execute(stmt)
