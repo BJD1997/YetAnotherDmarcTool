@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import case, func, select, tuple_
+from sqlalchemy import case, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +20,7 @@ from app.models.source_ip_identity import SourceIpIdentity
 from app.models.tls_rpt import TlsRptReport
 from app.models.user import User
 from app.repositories import dmarc_reports as dmarc_reports_repo
+from app.repositories.dmarc_reports import _apply_report_filters
 from app.repositories.domains import get_owned_domain, list_domains_for_org
 from app.schemas.dmarc_reports import SenderReviewUpdateRequest
 from app.services.action_queue.rules import reviewed_service_labels, unreviewed_high_volume_senders
@@ -274,34 +275,6 @@ async def dmarc_posture(
     }
 
 
-def _apply_report_filters(
-    query,
-    *,
-    since: datetime | None,
-    disposition: Disposition | None,
-    spf_result: AuthResult | None,
-    dkim_result: AuthResult | None,
-    reporter: str | None,
-    source_ip: str | None,
-):
-    """Shared WHERE-clause vocabulary for the reports/by-day, /summary and
-    /grouped endpoints, applied to a query already joined to both
-    DmarcAggregateReport and DmarcAggregateRecord."""
-    if since is not None:
-        query = query.where(DmarcAggregateReport.date_range_begin >= since)
-    if disposition is not None:
-        query = query.where(DmarcAggregateRecord.disposition == disposition)
-    if spf_result is not None:
-        query = query.where(DmarcAggregateRecord.spf_result == spf_result)
-    if dkim_result is not None:
-        query = query.where(DmarcAggregateRecord.dkim_result == dkim_result)
-    if reporter is not None:
-        query = query.where(DmarcAggregateReport.org_name.ilike(f"%{reporter}%"))
-    if source_ip is not None:
-        query = query.where(func.host(DmarcAggregateRecord.source_ip) == source_ip)
-    return query
-
-
 @router.get("/domains/{domain_id}/dmarc/reports/by-day")
 async def dmarc_reports_by_day(
     domain_id: uuid.UUID,
@@ -316,54 +289,13 @@ async def dmarc_reports_by_day(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict:
-    """Row granularity is one DmarcAggregateRecord (one sending host within
-    one report), not one whole report — a report with several source IPs
-    shows as several rows on its day. Keyset-paginated on
-    (date_range_begin, record id) rather than offset, so pages stay stable
-    as new reports keep arriving between requests. Filters apply to the
-    keyset query itself, not after the fact, since a busy domain can have
-    thousands of records."""
     await get_owned_domain(db, domain_id, user.organization_id)
     since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
 
-    query = (
-        select(
-            DmarcAggregateRecord.id,
-            DmarcAggregateReport.id.label("report_pk"),
-            DmarcAggregateReport.org_name,
-            DmarcAggregateReport.date_range_begin,
-            DmarcAggregateRecord.source_ip,
-            DmarcAggregateRecord.count,
-            DmarcAggregateRecord.disposition,
-            DmarcAggregateRecord.spf_result,
-            DmarcAggregateRecord.dkim_result,
-        )
-        .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
-        .where(DmarcAggregateRecord.domain_id == domain_id)
+    rows = await dmarc_reports_repo.list_report_records_by_day(
+        db, domain_id, limit=limit, before_id=before_id, since=since, disposition=disposition,
+        spf_result=spf_result, dkim_result=dkim_result, reporter=reporter, source_ip=source_ip,
     )
-    query = _apply_report_filters(
-        query,
-        since=since,
-        disposition=disposition,
-        spf_result=spf_result,
-        dkim_result=dkim_result,
-        reporter=reporter,
-        source_ip=source_ip,
-    )
-
-    if before_id is not None:
-        anchor = (
-            await db.execute(
-                select(DmarcAggregateReport.date_range_begin, DmarcAggregateRecord.id)
-                .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
-                .where(DmarcAggregateRecord.id == before_id, DmarcAggregateRecord.domain_id == domain_id)
-            )
-        ).first()
-        if anchor is not None:
-            query = query.where(tuple_(DmarcAggregateReport.date_range_begin, DmarcAggregateRecord.id) < anchor)
-
-    query = query.order_by(DmarcAggregateReport.date_range_begin.desc(), DmarcAggregateRecord.id.desc()).limit(limit)
-    rows = (await db.execute(query)).all()
 
     # Resolve every distinct source_ip on this page to its identified
     # sending service (same cache-first lookup service_breakdown uses), so
@@ -608,13 +540,7 @@ async def dmarc_record_detail(
 ) -> dict:
     await get_owned_domain(db, domain_id, user.organization_id)
 
-    row = (
-        await db.execute(
-            select(DmarcAggregateRecord, DmarcAggregateReport)
-            .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
-            .where(DmarcAggregateRecord.id == record_id, DmarcAggregateRecord.domain_id == domain_id)
-        )
-    ).first()
+    row = await dmarc_reports_repo.get_record_detail(db, domain_id, record_id)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "record not found")
     record, report = row

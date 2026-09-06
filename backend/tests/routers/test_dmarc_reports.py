@@ -311,3 +311,71 @@ async def test_dmarc_posture_reports_freshness_and_failed_volume(api):
     body = response.json()
     assert body["failed_volume"] == 3
     assert body["report_freshness_hours"] is not None
+
+
+async def test_dmarc_reports_by_day_groups_and_paginates(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org)
+    day1 = datetime.now(timezone.utc) - timedelta(days=3)
+    day2 = datetime.now(timezone.utc) - timedelta(days=1)
+    report1 = await _add_aggregate_report(owner_factory, org, domain, date_range_begin=day1)
+    report2 = await _add_aggregate_report(owner_factory, org, domain, date_range_begin=day2)
+    await _add_aggregate_record(owner_factory, org, domain, report1, count=5)
+    await _add_aggregate_record(owner_factory, org, domain, report2, count=7, disposition=Disposition.reject)
+
+    response = await client.get(f"/api/domains/{domain.id}/dmarc/reports/by-day")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["days"]) == 2
+    assert body["days"][0]["message_count"] == 7  # most recent day first
+    assert body["has_more"] is False
+
+
+async def test_dmarc_reports_by_day_filters_by_disposition(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org)
+    report = await _add_aggregate_report(owner_factory, org, domain)
+    await _add_aggregate_record(owner_factory, org, domain, report, count=3, disposition=Disposition.none)
+    await _add_aggregate_record(owner_factory, org, domain, report, count=2, disposition=Disposition.reject)
+
+    response = await client.get(f"/api/domains/{domain.id}/dmarc/reports/by-day?disposition=reject")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["days"]) == 1
+    assert body["days"][0]["message_count"] == 2
+
+
+async def test_dmarc_record_detail_returns_full_record(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org)
+    report = await _add_aggregate_report(owner_factory, org, domain, policy_p="reject")
+    record = await _add_aggregate_record(owner_factory, org, domain, report, source_ip="198.51.100.7", count=4)
+
+    response = await client.get(f"/api/domains/{domain.id}/dmarc/records/{record.id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == str(record.id)
+    assert body["source_ip"] == "198.51.100.7"
+    assert body["count"] == 4
+    assert body["report"]["policy_p"] == "reject"
+    assert body["verdict"]["dmarc_aligned"] is True
+
+
+async def test_dmarc_record_detail_404_for_unknown_record(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org)
+
+    response = await client.get(f"/api/domains/{domain.id}/dmarc/records/{uuid.uuid4()}")
+
+    assert response.status_code == 404

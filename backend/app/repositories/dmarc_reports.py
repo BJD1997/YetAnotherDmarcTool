@@ -2,13 +2,107 @@ from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.dmarc_aggregate import DmarcAggregateRecord, DmarcAggregateReport
 from app.models.enums import AuthResult, Disposition, SenderReviewStatus
 from app.models.sender_review import SenderReview
+
+
+def _apply_report_filters(
+    query,
+    *,
+    since: datetime | None,
+    disposition: Disposition | None,
+    spf_result: AuthResult | None,
+    dkim_result: AuthResult | None,
+    reporter: str | None,
+    source_ip: str | None,
+):
+    """Shared WHERE-clause vocabulary for the reports/by-day, /summary and
+    /grouped endpoints, applied to a query already joined to both
+    DmarcAggregateReport and DmarcAggregateRecord."""
+    if since is not None:
+        query = query.where(DmarcAggregateReport.date_range_begin >= since)
+    if disposition is not None:
+        query = query.where(DmarcAggregateRecord.disposition == disposition)
+    if spf_result is not None:
+        query = query.where(DmarcAggregateRecord.spf_result == spf_result)
+    if dkim_result is not None:
+        query = query.where(DmarcAggregateRecord.dkim_result == dkim_result)
+    if reporter is not None:
+        query = query.where(DmarcAggregateReport.org_name.ilike(f"%{reporter}%"))
+    if source_ip is not None:
+        query = query.where(func.host(DmarcAggregateRecord.source_ip) == source_ip)
+    return query
+
+
+async def list_report_records_by_day(
+    db: AsyncSession,
+    domain_id: UUID,
+    *,
+    limit: int,
+    before_id: UUID | None,
+    since: datetime | None,
+    disposition: Disposition | None,
+    spf_result: AuthResult | None,
+    dkim_result: AuthResult | None,
+    reporter: str | None,
+    source_ip: str | None,
+) -> Sequence:
+    """Row granularity is one DmarcAggregateRecord (one sending host within
+    one report), not one whole report. Keyset-paginated on
+    (date_range_begin, record id) rather than offset, so pages stay stable
+    as new reports keep arriving between requests. Filters apply to the
+    keyset query itself, not after the fact, since a busy domain can have
+    thousands of records."""
+    query = (
+        select(
+            DmarcAggregateRecord.id,
+            DmarcAggregateReport.id.label("report_pk"),
+            DmarcAggregateReport.org_name,
+            DmarcAggregateReport.date_range_begin,
+            DmarcAggregateRecord.source_ip,
+            DmarcAggregateRecord.count,
+            DmarcAggregateRecord.disposition,
+            DmarcAggregateRecord.spf_result,
+            DmarcAggregateRecord.dkim_result,
+        )
+        .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
+        .where(DmarcAggregateRecord.domain_id == domain_id)
+    )
+    query = _apply_report_filters(
+        query, since=since, disposition=disposition, spf_result=spf_result, dkim_result=dkim_result,
+        reporter=reporter, source_ip=source_ip,
+    )
+
+    if before_id is not None:
+        anchor = (
+            await db.execute(
+                select(DmarcAggregateReport.date_range_begin, DmarcAggregateRecord.id)
+                .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
+                .where(DmarcAggregateRecord.id == before_id, DmarcAggregateRecord.domain_id == domain_id)
+            )
+        ).first()
+        if anchor is not None:
+            query = query.where(tuple_(DmarcAggregateReport.date_range_begin, DmarcAggregateRecord.id) < anchor)
+
+    query = query.order_by(DmarcAggregateReport.date_range_begin.desc(), DmarcAggregateRecord.id.desc()).limit(limit)
+    return (await db.execute(query)).all()
+
+
+async def get_record_detail(
+    db: AsyncSession, domain_id: UUID, record_id: UUID
+) -> tuple[DmarcAggregateRecord, DmarcAggregateReport] | None:
+    return (
+        await db.execute(
+            select(DmarcAggregateRecord, DmarcAggregateReport)
+            .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
+            .where(DmarcAggregateRecord.id == record_id, DmarcAggregateRecord.domain_id == domain_id)
+        )
+    ).first()
 
 
 async def count_reports_for_org(db: AsyncSession, organization_id: UUID) -> int:
