@@ -4,8 +4,6 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import BaseModel, EmailStr, field_validator
-from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,10 +14,7 @@ from app.middleware.tenant_context import (
     get_current_platform_admin,
     get_current_platform_admin_local,
 )
-from app.models.dmarc_aggregate import DmarcAggregateReport
-from app.models.domain import Domain
-from app.models.enums import AuthMethod, ConsentStatus, JobStatus, JobType, OrganizationStatus, UserRole
-from app.models.job_run import JobRun
+from app.models.enums import AuthMethod, ConsentStatus, JobStatus, JobType, OrganizationStatus
 from app.models.mailbox_connection import MailboxConnection
 from app.models.organization import Organization
 from app.models.password_setup_token import PasswordSetupToken
@@ -27,6 +22,27 @@ from app.models.platform_admin import PlatformAdmin
 from app.models.platform_admin_mfa_pending_challenge import PlatformAdminMfaPendingChallenge
 from app.models.platform_admin_recovery_code import PlatformAdminRecoveryCode
 from app.models.user import User
+from app.repositories.mailbox_connections import get_org_mailbox_connection
+from app.repositories.organizations import get_organization
+from app.repositories.platform_admin import (
+    get_admin_mfa_pending_challenge,
+    get_platform_admin_by_email,
+    get_unused_admin_recovery_code,
+    job_runs_summary_stats,
+    list_all_organizations,
+    list_job_runs,
+    org_aggregates,
+)
+from app.schemas.platform_admin import (
+    AdminEnrollOtpConfirmRequest,
+    AdminLoginRequest,
+    AdminVerifyOtpRequest,
+    ChangePasswordRequest,
+    LocalUserCreateRequest,
+    MailboxConnectionRequest,
+    OrganizationCreateRequest,
+    OrganizationUpdateRequest,
+)
 from app.services.auth import session_manager, totp
 from app.services.auth.rate_limit import login_limiter, otp_limiter, rate_limiter
 from app.services.auth.entra_links import entra_consent_urls
@@ -36,61 +52,11 @@ from app.services.auth.tokens import hash_token, new_opaque_token
 
 router = APIRouter(prefix="/admin", tags=["platform-admin"])
 
-JOB_ERROR_WINDOW_DAYS = 7
 _ADMIN_MFA_PENDING_COOKIE = settings.platform_admin_mfa_pending_cookie_name
 
 
-class AdminLoginRequest(BaseModel):
-    email: EmailStr
-    password: str
-
-
-class AdminVerifyOtpRequest(BaseModel):
-    code: str
-
-
-class AdminEnrollOtpConfirmRequest(BaseModel):
-    secret: str
-    code: str
-
-
-class OrganizationCreateRequest(BaseModel):
-    name: str
-    entra_tenant_id: uuid.UUID | None = None
-
-
-class OrganizationUpdateRequest(BaseModel):
-    name: str | None = None
-    entra_tenant_id: uuid.UUID | None = None
-    status: OrganizationStatus | None = None
-
-
-class MailboxConnectionRequest(BaseModel):
-    mailbox_address: str
-    consent_status: ConsentStatus | None = None
-
-
-class LocalUserCreateRequest(BaseModel):
-    email: EmailStr
-    display_name: str | None = None
-    role: UserRole = UserRole.org_admin
-
-
-class ChangePasswordRequest(BaseModel):
-    current_password: str
-    new_password: str
-
-    @field_validator("new_password")
-    @classmethod
-    def validate_new_password(cls, value: str) -> str:
-        if len(value) < 12:
-            raise ValueError("new password must be at least 12 characters")
-        return value
-
-
 async def _mailbox_out(db: AsyncSession, org_id: uuid.UUID) -> dict | None:
-    result = await db.execute(select(MailboxConnection).where(MailboxConnection.organization_id == org_id))
-    connection = result.scalar_one_or_none()
+    connection = await get_org_mailbox_connection(db, org_id)
     if connection is None:
         return None
     return {
@@ -104,63 +70,8 @@ async def _mailbox_out(db: AsyncSession, org_id: uuid.UUID) -> dict | None:
     }
 
 
-async def _org_aggregates(db: AsyncSession, org_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict]:
-    """Batched per-org rollups for the admin organizations list — one GROUP
-    BY query per metric across every org at once, not N queries per org.
-    RLS is bypassed here the same way it is everywhere else in this router:
-    get_current_platform_admin already set app.is_platform_admin=true on
-    this transaction, which is what lets a query with no organization_id
-    filter of its own see rows across every tenant."""
-    if not org_ids:
-        return {}
-
-    domain_counts = dict(
-        (
-            await db.execute(
-                select(Domain.organization_id, func.count())
-                .where(Domain.organization_id.in_(org_ids))
-                .group_by(Domain.organization_id)
-            )
-        ).all()
-    )
-
-    error_cutoff = datetime.now(timezone.utc) - timedelta(days=JOB_ERROR_WINDOW_DAYS)
-    job_error_counts = dict(
-        (
-            await db.execute(
-                select(JobRun.organization_id, func.count())
-                .where(
-                    JobRun.organization_id.in_(org_ids),
-                    JobRun.status == JobStatus.failure,
-                    JobRun.started_at >= error_cutoff,
-                )
-                .group_by(JobRun.organization_id)
-            )
-        ).all()
-    )
-
-    last_report_ats = dict(
-        (
-            await db.execute(
-                select(DmarcAggregateReport.organization_id, func.max(DmarcAggregateReport.received_at))
-                .where(DmarcAggregateReport.organization_id.in_(org_ids))
-                .group_by(DmarcAggregateReport.organization_id)
-            )
-        ).all()
-    )
-
-    return {
-        org_id: {
-            "domain_count": domain_counts.get(org_id, 0),
-            "job_error_count_7d": job_error_counts.get(org_id, 0),
-            "last_report_at": (last_report_ats[org_id].isoformat() if last_report_ats.get(org_id) else None),
-        }
-        for org_id in org_ids
-    }
-
-
 async def _org_out(db: AsyncSession, org: Organization, aggregates: dict | None = None) -> dict:
-    agg = aggregates if aggregates is not None else (await _org_aggregates(db, [org.id])).get(
+    agg = aggregates if aggregates is not None else (await org_aggregates(db, [org.id])).get(
         org.id, {"domain_count": 0, "job_error_count_7d": 0, "last_report_at": None}
     )
     return {
@@ -252,10 +163,7 @@ async def _get_pending_admin(request: Request, db: AsyncSession) -> tuple[Platfo
     if not raw_token:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "no pending login")
     token_hash = hash_token(raw_token)
-    result = await db.execute(
-        select(PlatformAdminMfaPendingChallenge).where(PlatformAdminMfaPendingChallenge.token_hash == token_hash)
-    )
-    challenge = result.scalar_one_or_none()
+    challenge = await get_admin_mfa_pending_challenge(db, token_hash)
     if challenge is None or challenge.expires_at <= datetime.now(timezone.utc):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "pending login expired — sign in again")
     # platform_admins carries no RLS (see the model's own docstring), so no
@@ -269,8 +177,7 @@ async def _get_pending_admin(request: Request, db: AsyncSession) -> tuple[Platfo
 
 @router.post("/login", dependencies=[Depends(rate_limiter(login_limiter))])
 async def admin_login(body: AdminLoginRequest, request: Request, db: AsyncSession = Depends(get_db)) -> Response:
-    result = await db.execute(select(PlatformAdmin).where(PlatformAdmin.email == body.email))
-    admin = result.scalar_one_or_none()
+    admin = await get_platform_admin_by_email(db, body.email)
     password_ok = admin is not None and verify_password(body.password, admin.password_hash)
     if admin is None:
         # Constant-work verify so a missing admin email isn't faster to
@@ -295,14 +202,7 @@ async def admin_verify_otp(body: AdminVerifyOtpRequest, request: Request, db: As
     code = body.code.strip()
     if not totp.verify_code(admin.otp_secret, code):
         code_hash = totp.hash_recovery_code_for_lookup(code)
-        result = await db.execute(
-            select(PlatformAdminRecoveryCode).where(
-                PlatformAdminRecoveryCode.platform_admin_id == admin.id,
-                PlatformAdminRecoveryCode.code_hash == code_hash,
-                PlatformAdminRecoveryCode.used_at.is_(None),
-            )
-        )
-        recovery = result.scalar_one_or_none()
+        recovery = await get_unused_admin_recovery_code(db, admin.id, code_hash)
         if recovery is None:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid code")
         recovery.used_at = datetime.now(timezone.utc)
@@ -406,9 +306,8 @@ async def change_password(
 async def list_organizations(
     db: AsyncSession = Depends(get_db), _admin: AdminPrincipal = Depends(get_current_platform_admin)
 ) -> list[dict]:
-    result = await db.execute(select(Organization).order_by(Organization.created_at.desc()))
-    orgs = result.scalars().all()
-    aggregates = await _org_aggregates(db, [org.id for org in orgs])
+    orgs = await list_all_organizations(db)
+    aggregates = await org_aggregates(db, [org.id for org in orgs])
     return [await _org_out(db, org, aggregates=aggregates.get(org.id)) for org in orgs]
 
 
@@ -426,12 +325,12 @@ async def create_organization(
 
 
 @router.get("/organizations/{org_id}")
-async def get_organization(
+async def get_organization_route(
     org_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _admin: AdminPrincipal = Depends(get_current_platform_admin),
 ) -> dict:
-    org = await db.get(Organization, org_id)
+    org = await get_organization(db, org_id)
     if org is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "organization not found")
     return await _org_out(db, org)
@@ -444,7 +343,7 @@ async def update_organization(
     db: AsyncSession = Depends(get_db),
     _admin: AdminPrincipal = Depends(get_current_platform_admin),
 ) -> dict:
-    org = await db.get(Organization, org_id)
+    org = await get_organization(db, org_id)
     if org is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "organization not found")
     if body.name is not None:
@@ -464,7 +363,7 @@ async def delete_organization(
     db: AsyncSession = Depends(get_db),
     _admin: AdminPrincipal = Depends(get_current_platform_admin),
 ) -> None:
-    org = await db.get(Organization, org_id)
+    org = await get_organization(db, org_id)
     if org is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "organization not found")
     if org.is_operator:
@@ -514,7 +413,7 @@ async def create_local_user(
     manual path here. Returns a one-time "set your password" link for the
     admin to share out-of-band (same manual-share philosophy as Team.tsx's
     ShareSignInLink — no outbound email sending in this app)."""
-    org = await db.get(Organization, org_id)
+    org = await get_organization(db, org_id)
     if org is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "organization not found")
     if org.entra_tenant_id is not None:
@@ -564,14 +463,11 @@ async def upsert_mailbox_connection(
     db: AsyncSession = Depends(get_db),
     _admin: AdminPrincipal = Depends(get_current_platform_admin),
 ) -> dict:
-    org = await db.get(Organization, org_id)
+    org = await get_organization(db, org_id)
     if org is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "organization not found")
 
-    result = await db.execute(
-        select(MailboxConnection).where(MailboxConnection.organization_id == org_id)
-    )
-    connection = result.scalar_one_or_none()
+    connection = await get_org_mailbox_connection(db, org_id)
     if connection is None:
         connection = MailboxConnection(organization_id=org_id, mailbox_address=body.mailbox_address)
         db.add(connection)
@@ -596,7 +492,7 @@ async def upsert_mailbox_connection(
 
 
 @router.get("/job-runs")
-async def list_job_runs(
+async def list_job_runs_route(
     limit: int = 50,
     organization_id: uuid.UUID | None = Query(None),
     job_type: JobType | None = Query(None),
@@ -606,18 +502,14 @@ async def list_job_runs(
     _admin: AdminPrincipal = Depends(get_current_platform_admin),
 ) -> list[dict]:
     limit = max(1, min(limit, 200))
-    query = select(JobRun).order_by(JobRun.started_at.desc())
-    if organization_id is not None:
-        query = query.where(JobRun.organization_id == organization_id)
-    if job_type is not None:
-        query = query.where(JobRun.job_type == job_type)
-    if status_filter is not None:
-        query = query.where(JobRun.status == status_filter)
-    if since_days is not None:
-        query = query.where(JobRun.started_at >= datetime.now(timezone.utc) - timedelta(days=since_days))
-    query = query.limit(limit)
-
-    result = await db.execute(query)
+    runs = await list_job_runs(
+        db,
+        limit=limit,
+        organization_id=organization_id,
+        job_type=job_type,
+        status_filter=status_filter,
+        since_days=since_days,
+    )
     return [
         {
             "id": str(run.id),
@@ -630,7 +522,7 @@ async def list_job_runs(
             "error_message": run.error_message,
             "stats": run.stats,
         }
-        for run in result.scalars().all()
+        for run in runs
     ]
 
 
@@ -642,32 +534,11 @@ async def job_runs_summary(
     healthy has ingestion been in the last day, is the mailbox poller still
     actually running, and is data still flowing in today — rather than
     making the admin infer all of that from scrolling a long table."""
-    last_failure = (
-        await db.execute(select(JobRun).where(JobRun.status == JobStatus.failure).order_by(JobRun.started_at.desc()).limit(1))
-    ).scalar_one_or_none()
-
-    since_24h = datetime.now(timezone.utc) - timedelta(hours=24)
-    total_24h, success_24h = (
-        await db.execute(
-            select(
-                func.count(),
-                func.coalesce(func.sum(case((JobRun.status == JobStatus.success, 1), else_=0)), 0),
-            ).where(JobRun.started_at >= since_24h)
-        )
-    ).one()
-    success_rate_pct_24h = round(success_24h / total_24h * 100, 1) if total_24h else None
-
-    latest_mailbox_poll_at = (
-        await db.execute(select(func.max(JobRun.started_at)).where(JobRun.job_type == JobType.mailbox_poll))
-    ).scalar_one_or_none()
-
-    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    reports_today = (
-        await db.execute(
-            select(func.count()).select_from(DmarcAggregateReport).where(DmarcAggregateReport.received_at >= today_start)
-        )
-    ).scalar_one()
-
+    stats = await job_runs_summary_stats(db)
+    last_failure = stats["last_failure"]
+    success_rate_pct_24h = (
+        round(stats["success_24h"] / stats["total_24h"] * 100, 1) if stats["total_24h"] else None
+    )
     return {
         "last_failure": (
             {
@@ -680,6 +551,6 @@ async def job_runs_summary(
             else None
         ),
         "success_rate_pct_24h": success_rate_pct_24h,
-        "latest_mailbox_poll_at": latest_mailbox_poll_at.isoformat() if latest_mailbox_poll_at else None,
-        "reports_processed_today": int(reports_today),
+        "latest_mailbox_poll_at": stats["latest_mailbox_poll_at"].isoformat() if stats["latest_mailbox_poll_at"] else None,
+        "reports_processed_today": int(stats["reports_today"]),
     }
