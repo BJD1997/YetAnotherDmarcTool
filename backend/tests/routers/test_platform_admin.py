@@ -249,3 +249,74 @@ async def test_upsert_mailbox_connection(api):
     )
     assert update_response.status_code == 201
     assert update_response.json()["consent_status"] == "granted"
+
+
+async def test_list_organizations_includes_aggregates(api):
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+    await client.post("/api/admin/organizations", json={"name": "Org One"})
+    await client.post("/api/admin/organizations", json={"name": "Org Two"})
+
+    response = await client.get("/api/admin/organizations")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 2
+    for org in body:
+        assert org["domain_count"] == 0
+        assert org["job_error_count_7d"] == 0
+        assert org["last_report_at"] is None
+
+
+async def test_job_runs_empty(api):
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+
+    response = await client.get("/api/admin/job-runs")
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+async def test_job_runs_summary_empty(api):
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+
+    response = await client.get("/api/admin/job-runs/summary")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["last_failure"] is None
+    assert body["success_rate_pct_24h"] is None
+    assert body["reports_processed_today"] == 0
+
+
+async def test_entra_consent_callback_success():
+    """Unauthenticated, no DB fixture needed — this endpoint does no DB
+    writes at all (see its own docstring)."""
+    import httpx
+    from httpx import ASGITransport
+
+    from app.main import app
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/admin/entra/consent-callback")
+
+    assert response.status_code == 200
+    assert "Mail access granted" in response.text
+
+
+async def test_entra_consent_callback_error():
+    import httpx
+    from httpx import ASGITransport
+
+    from app.main import app
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/admin/entra/consent-callback", params={"error": "access_denied", "error_description": "User declined"}
+        )
+
+    assert response.status_code == 200
+    assert "wasn't granted" in response.text
+    assert "access_denied" in response.text

@@ -4,7 +4,6 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import HTMLResponse, JSONResponse
-from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,10 +14,7 @@ from app.middleware.tenant_context import (
     get_current_platform_admin,
     get_current_platform_admin_local,
 )
-from app.models.dmarc_aggregate import DmarcAggregateReport
-from app.models.domain import Domain
 from app.models.enums import AuthMethod, ConsentStatus, JobStatus, JobType, OrganizationStatus, UserRole
-from app.models.job_run import JobRun
 from app.models.mailbox_connection import MailboxConnection
 from app.models.organization import Organization
 from app.models.password_setup_token import PasswordSetupToken
@@ -32,6 +28,10 @@ from app.repositories.platform_admin import (
     get_admin_mfa_pending_challenge,
     get_platform_admin_by_email,
     get_unused_admin_recovery_code,
+    job_runs_summary_stats,
+    list_all_organizations,
+    list_job_runs,
+    org_aggregates,
 )
 from app.schemas.platform_admin import (
     AdminEnrollOtpConfirmRequest,
@@ -52,7 +52,6 @@ from app.services.auth.tokens import hash_token, new_opaque_token
 
 router = APIRouter(prefix="/admin", tags=["platform-admin"])
 
-JOB_ERROR_WINDOW_DAYS = 7
 _ADMIN_MFA_PENDING_COOKIE = settings.platform_admin_mfa_pending_cookie_name
 
 
@@ -71,63 +70,8 @@ async def _mailbox_out(db: AsyncSession, org_id: uuid.UUID) -> dict | None:
     }
 
 
-async def _org_aggregates(db: AsyncSession, org_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict]:
-    """Batched per-org rollups for the admin organizations list — one GROUP
-    BY query per metric across every org at once, not N queries per org.
-    RLS is bypassed here the same way it is everywhere else in this router:
-    get_current_platform_admin already set app.is_platform_admin=true on
-    this transaction, which is what lets a query with no organization_id
-    filter of its own see rows across every tenant."""
-    if not org_ids:
-        return {}
-
-    domain_counts = dict(
-        (
-            await db.execute(
-                select(Domain.organization_id, func.count())
-                .where(Domain.organization_id.in_(org_ids))
-                .group_by(Domain.organization_id)
-            )
-        ).all()
-    )
-
-    error_cutoff = datetime.now(timezone.utc) - timedelta(days=JOB_ERROR_WINDOW_DAYS)
-    job_error_counts = dict(
-        (
-            await db.execute(
-                select(JobRun.organization_id, func.count())
-                .where(
-                    JobRun.organization_id.in_(org_ids),
-                    JobRun.status == JobStatus.failure,
-                    JobRun.started_at >= error_cutoff,
-                )
-                .group_by(JobRun.organization_id)
-            )
-        ).all()
-    )
-
-    last_report_ats = dict(
-        (
-            await db.execute(
-                select(DmarcAggregateReport.organization_id, func.max(DmarcAggregateReport.received_at))
-                .where(DmarcAggregateReport.organization_id.in_(org_ids))
-                .group_by(DmarcAggregateReport.organization_id)
-            )
-        ).all()
-    )
-
-    return {
-        org_id: {
-            "domain_count": domain_counts.get(org_id, 0),
-            "job_error_count_7d": job_error_counts.get(org_id, 0),
-            "last_report_at": (last_report_ats[org_id].isoformat() if last_report_ats.get(org_id) else None),
-        }
-        for org_id in org_ids
-    }
-
-
 async def _org_out(db: AsyncSession, org: Organization, aggregates: dict | None = None) -> dict:
-    agg = aggregates if aggregates is not None else (await _org_aggregates(db, [org.id])).get(
+    agg = aggregates if aggregates is not None else (await org_aggregates(db, [org.id])).get(
         org.id, {"domain_count": 0, "job_error_count_7d": 0, "last_report_at": None}
     )
     return {
@@ -362,9 +306,8 @@ async def change_password(
 async def list_organizations(
     db: AsyncSession = Depends(get_db), _admin: AdminPrincipal = Depends(get_current_platform_admin)
 ) -> list[dict]:
-    result = await db.execute(select(Organization).order_by(Organization.created_at.desc()))
-    orgs = result.scalars().all()
-    aggregates = await _org_aggregates(db, [org.id for org in orgs])
+    orgs = await list_all_organizations(db)
+    aggregates = await org_aggregates(db, [org.id for org in orgs])
     return [await _org_out(db, org, aggregates=aggregates.get(org.id)) for org in orgs]
 
 
@@ -549,7 +492,7 @@ async def upsert_mailbox_connection(
 
 
 @router.get("/job-runs")
-async def list_job_runs(
+async def list_job_runs_route(
     limit: int = 50,
     organization_id: uuid.UUID | None = Query(None),
     job_type: JobType | None = Query(None),
@@ -559,18 +502,7 @@ async def list_job_runs(
     _admin: AdminPrincipal = Depends(get_current_platform_admin),
 ) -> list[dict]:
     limit = max(1, min(limit, 200))
-    query = select(JobRun).order_by(JobRun.started_at.desc())
-    if organization_id is not None:
-        query = query.where(JobRun.organization_id == organization_id)
-    if job_type is not None:
-        query = query.where(JobRun.job_type == job_type)
-    if status_filter is not None:
-        query = query.where(JobRun.status == status_filter)
-    if since_days is not None:
-        query = query.where(JobRun.started_at >= datetime.now(timezone.utc) - timedelta(days=since_days))
-    query = query.limit(limit)
-
-    result = await db.execute(query)
+    runs = await list_job_runs(db, limit=limit, organization_id=organization_id, job_type=job_type, status_filter=status_filter, since_days=since_days)
     return [
         {
             "id": str(run.id),
@@ -583,7 +515,7 @@ async def list_job_runs(
             "error_message": run.error_message,
             "stats": run.stats,
         }
-        for run in result.scalars().all()
+        for run in runs
     ]
 
 
@@ -595,32 +527,11 @@ async def job_runs_summary(
     healthy has ingestion been in the last day, is the mailbox poller still
     actually running, and is data still flowing in today — rather than
     making the admin infer all of that from scrolling a long table."""
-    last_failure = (
-        await db.execute(select(JobRun).where(JobRun.status == JobStatus.failure).order_by(JobRun.started_at.desc()).limit(1))
-    ).scalar_one_or_none()
-
-    since_24h = datetime.now(timezone.utc) - timedelta(hours=24)
-    total_24h, success_24h = (
-        await db.execute(
-            select(
-                func.count(),
-                func.coalesce(func.sum(case((JobRun.status == JobStatus.success, 1), else_=0)), 0),
-            ).where(JobRun.started_at >= since_24h)
-        )
-    ).one()
-    success_rate_pct_24h = round(success_24h / total_24h * 100, 1) if total_24h else None
-
-    latest_mailbox_poll_at = (
-        await db.execute(select(func.max(JobRun.started_at)).where(JobRun.job_type == JobType.mailbox_poll))
-    ).scalar_one_or_none()
-
-    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    reports_today = (
-        await db.execute(
-            select(func.count()).select_from(DmarcAggregateReport).where(DmarcAggregateReport.received_at >= today_start)
-        )
-    ).scalar_one()
-
+    stats = await job_runs_summary_stats(db)
+    last_failure = stats["last_failure"]
+    success_rate_pct_24h = (
+        round(stats["success_24h"] / stats["total_24h"] * 100, 1) if stats["total_24h"] else None
+    )
     return {
         "last_failure": (
             {
@@ -633,6 +544,6 @@ async def job_runs_summary(
             else None
         ),
         "success_rate_pct_24h": success_rate_pct_24h,
-        "latest_mailbox_poll_at": latest_mailbox_poll_at.isoformat() if latest_mailbox_poll_at else None,
-        "reports_processed_today": int(reports_today),
+        "latest_mailbox_poll_at": stats["latest_mailbox_poll_at"].isoformat() if stats["latest_mailbox_poll_at"] else None,
+        "reports_processed_today": int(stats["reports_today"]),
     }
