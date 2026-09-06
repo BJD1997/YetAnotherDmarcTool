@@ -379,3 +379,63 @@ async def test_dmarc_record_detail_404_for_unknown_record(api):
     response = await client.get(f"/api/domains/{domain.id}/dmarc/records/{uuid.uuid4()}")
 
     assert response.status_code == 404
+
+
+async def test_dmarc_reports_by_day_keyset_pagination_with_before_id(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org)
+
+    # Create records across two days with small limit to force pagination
+    day1 = datetime.now(timezone.utc) - timedelta(days=2)
+    day2 = datetime.now(timezone.utc) - timedelta(days=1)
+    report1 = await _add_aggregate_report(owner_factory, org, domain, date_range_begin=day1)
+    report2 = await _add_aggregate_report(owner_factory, org, domain, date_range_begin=day2)
+
+    # Create multiple records on each day
+    record1_day1 = await _add_aggregate_record(owner_factory, org, domain, report1, source_ip="203.0.113.1", count=1)
+    record2_day1 = await _add_aggregate_record(owner_factory, org, domain, report1, source_ip="203.0.113.2", count=2)
+    record1_day2 = await _add_aggregate_record(owner_factory, org, domain, report2, source_ip="203.0.113.3", count=3)
+    record2_day2 = await _add_aggregate_record(owner_factory, org, domain, report2, source_ip="203.0.113.4", count=4)
+
+    # Fetch first page with limit=2 (should get 2 records from day2)
+    response1 = await client.get(f"/api/domains/{domain.id}/dmarc/reports/by-day?limit=2")
+    assert response1.status_code == 200
+    body1 = response1.json()
+    assert body1["has_more"] is True
+    page1_records = body1["days"][0]["rows"]
+    assert len(page1_records) == 2
+    first_page_ids = {r["record_id"] for r in page1_records}
+
+    # Fetch second page using last record's ID as before_id cursor
+    last_record_id = page1_records[-1]["record_id"]
+    response2 = await client.get(f"/api/domains/{domain.id}/dmarc/reports/by-day?limit=2&before_id={last_record_id}")
+    assert response2.status_code == 200
+    body2 = response2.json()
+    page2_records = []
+    for day in body2["days"]:
+        page2_records.extend(day["rows"])
+
+    # Verify no record from page1 appears on page2 (keyset cursor excludes them)
+    page2_ids = {r["record_id"] for r in page2_records}
+    assert len(first_page_ids & page2_ids) == 0, "Page 2 should not contain records from Page 1"
+
+
+async def test_dmarc_record_detail_404_for_different_domain(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    await login_as(client, owner_factory, user)
+
+    # Create two domains in same org
+    domain_a = await _add_domain(owner_factory, org, name="example-a.com")
+    domain_b = await _add_domain(owner_factory, org, name="example-b.com")
+
+    # Create a report and record under domain A
+    report_a = await _add_aggregate_report(owner_factory, org, domain_a)
+    record_a = await _add_aggregate_record(owner_factory, org, domain_a, report_a, source_ip="203.0.113.10", count=5)
+
+    # Try to access domain A's record via domain B's endpoint (should 404)
+    response = await client.get(f"/api/domains/{domain_b.id}/dmarc/records/{record_a.id}")
+
+    assert response.status_code == 404

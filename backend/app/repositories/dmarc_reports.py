@@ -53,7 +53,8 @@ async def list_report_records_by_day(
     source_ip: str | None,
 ) -> Sequence:
     """Row granularity is one DmarcAggregateRecord (one sending host within
-    one report), not one whole report. Keyset-paginated on
+    one report), not one whole report — a report with several source IPs
+    shows as several rows on its day. Keyset-paginated on
     (date_range_begin, record id) rather than offset, so pages stay stable
     as new reports keep arriving between requests. Filters apply to the
     keyset query itself, not after the fact, since a busy domain can have
