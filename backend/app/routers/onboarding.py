@@ -28,6 +28,11 @@ async def onboarding_status(db: AsyncSession = Depends(get_db), user: User = Dep
     has_dns_baseline = await count_dns_checks_for_org(db, user.organization_id) > 0
     has_any_report = await count_reports_for_org(db, user.organization_id) > 0
 
+    # A local-auth org (no entra_tenant_id) has no Entra tenant to grant
+    # Mail Access consent from, so a MailboxConnection is never possible for
+    # them — they get a hosted address per domain instead (see
+    # app/routers/domains.py's _hosted_mailbox_available), which needs no
+    # separate "connect a mailbox" step at all.
     has_mailbox = connection is not None or (org is not None and org.entra_tenant_id is None)
 
     return {

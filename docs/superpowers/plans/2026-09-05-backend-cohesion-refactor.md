@@ -12,6 +12,8 @@
 
 **Not in this plan (follow-up "Plan A2"):** `auth.py`, `platform_admin.py`, `dmarc_reports.py` — the 3 largest and most security-sensitive routers (OAuth, TOTP/MFA, rate limiting, the app's core reporting surface). They get their own plan so their tests get focused attention rather than being rushed through alongside simple CRUD routers. `repositories/dmarc_reports.py` is created here with only the handful of read functions the *other* routers need from it (see Task 2); Plan A2 will add to this same file, not create a second one.
 
+**Also not in this plan (tracked separately as "Plan B (frontend)", not yet written):** the spec's §2 note about queries duplicated across *service* modules (not just routers) — those remain untouched here; §4 frontend hooks layer; §6 pages organization rule; §7 shared components; and the frontend half of §8 (Vitest + React Testing Library). This plan is backend-only.
+
 ## Global Constraints
 
 - Work happens on a new branch `refactor/backend-cohesion` cut from `master`, in an isolated worktree (see `superpowers:using-git-worktrees`) — not on `v0.1.4-beta`, not directly on `master`.

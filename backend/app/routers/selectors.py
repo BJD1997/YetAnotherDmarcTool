@@ -66,6 +66,15 @@ async def create_selector(
 async def detected_selectors(
     domain_id: uuid.UUID, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
 ) -> list[dict]:
+    """DKIM selectors this domain actually signed with, mined from already-
+    ingested DMARC aggregate reports (auth_results.dkim, see
+    dmarc_narrative.py's own confirmed-against-live-data shape note) rather
+    than requiring the domain owner to dig one out of a raw email header —
+    same "surface what the reports already show" idea as
+    GET /dmarc/detected-domains. Only counts a (selector, dkim domain) pair
+    if the DKIM d= aligns with this domain (see describe_alignment) — a
+    passing DKIM signature from an unrelated third party (e.g. an ESP
+    signing its own envelope) isn't this domain's selector to add."""
     domain = await get_owned_domain(db, domain_id, user.organization_id)
     known = await known_selector_names(db, domain_id)
     rows = await list_auth_results_for_domain(db, domain_id)

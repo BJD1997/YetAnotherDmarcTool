@@ -1,17 +1,16 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user, require_org_admin
-from app.models.dmarc_aggregate import DmarcAggregateReport
 from app.models.enums import ConsentStatus
 from app.models.mailbox_connection import MailboxConnection
-from app.models.organization import Organization
 from app.models.user import User
+from app.repositories.dmarc_reports import last_report_received_at_for_org
 from app.repositories.mailbox_connections import get_org_mailbox_connection, list_mailbox_job_runs
+from app.repositories.organizations import get_organization
 from app.schemas.mailbox_connections import MailboxConnectionSetRequest
 from app.workers.jobs.mailbox_poll_job import poll_org_mailbox
 
@@ -36,13 +35,7 @@ async def _mailbox_health_extra(db: AsyncSession, organization_id) -> dict:
     attempt's job_runs.stats — a mailbox can report "success" while
     processing zero reports, which the bare consent/sync-status fields
     can't distinguish but this can."""
-    last_report_at = (
-        await db.execute(
-            select(func.max(DmarcAggregateReport.received_at)).where(
-                DmarcAggregateReport.organization_id == organization_id
-            )
-        )
-    ).scalar_one_or_none()
+    last_report_at = await last_report_received_at_for_org(db, organization_id)
 
     job_runs = await list_mailbox_job_runs(db, organization_id, limit=1)
     last_run = job_runs[0] if job_runs else None
@@ -105,7 +98,7 @@ async def set_mailbox_connection(
     genuinely isn't done yet, that resync will simply fail with a clear
     error surfaced via last_sync_status/last_sync_error, rather than
     silently pretending to have succeeded."""
-    org = await db.get(Organization, user.organization_id)
+    org = await get_organization(db, user.organization_id)
     if org.entra_tenant_id is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "organization has no Entra tenant ID set yet — contact your platform administrator")
 
@@ -144,7 +137,7 @@ async def resync_mailbox_connection(
     if connection is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no mailbox connection configured for your organization yet")
 
-    org = await db.get(Organization, user.organization_id)
+    org = await get_organization(db, user.organization_id)
     if org.entra_tenant_id is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "organization has no Entra tenant ID set")
 

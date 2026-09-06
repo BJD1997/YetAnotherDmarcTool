@@ -21,6 +21,8 @@ def _org_out(org: Organization) -> dict:
         "is_operator": org.is_operator,
         "spf_all_qualifier_mode": org.spf_all_qualifier_mode.value,
         "hosted_mailbox_opt_in": org.hosted_mailbox_opt_in,
+        # Self-service reference: e.g. if the SSO consent link is needed
+        # later, or the Mail Access consent needs redoing after a lapse.
         "entra_consent_urls": entra_consent_urls(org),
     }
 

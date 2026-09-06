@@ -60,6 +60,9 @@ async def test_list_latest_checks_returns_latest_run_only(api):
 async def test_list_latest_checks_not_found_for_other_org(api):
     client, owner_factory = api
     _org, user = await seed_org_and_user(owner_factory)
+    # entra=True on the discarded second user avoids colliding with the
+    # partial unique index on lower(email) for auth_method='local' users —
+    # seed_org_and_user hardcodes the same email for every call (see Task 4).
     other_org, _other_user = await seed_org_and_user(owner_factory, entra=True)
     domain = await _add_domain(owner_factory, other_org)
     await login_as(client, owner_factory, user)

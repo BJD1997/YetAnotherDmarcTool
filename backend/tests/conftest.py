@@ -29,6 +29,7 @@ import uuid
 from pathlib import Path
 
 import app.middleware.demo_read_only as demo_read_only_module
+import app.workers.jobs.mailbox_poll_job as mailbox_poll_job_module
 import httpx
 import pytest
 import pytest_asyncio
@@ -135,11 +136,14 @@ async def api(migrated_db):
     calls don't need to set it per-test. Requests run through app.db.session.get_db
     overridden to connect as the non-owner dmarc_app role — the same role
     FORCE ROW LEVEL SECURITY binds in prod — so RLS is genuinely exercised,
-    not bypassed. Also patches async_session_factory in both session_module
-    and demo_read_only_module (app.middleware.demo_read_only imports it
-    directly, so both need patching) so middlewares like enforce_demo_read_only
-    that use it directly (not via dependency injection) connect to the test
-    database, not prod.
+    not bypassed. Also patches async_session_factory in session_module,
+    demo_read_only_module, AND mailbox_poll_job_module (plus mailbox_poll_job_module's
+    own copy of `engine`), since each of those modules imports directly from
+    app.db.session rather than going through dependency injection:
+    demo_read_only's enforce_demo_read_only middleware, and mailbox_poll_job's
+    poll_org_mailbox — which set_mailbox_connection/resync_mailbox_connection
+    dispatch as a real BackgroundTask that DOES execute under ASGITransport,
+    so without this patch it would try to reach the prod database.
     `owner_factory` is for test setup that must bypass RLS (seeding orgs/users
     directly), same superuser role rls_sessions uses.
     """
@@ -159,13 +163,19 @@ async def api(migrated_db):
 
     # Override both the dependency-injected get_db and the global async_session_factory
     # (used by middlewares like enforce_demo_read_only that don't use dependency injection).
-    # Must replace in both session_module AND demo_read_only_module since
-    # app.middleware.demo_read_only imported it directly.
+    # Must replace in session_module, demo_read_only_module, AND mailbox_poll_job_module
+    # since app.middleware.demo_read_only and app.workers.jobs.mailbox_poll_job both
+    # imported it directly. mailbox_poll_job also imports `engine` directly (for its
+    # advisory-lock connection), so that needs patching here too.
     app.dependency_overrides[get_db] = _override_get_db
     original_session_factory = session_module.async_session_factory
     original_demo_read_only_factory = demo_read_only_module.async_session_factory
+    original_mailbox_poll_job_factory = mailbox_poll_job_module.async_session_factory
+    original_mailbox_poll_job_engine = mailbox_poll_job_module.engine
     session_module.async_session_factory = app_factory
     demo_read_only_module.async_session_factory = app_factory
+    mailbox_poll_job_module.async_session_factory = app_factory
+    mailbox_poll_job_module.engine = app_engine
 
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=CSRF_HEADERS) as client:
@@ -174,6 +184,8 @@ async def api(migrated_db):
     app.dependency_overrides.pop(get_db, None)
     session_module.async_session_factory = original_session_factory
     demo_read_only_module.async_session_factory = original_demo_read_only_factory
+    mailbox_poll_job_module.async_session_factory = original_mailbox_poll_job_factory
+    mailbox_poll_job_module.engine = original_mailbox_poll_job_engine
     await app_engine.dispose()
     await owner_engine.dispose()
 

@@ -2,6 +2,8 @@ import re
 
 from pydantic import BaseModel, field_validator
 
+# DKIM selectors are a DNS label sequence (RFC 6376 "selector"); allow the
+# usual hostname-label characters plus dots for multi-label selectors.
 _SELECTOR_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])?(\.[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])?)*$")
 
 

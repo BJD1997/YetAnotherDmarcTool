@@ -1,8 +1,10 @@
 # Repositories organization rule
 
-One file per model/domain area, mirroring `app/models/` (e.g. `repositories/domains.py`
+One file per domain area, organized around the router/feature it primarily
+serves rather than a strict mirror of `app/models/` (e.g. `repositories/domains.py`
 for the `Domain` model, `repositories/dmarc_reports.py` for the two
-`DmarcAggregateReport`/`DmarcAggregateRecord` models). This is the only place
+`DmarcAggregateReport`/`DmarcAggregateRecord` models, `repositories/selectors.py`
+for the `DkimSelector` model). This is the only place
 `select()`/other read queries against that model should live — routers and
 services call these functions rather than querying directly.
 

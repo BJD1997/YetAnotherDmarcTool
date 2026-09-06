@@ -32,6 +32,15 @@ async def last_report_received_at_for_domain(db: AsyncSession, domain_id: UUID) 
     return result.scalar_one_or_none()
 
 
+async def last_report_received_at_for_org(db: AsyncSession, organization_id: UUID) -> datetime | None:
+    result = await db.execute(
+        select(func.max(DmarcAggregateReport.received_at)).where(
+            DmarcAggregateReport.organization_id == organization_id
+        )
+    )
+    return result.scalar_one_or_none()
+
+
 async def failed_message_volume_for_domain(db: AsyncSession, domain_id: UUID) -> int:
     dmarc_pass = (DmarcAggregateRecord.dkim_result == AuthResult.pass_) | (
         DmarcAggregateRecord.spf_result == AuthResult.pass_

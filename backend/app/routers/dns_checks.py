@@ -9,12 +9,12 @@ from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user, require_org_admin
 from app.models.dns_check import DnsCheckResult
 from app.models.enums import DomainVerificationStatus
-from app.models.mailbox_connection import MailboxConnection
 from app.models.organization import Organization
 from app.models.tls_rpt import TlsRptReport
 from app.models.user import User
 from app.repositories.dns_checks import list_latest_check_results
 from app.repositories.domains import get_owned_domain
+from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.services.dns_checks.base import is_null_mx
 from app.services.dns_checks.dmarc_record import check_rua_destination
 from app.services.dns_checks.inbound_view import build_inbound_hosts
@@ -226,9 +226,7 @@ async def dmarc_rua_check(
     never send this product a single report if rua= was never set (or was
     later changed) to point here — see dmarc_record.py."""
     domain = await get_owned_domain(db, domain_id, user.organization_id)
-    connection = (
-        await db.execute(select(MailboxConnection).where(MailboxConnection.organization_id == user.organization_id))
-    ).scalar_one_or_none()
+    connection = await get_org_mailbox_connection(db, user.organization_id)
     mailbox_address = domain.hosted_report_address or (connection.mailbox_address if connection else None)
     if mailbox_address is None:
         return {"status": "no_mailbox", "current_targets": [], "org_mailbox_address": None}
@@ -336,9 +334,7 @@ async def tls_rpt_builder(
     separate addresses."""
     domain = await get_owned_domain(db, domain_id, user.organization_id)
 
-    connection = (
-        await db.execute(select(MailboxConnection).where(MailboxConnection.organization_id == user.organization_id))
-    ).scalar_one_or_none()
+    connection = await get_org_mailbox_connection(db, user.organization_id)
     mailbox_address = domain.hosted_report_address or (connection.mailbox_address if connection is not None else None)
 
     lookup_error = False

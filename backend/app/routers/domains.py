@@ -3,7 +3,6 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,7 +11,6 @@ from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user, require_org_admin
 from app.models.domain import Domain
 from app.models.enums import CheckType, DomainMailProfile, DomainVerificationStatus
-from app.models.mailbox_connection import MailboxConnection
 from app.models.organization import Organization
 from app.models.user import User
 from app.repositories.dmarc_reports import (
@@ -21,6 +19,8 @@ from app.repositories.dmarc_reports import (
     last_report_received_at_for_domain,
 )
 from app.repositories.domains import count_subdomains, get_owned_domain, list_domains_for_org
+from app.repositories.mailbox_connections import get_org_mailbox_connection
+from app.repositories.organizations import get_organization
 from app.schemas.domains import DomainCreateRequest, DomainUpdateRequest
 from app.services.cloudflare.dns_provisioner import ensure_authorization_record
 from app.services.dns_checks.dmarc_record import check_rua_destination
@@ -141,9 +141,7 @@ async def ranked_domains(db: AsyncSession = Depends(get_db), user: User = Depend
 
     # Fetched once, not per-domain — only actually used below for domains
     # that turn out to have no report data yet (see the no-data signals).
-    connection = (
-        await db.execute(select(MailboxConnection).where(MailboxConnection.organization_id == user.organization_id))
-    ).scalar_one_or_none()
+    connection = await get_org_mailbox_connection(db, user.organization_id)
     mailbox_address = connection.mailbox_address if connection is not None else None
 
     items = []
@@ -308,7 +306,7 @@ async def get_or_create_hosted_report_address(
     how mail sent to it gets attributed back to this domain."""
     domain = await get_owned_domain(db, domain_id, user.organization_id)
 
-    org = await db.get(Organization, user.organization_id)
+    org = await get_organization(db, user.organization_id)
     if not _hosted_mailbox_available(org):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "hosted mailbox isn't enabled for your organization — see Settings")
 

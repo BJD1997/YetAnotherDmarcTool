@@ -9,9 +9,9 @@ from app.config import settings
 from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user, require_org_admin
 from app.models.enums import AuthMethod, UserRole
-from app.models.organization import Organization
 from app.models.password_setup_token import PasswordSetupToken
 from app.models.user import User
+from app.repositories.organizations import get_organization
 from app.repositories.users import get_user_in_org, list_users_for_org
 from app.schemas.users import LocalUserCreateRequest, UserUpdateRequest
 from app.services.auth.tokens import new_opaque_token
@@ -48,7 +48,7 @@ async def create_local_user(
     platform_admin.create_local_user) — gives local-auth orgs the same
     "admin shares a link, no operator involvement per teammate" parity
     Entra orgs already have via Team.tsx's ShareSignInLink."""
-    org = await db.get(Organization, admin.organization_id)
+    org = await get_organization(db, admin.organization_id)
     if org is None or org.entra_tenant_id is not None:
         raise HTTPException(
             status.HTTP_409_CONFLICT, "this organization uses Entra SSO — teammates join by signing in, not manual creation"
