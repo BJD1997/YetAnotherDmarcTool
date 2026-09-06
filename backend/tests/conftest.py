@@ -220,3 +220,25 @@ async def login_as(client: httpx.AsyncClient, owner_factory, user: User) -> None
         )
         await db.commit()
     client.cookies.set(settings.session_cookie_name, raw_token)
+
+
+async def login_as_platform_admin(client: httpx.AsyncClient, owner_factory) -> None:
+    """Creates a local PlatformAdmin and logs the client in as them. password_hash
+    is a placeholder, not a real hash — this mints a session directly via
+    session_manager, the same bypass a real password login would produce,
+    without ever calling verify_password, so the placeholder is never checked."""
+    from app.models.platform_admin import PlatformAdmin
+
+    async with owner_factory() as db:
+        admin = PlatformAdmin(
+            email=f"admin+{uuid.uuid4()}@platform.example",
+            password_hash="unused",
+            is_active=True,
+        )
+        db.add(admin)
+        await db.flush()
+        _, raw_token = await session_manager.create_platform_admin_session(
+            db, platform_admin_id=admin.id, ip_address="127.0.0.1", user_agent="pytest",
+        )
+        await db.commit()
+    client.cookies.set(settings.platform_admin_session_cookie_name, raw_token)

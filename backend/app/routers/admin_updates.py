@@ -1,4 +1,3 @@
-from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -6,13 +5,10 @@ from app.config import settings
 from app.db.session import get_db
 from app.middleware.tenant_context import AdminPrincipal, get_current_platform_admin
 from app.models.update_check_state import UpdateCheckState
+from app.schemas.admin_updates import UpdateSettingsPatch
 from app.services import update_check, updater_client
 
 router = APIRouter(prefix="/admin/updates", tags=["platform-admin"])
-
-
-class UpdateSettingsPatch(BaseModel):
-    include_prereleases: bool
 
 
 def _status_out(state: UpdateCheckState) -> dict:
