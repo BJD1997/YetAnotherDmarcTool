@@ -26,6 +26,8 @@ from app.models.platform_admin import PlatformAdmin
 from app.models.platform_admin_mfa_pending_challenge import PlatformAdminMfaPendingChallenge
 from app.models.platform_admin_recovery_code import PlatformAdminRecoveryCode
 from app.models.user import User
+from app.repositories.mailbox_connections import get_org_mailbox_connection
+from app.repositories.organizations import get_organization
 from app.repositories.platform_admin import (
     get_admin_mfa_pending_challenge,
     get_platform_admin_by_email,
@@ -55,8 +57,7 @@ _ADMIN_MFA_PENDING_COOKIE = settings.platform_admin_mfa_pending_cookie_name
 
 
 async def _mailbox_out(db: AsyncSession, org_id: uuid.UUID) -> dict | None:
-    result = await db.execute(select(MailboxConnection).where(MailboxConnection.organization_id == org_id))
-    connection = result.scalar_one_or_none()
+    connection = await get_org_mailbox_connection(db, org_id)
     if connection is None:
         return None
     return {
@@ -381,12 +382,12 @@ async def create_organization(
 
 
 @router.get("/organizations/{org_id}")
-async def get_organization(
+async def get_organization_route(
     org_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _admin: AdminPrincipal = Depends(get_current_platform_admin),
 ) -> dict:
-    org = await db.get(Organization, org_id)
+    org = await get_organization(db, org_id)
     if org is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "organization not found")
     return await _org_out(db, org)
@@ -399,7 +400,7 @@ async def update_organization(
     db: AsyncSession = Depends(get_db),
     _admin: AdminPrincipal = Depends(get_current_platform_admin),
 ) -> dict:
-    org = await db.get(Organization, org_id)
+    org = await get_organization(db, org_id)
     if org is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "organization not found")
     if body.name is not None:
@@ -419,7 +420,7 @@ async def delete_organization(
     db: AsyncSession = Depends(get_db),
     _admin: AdminPrincipal = Depends(get_current_platform_admin),
 ) -> None:
-    org = await db.get(Organization, org_id)
+    org = await get_organization(db, org_id)
     if org is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "organization not found")
     if org.is_operator:
@@ -469,7 +470,7 @@ async def create_local_user(
     manual path here. Returns a one-time "set your password" link for the
     admin to share out-of-band (same manual-share philosophy as Team.tsx's
     ShareSignInLink — no outbound email sending in this app)."""
-    org = await db.get(Organization, org_id)
+    org = await get_organization(db, org_id)
     if org is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "organization not found")
     if org.entra_tenant_id is not None:
@@ -519,14 +520,11 @@ async def upsert_mailbox_connection(
     db: AsyncSession = Depends(get_db),
     _admin: AdminPrincipal = Depends(get_current_platform_admin),
 ) -> dict:
-    org = await db.get(Organization, org_id)
+    org = await get_organization(db, org_id)
     if org is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "organization not found")
 
-    result = await db.execute(
-        select(MailboxConnection).where(MailboxConnection.organization_id == org_id)
-    )
-    connection = result.scalar_one_or_none()
+    connection = await get_org_mailbox_connection(db, org_id)
     if connection is None:
         connection = MailboxConnection(organization_id=org_id, mailbox_address=body.mailbox_address)
         db.add(connection)
