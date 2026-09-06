@@ -22,6 +22,8 @@ async def add_security_headers(request: Request, call_next):
     response = await call_next(request)
     for header, value in SECURITY_HEADERS.items():
         response.headers.setdefault(header, value)
+    # HSTS only when this instance is actually served over HTTPS (every real
+    # deployment, behind NPM) — never on plain-http localhost smoke testing.
     if settings.public_base_url.startswith("https://"):
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
     return response

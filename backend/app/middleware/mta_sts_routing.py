@@ -17,6 +17,10 @@ async def restrict_mta_sts_hostname(request: Request, call_next):
         and host == settings.mta_sts_policy_hostname
         and request.url.path != "/.well-known/mta-sts.txt"
     ):
+        # no-store: browsers/CDNs heuristically caching a *blocked* response
+        # (or, before this middleware existed, the real SPA/login page that
+        # used to be here) is exactly what made this flaky to diagnose live —
+        # this hostname's responses should never be cached, blocked or not.
         return JSONResponse(
             {"detail": "not found"}, status_code=status.HTTP_404_NOT_FOUND, headers={"Cache-Control": "no-store"}
         )
