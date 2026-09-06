@@ -47,6 +47,7 @@ from app.models.enums import AuthMethod, OrganizationStatus, UserRole, UserStatu
 from app.models.organization import Organization
 from app.models.user import User
 from app.services.auth import session_manager
+from app.services.auth.rate_limit import login_limiter, otp_limiter
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
 _APP_ROLE = "dmarc_app"
@@ -145,8 +146,14 @@ async def api(migrated_db):
     dispatch as a real BackgroundTask that DOES execute under ASGITransport,
     so without this patch it would try to reach the prod database.
     `owner_factory` is for test setup that must bypass RLS (seeding orgs/users
-    directly), same superuser role rls_sessions uses.
+    directly), same superuser role rls_sessions uses. Also clears the shared
+    `login_limiter`/`otp_limiter` in-memory rate-limit state at the start of
+    every test — both are module-level singletons (see `rate_limit.py`), so
+    without this reset the 11th test in a session hitting any rate-limited
+    auth endpoint from the same simulated client IP gets a spurious 429.
     """
+    login_limiter._hits.clear()
+    otp_limiter._hits.clear()
 
     owner_engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
     app_engine = create_async_engine(_app_url(), poolclass=NullPool)

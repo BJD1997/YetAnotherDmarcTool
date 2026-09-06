@@ -3,8 +3,6 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, RedirectResponse
-from pydantic import BaseModel
-from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -17,6 +15,17 @@ from app.models.organization import Organization
 from app.models.password_setup_token import PasswordSetupToken
 from app.models.user import User
 from app.models.user_recovery_code import UserRecoveryCode
+from app.repositories.auth import (
+    count_users_for_org,
+    get_local_user_by_email,
+    get_mfa_pending_challenge,
+    get_organization_by_entra_tenant_id,
+    get_password_setup_token,
+    get_unused_recovery_code,
+    get_user_by_org_and_entra_object_id,
+)
+from app.repositories.organizations import get_organization
+from app.schemas.auth import EnrollOtpConfirmRequest, LocalLoginRequest, SetPasswordRequest, VerifyOtpRequest
 from app.services.auth import entra_oidc, pkce, session_manager, totp
 from app.services.auth.password import dummy_verify, hash_password, verify_password
 from app.services.auth.rate_limit import login_limiter, otp_limiter, rate_limiter
@@ -208,25 +217,6 @@ async def me(user: User = Depends(get_current_user)) -> dict:
 # user's OTP check and a brand-new user's OTP enrollment read from —
 # mandatory TOTP either way, so a leaked password alone never reaches a
 # real session), then either verify-otp or enroll-otp/confirm issues one.
-
-
-class LocalLoginRequest(BaseModel):
-    email: str
-    password: str
-
-
-class VerifyOtpRequest(BaseModel):
-    code: str
-
-
-class SetPasswordRequest(BaseModel):
-    token: str
-    new_password: str
-
-
-class EnrollOtpConfirmRequest(BaseModel):
-    secret: str
-    code: str
 
 
 async def _set_mfa_pending(db: AsyncSession, response: Response, user_id) -> None:
