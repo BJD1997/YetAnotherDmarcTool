@@ -64,7 +64,7 @@ def _compose_project_name() -> str:
 def _run_update(version: str) -> None:
     project = _compose_project_name()
     compose = ["docker", "compose", "-p", project, "--env-file", f"{WORKSPACE}/{ENV_FILE}", "-f", f"{WORKSPACE}/{COMPOSE_FILE}"]
-    # Overrides whatever APP_VERSION the env file might (not) define —
+    # Overrides whatever IMAGE_TAG the env file might (not) define —
     # process environment takes precedence over --env-file in compose's
     # substitution order, so THIS is what actually controls which tag gets
     # pulled. Without it, `pull` always resolved to :latest regardless of
@@ -74,7 +74,17 @@ def _run_update(version: str) -> None:
     # :latest correctly went back to meaning "stable only" — pull would
     # then fetch an OLDER image than what's already running, missing
     # whatever migrations shipped after it.
-    env = {**os.environ, "APP_VERSION": version}
+    #
+    # Deliberately NOT named APP_VERSION: that name is reserved for the
+    # Dockerfile ARG baked into the image at build/publish time, which is
+    # what the running app reports as its own version (app/config.py's
+    # app_version). IMAGE_TAG only ever selects which tag `docker compose`
+    # resolves for the image: line — it must never also become a container
+    # env var, or it would win over (and permanently desync from) the
+    # image's own correct baked-in APP_VERSION on every future container
+    # recreation, since env_file-provided vars always override an image's
+    # ENV instructions regardless of which image is actually running.
+    env = {**os.environ, "IMAGE_TAG": version}
     try:
         subprocess.run(compose + ["pull", "api", "worker", "migrate"], cwd=WORKSPACE, env=env, check=True)
         # --no-deps on both: db/resolver are long-running, already-healthy

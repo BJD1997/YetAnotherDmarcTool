@@ -32,7 +32,7 @@ jobs:
       # "v" prefix and would leave the published image tag ("0.1.0") not
       # matching the git tag ("v0.1.0"), GET /api/health's baked-in
       # APP_VERSION, or the tag_name GitHub's releases API reports (all of
-      # which use the raw ref) — an operator pinning APP_VERSION to match
+      # which use the raw ref) — an operator pinning IMAGE_TAG to match
       # the git tag they saw on GitHub would otherwise get "manifest
       # unknown" from `docker compose pull`.
       #

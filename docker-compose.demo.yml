@@ -67,7 +67,7 @@ services:
     # coexist — lets `docker compose pull` track a published release the
     # same way the real instance does, instead of only ever building from
     # whatever's checked out locally.
-    image: ghcr.io/bjd1997/yetanotherdmarctool:${APP_VERSION:-latest}
+    image: ghcr.io/bjd1997/yetanotherdmarctool:${IMAGE_TAG:-latest}
     command: sh -c "alembic upgrade head && python -m app.scripts.bootstrap_platform_admin && python -m app.scripts.seed_demo && python -m app.scripts.seed_demo_reports"
     env_file:
       - .env.demo
@@ -83,7 +83,7 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    image: ghcr.io/bjd1997/yetanotherdmarctool:${APP_VERSION:-latest}
+    image: ghcr.io/bjd1997/yetanotherdmarctool:${IMAGE_TAG:-latest}
     restart: unless-stopped
     # See docker-compose.yml's api service for why this is needed.
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips=${FORWARDED_ALLOW_IPS:-127.0.0.1}
@@ -113,7 +113,7 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    image: ghcr.io/bjd1997/yetanotherdmarctool:${APP_VERSION:-latest}
+    image: ghcr.io/bjd1997/yetanotherdmarctool:${IMAGE_TAG:-latest}
     restart: unless-stopped
     command: python -m app.workers.scheduler
     env_file:
@@ -141,7 +141,7 @@ services:
   updater:
     build:
       context: ./updater
-    image: ghcr.io/bjd1997/yetanotherdmarctool-updater:${APP_VERSION:-latest}
+    image: ghcr.io/bjd1997/yetanotherdmarctool-updater:${IMAGE_TAG:-latest}
     restart: unless-stopped
     environment:
       UPDATER_SHARED_SECRET: ${UPDATER_SHARED_SECRET:-}
