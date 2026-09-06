@@ -26,6 +26,7 @@ import asyncio
 import os
 import subprocess
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 import app.middleware.demo_read_only as demo_read_only_module
@@ -263,3 +264,29 @@ async def login_as_platform_admin(client: httpx.AsyncClient, owner_factory) -> N
         )
         await db.commit()
     client.cookies.set(settings.platform_admin_session_cookie_name, raw_token)
+
+
+async def seed_platform_admin_with_totp(owner_factory) -> tuple:
+    """Creates a local PlatformAdmin WITH a TOTP secret already enrolled
+    (unlike login_as_platform_admin, which logs straight in with no MFA
+    step at all) — returns (admin, secret) so tests can compute valid
+    codes with pyotp.TOTP(secret).now()."""
+    import pyotp
+
+    from app.models.platform_admin import PlatformAdmin
+    from app.services.auth.password import hash_password
+
+    secret = pyotp.random_base32()
+    async with owner_factory() as db:
+        admin = PlatformAdmin(
+            email=f"admin-totp+{uuid.uuid4()}@platform.example",
+            password_hash=hash_password("correct horse battery staple"),
+            is_active=True,
+            otp_secret=secret,
+            otp_enrolled_at=datetime.now(timezone.utc),
+        )
+        db.add(admin)
+        await db.flush()
+        await db.refresh(admin)
+        await db.commit()
+        return admin, secret

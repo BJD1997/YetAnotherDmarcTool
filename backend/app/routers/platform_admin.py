@@ -4,7 +4,6 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +26,21 @@ from app.models.platform_admin import PlatformAdmin
 from app.models.platform_admin_mfa_pending_challenge import PlatformAdminMfaPendingChallenge
 from app.models.platform_admin_recovery_code import PlatformAdminRecoveryCode
 from app.models.user import User
+from app.repositories.platform_admin import (
+    get_admin_mfa_pending_challenge,
+    get_platform_admin_by_email,
+    get_unused_admin_recovery_code,
+)
+from app.schemas.platform_admin import (
+    AdminEnrollOtpConfirmRequest,
+    AdminLoginRequest,
+    AdminVerifyOtpRequest,
+    ChangePasswordRequest,
+    LocalUserCreateRequest,
+    MailboxConnectionRequest,
+    OrganizationCreateRequest,
+    OrganizationUpdateRequest,
+)
 from app.services.auth import session_manager, totp
 from app.services.auth.rate_limit import login_limiter, otp_limiter, rate_limiter
 from app.services.auth.entra_links import entra_consent_urls
@@ -38,54 +52,6 @@ router = APIRouter(prefix="/admin", tags=["platform-admin"])
 
 JOB_ERROR_WINDOW_DAYS = 7
 _ADMIN_MFA_PENDING_COOKIE = settings.platform_admin_mfa_pending_cookie_name
-
-
-class AdminLoginRequest(BaseModel):
-    email: EmailStr
-    password: str
-
-
-class AdminVerifyOtpRequest(BaseModel):
-    code: str
-
-
-class AdminEnrollOtpConfirmRequest(BaseModel):
-    secret: str
-    code: str
-
-
-class OrganizationCreateRequest(BaseModel):
-    name: str
-    entra_tenant_id: uuid.UUID | None = None
-
-
-class OrganizationUpdateRequest(BaseModel):
-    name: str | None = None
-    entra_tenant_id: uuid.UUID | None = None
-    status: OrganizationStatus | None = None
-
-
-class MailboxConnectionRequest(BaseModel):
-    mailbox_address: str
-    consent_status: ConsentStatus | None = None
-
-
-class LocalUserCreateRequest(BaseModel):
-    email: EmailStr
-    display_name: str | None = None
-    role: UserRole = UserRole.org_admin
-
-
-class ChangePasswordRequest(BaseModel):
-    current_password: str
-    new_password: str
-
-    @field_validator("new_password")
-    @classmethod
-    def validate_new_password(cls, value: str) -> str:
-        if len(value) < 12:
-            raise ValueError("new password must be at least 12 characters")
-        return value
 
 
 async def _mailbox_out(db: AsyncSession, org_id: uuid.UUID) -> dict | None:
@@ -252,10 +218,7 @@ async def _get_pending_admin(request: Request, db: AsyncSession) -> tuple[Platfo
     if not raw_token:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "no pending login")
     token_hash = hash_token(raw_token)
-    result = await db.execute(
-        select(PlatformAdminMfaPendingChallenge).where(PlatformAdminMfaPendingChallenge.token_hash == token_hash)
-    )
-    challenge = result.scalar_one_or_none()
+    challenge = await get_admin_mfa_pending_challenge(db, token_hash)
     if challenge is None or challenge.expires_at <= datetime.now(timezone.utc):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "pending login expired — sign in again")
     # platform_admins carries no RLS (see the model's own docstring), so no
@@ -269,8 +232,7 @@ async def _get_pending_admin(request: Request, db: AsyncSession) -> tuple[Platfo
 
 @router.post("/login", dependencies=[Depends(rate_limiter(login_limiter))])
 async def admin_login(body: AdminLoginRequest, request: Request, db: AsyncSession = Depends(get_db)) -> Response:
-    result = await db.execute(select(PlatformAdmin).where(PlatformAdmin.email == body.email))
-    admin = result.scalar_one_or_none()
+    admin = await get_platform_admin_by_email(db, body.email)
     password_ok = admin is not None and verify_password(body.password, admin.password_hash)
     if admin is None:
         # Constant-work verify so a missing admin email isn't faster to
@@ -295,14 +257,7 @@ async def admin_verify_otp(body: AdminVerifyOtpRequest, request: Request, db: As
     code = body.code.strip()
     if not totp.verify_code(admin.otp_secret, code):
         code_hash = totp.hash_recovery_code_for_lookup(code)
-        result = await db.execute(
-            select(PlatformAdminRecoveryCode).where(
-                PlatformAdminRecoveryCode.platform_admin_id == admin.id,
-                PlatformAdminRecoveryCode.code_hash == code_hash,
-                PlatformAdminRecoveryCode.used_at.is_(None),
-            )
-        )
-        recovery = result.scalar_one_or_none()
+        recovery = await get_unused_admin_recovery_code(db, admin.id, code_hash)
         if recovery is None:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid code")
         recovery.used_at = datetime.now(timezone.utc)
