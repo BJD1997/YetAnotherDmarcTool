@@ -2,32 +2,21 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, EmailStr
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user, require_org_admin
-from app.models.enums import AuthMethod, UserRole, UserStatus
+from app.models.enums import AuthMethod, UserRole
 from app.models.organization import Organization
 from app.models.password_setup_token import PasswordSetupToken
 from app.models.user import User
+from app.repositories.users import get_user_in_org, list_users_for_org
+from app.schemas.users import LocalUserCreateRequest, UserUpdateRequest
 from app.services.auth.tokens import new_opaque_token
 
 router = APIRouter(prefix="/users", tags=["users"])
-
-
-class UserUpdateRequest(BaseModel):
-    role: UserRole | None = None
-    status: UserStatus | None = None
-
-
-class LocalUserCreateRequest(BaseModel):
-    email: EmailStr
-    display_name: str | None = None
-    role: UserRole = UserRole.member
 
 
 def _user_out(user: User) -> dict:
@@ -44,10 +33,8 @@ def _user_out(user: User) -> dict:
 
 @router.get("")
 async def list_users(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)) -> list[dict]:
-    result = await db.execute(
-        select(User).where(User.organization_id == user.organization_id).order_by(User.email)
-    )
-    return [_user_out(u) for u in result.scalars().all()]
+    users = await list_users_for_org(db, user.organization_id)
+    return [_user_out(u) for u in users]
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -109,8 +96,8 @@ async def update_user(
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_org_admin),
 ) -> dict:
-    target = await db.get(User, user_id)
-    if target is None or target.organization_id != admin.organization_id:
+    target = await get_user_in_org(db, user_id, admin.organization_id)
+    if target is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
     if target.id == admin.id and body.role is not None and body.role != UserRole.org_admin:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "cannot demote yourself")
