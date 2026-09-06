@@ -20,6 +20,9 @@ from app.models.sender_review import SenderReview
 from app.models.source_ip_identity import SourceIpIdentity
 from app.models.tls_rpt import TlsRptReport
 from app.models.user import User
+from app.repositories import dmarc_reports as dmarc_reports_repo
+from app.repositories.domains import get_owned_domain
+from app.schemas.dmarc_reports import SenderReviewUpdateRequest
 from app.services.action_queue.rules import reviewed_service_labels, unreviewed_high_volume_senders
 from app.services.dmarc_analytics import service_breakdown
 from app.services.dmarc_narrative import dkim_narratives, spf_narratives
@@ -38,61 +41,23 @@ from app.services.source_identification.service_identifier import identify_many
 router = APIRouter(tags=["dmarc-reports"])
 
 
-async def _get_owned_domain(db: AsyncSession, domain_id: uuid.UUID, organization_id: uuid.UUID) -> Domain:
-    domain = await db.get(Domain, domain_id)
-    if domain is None or domain.organization_id != organization_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "domain not found")
-    return domain
-
-
 @router.get("/domains/{domain_id}/dmarc/summary")
 async def dmarc_summary(
     domain_id: uuid.UUID, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
 ) -> dict:
-    await _get_owned_domain(db, domain_id, user.organization_id)
+    await get_owned_domain(db, domain_id, user.organization_id)
 
-    # A message passes DMARC if EITHER SPF or DKIM is aligned-pass (RFC 7489)
-    # — policy_evaluated.{dkim,spf} in the aggregate report already reflect
-    # the receiver's own alignment-aware judgement, so no separate
-    # "alignment" bookkeeping is needed beyond what's already stored.
-    dmarc_pass = (DmarcAggregateRecord.dkim_result == AuthResult.pass_) | (
-        DmarcAggregateRecord.spf_result == AuthResult.pass_
-    )
-
-    totals = await db.execute(
-        select(
-            func.coalesce(func.sum(DmarcAggregateRecord.count), 0),
-            func.coalesce(func.sum(case((dmarc_pass, DmarcAggregateRecord.count), else_=0)), 0),
-        ).where(DmarcAggregateRecord.domain_id == domain_id)
-    )
-    total_count, pass_count = totals.one()
-
-    disposition_rows = await db.execute(
-        select(DmarcAggregateRecord.disposition, func.sum(DmarcAggregateRecord.count))
-        .where(DmarcAggregateRecord.domain_id == domain_id)
-        .group_by(DmarcAggregateRecord.disposition)
-    )
-    by_disposition = {disposition.value: count for disposition, count in disposition_rows.all()}
-
-    report_count = await db.execute(
-        select(func.count()).select_from(DmarcAggregateReport).where(DmarcAggregateReport.domain_id == domain_id)
-    )
-
-    current_policy = (
-        await db.execute(
-            select(DmarcAggregateReport.policy_p)
-            .where(DmarcAggregateReport.domain_id == domain_id)
-            .order_by(DmarcAggregateReport.received_at.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
+    total_count, pass_count = await dmarc_reports_repo.dmarc_summary_totals(db, domain_id)
+    by_disposition = await dmarc_reports_repo.dmarc_disposition_breakdown(db, domain_id)
+    report_count = await dmarc_reports_repo.count_reports_for_domain(db, domain_id)
+    current_policy = await dmarc_reports_repo.latest_published_policy_for_domain(db, domain_id)
 
     return {
-        "total_message_count": int(total_count),
-        "dmarc_pass_count": int(pass_count),
-        "dmarc_fail_count": int(total_count) - int(pass_count),
+        "total_message_count": total_count,
+        "dmarc_pass_count": pass_count,
+        "dmarc_fail_count": total_count - pass_count,
         "by_disposition": by_disposition,
-        "report_count": report_count.scalar_one(),
+        "report_count": report_count,
         "current_policy": current_policy,
     }
 
@@ -101,7 +66,7 @@ async def dmarc_summary(
 async def domain_rating(
     domain_id: uuid.UUID, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
 ) -> dict:
-    domain = await _get_owned_domain(db, domain_id, user.organization_id)
+    domain = await get_owned_domain(db, domain_id, user.organization_id)
 
     if domain.verification_status != DomainVerificationStatus.verified:
         return {"not_verified": True, "insufficient_data": True, "score": None, "grade": None, "factors": []}
@@ -126,16 +91,10 @@ async def dmarc_sources(
     constant per domain so grouping by it, as this endpoint used to, added
     nothing; source_ip alone is the real grouping key, further rolled up by
     identified sending service)."""
-    await _get_owned_domain(db, domain_id, user.organization_id)
+    await get_owned_domain(db, domain_id, user.organization_id)
     services = await service_breakdown(db, domain_id)
     await db.commit()  # persists any newly-resolved source_ip_identities cache rows
     return services
-
-
-class SenderReviewUpdateRequest(BaseModel):
-    status: SenderReviewStatus | None = None
-    owner: str | None = None
-    notes: str | None = None
 
 
 def _sender_review_out(review: SenderReview) -> dict:
@@ -163,7 +122,7 @@ async def sender_inventory(
 
     `days` windows to senders with traffic in the last N days, so retired
     senders/IPs (a decommissioned host) drop out of the view; omitted = all-time."""
-    await _get_owned_domain(db, domain_id, user.organization_id)
+    await get_owned_domain(db, domain_id, user.organization_id)
     since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
     services = await service_breakdown(db, domain_id, since=since)
     if not services:
@@ -212,7 +171,7 @@ async def update_sender_review(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_org_admin),
 ) -> dict:
-    await _get_owned_domain(db, domain_id, user.organization_id)
+    await get_owned_domain(db, domain_id, user.organization_id)
 
     result = await db.execute(
         select(SenderReview).where(SenderReview.domain_id == domain_id, SenderReview.service_label == service_label)
@@ -248,7 +207,7 @@ async def dmarc_trend(
     user: User = Depends(get_current_user),
 ) -> list[dict]:
     if domain_id is not None:
-        await _get_owned_domain(db, domain_id, user.organization_id)
+        await get_owned_domain(db, domain_id, user.organization_id)
 
     dmarc_pass = (DmarcAggregateRecord.dkim_result == AuthResult.pass_) | (
         DmarcAggregateRecord.spf_result == AuthResult.pass_
@@ -305,7 +264,7 @@ async def dmarc_posture(
     ready-to-enforce, rather than six tiny endpoints — matches the
     "don't over-fragment" instinct already applied in dmarc_summary."""
     if domain_id is not None:
-        domains = [await _get_owned_domain(db, domain_id, user.organization_id)]
+        domains = [await get_owned_domain(db, domain_id, user.organization_id)]
     else:
         result = await db.execute(select(Domain).where(Domain.organization_id == user.organization_id))
         domains = result.scalars().all()
@@ -437,7 +396,7 @@ async def dmarc_reports_by_day(
     as new reports keep arriving between requests. Filters apply to the
     keyset query itself, not after the fact, since a busy domain can have
     thousands of records."""
-    await _get_owned_domain(db, domain_id, user.organization_id)
+    await get_owned_domain(db, domain_id, user.organization_id)
     since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
 
     query = (
@@ -532,7 +491,7 @@ async def dmarc_reports_summary(
     """Summary bar for the Reports page — same filter vocabulary as
     by-day/grouped, so switching a filter updates the totals and the rows
     together."""
-    await _get_owned_domain(db, domain_id, user.organization_id)
+    await get_owned_domain(db, domain_id, user.organization_id)
     since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
 
     dmarc_pass = (DmarcAggregateRecord.dkim_result == AuthResult.pass_) | (
@@ -644,7 +603,7 @@ async def dmarc_reports_grouped(
 ) -> list[dict]:
     """The Reports page's Source/Reporter/Disposition grouping views — small
     cardinality per domain, so one GROUP BY query with no pagination."""
-    await _get_owned_domain(db, domain_id, user.organization_id)
+    await get_owned_domain(db, domain_id, user.organization_id)
     since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
 
     dmarc_pass = (DmarcAggregateRecord.dkim_result == AuthResult.pass_) | (
@@ -720,7 +679,7 @@ async def dmarc_record_detail(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict:
-    await _get_owned_domain(db, domain_id, user.organization_id)
+    await get_owned_domain(db, domain_id, user.organization_id)
 
     row = (
         await db.execute(
@@ -1148,7 +1107,7 @@ async def dmarc_policy_builder(
     and a recommended next record — built entirely from data this app
     already computes elsewhere (compute_domain_rating, domain_policy_readiness,
     service_breakdown+sender_reviews), not new analysis."""
-    domain = await _get_owned_domain(db, domain_id, user.organization_id)
+    domain = await get_owned_domain(db, domain_id, user.organization_id)
 
     connection = (
         await db.execute(select(MailboxConnection).where(MailboxConnection.organization_id == user.organization_id))
