@@ -408,7 +408,7 @@ in [`.env.example`](.env.example)):
 | `DMARC_APP_DB_PASSWORD` | **Yes** | A second, different strong password |
 | `PLATFORM_ADMIN_BOOTSTRAP_EMAIL` / `PLATFORM_ADMIN_BOOTSTRAP_PASSWORD` | Recommended | Your first admin login (a no-op once an admin exists — change the password after first sign-in) |
 | `FORWARDED_ALLOW_IPS` | Recommended | Your reverse proxy's IP, so real client IPs (not the proxy's) get logged |
-| `APP_VERSION` | Optional | Image tag to run (default `latest`); pin to a release tag like `v0.1.2` if you prefer |
+| `IMAGE_TAG` | Optional | Image tag to run (default `latest`); pin to a release tag like `v0.1.2` if you prefer |
 | `API_HOST_PORT` | Optional | Host port to publish (default `8000`); change if `8000` is taken |
 | `ENTRA_MAIL_CLIENT_ID` / `ENTRA_MAIL_CLIENT_SECRET` | Optional | Report ingestion via Microsoft Graph — leave unset for DNS-checks-only |
 | `ENTRA_SSO_CLIENT_ID` / `ENTRA_SSO_CLIENT_SECRET`, `CLOUDFLARE_*`, `HOSTED_REPORTS_*`, `SECURITY_CONTACT_EMAIL`, `MTA_STS_POLICY_*` | Optional | Feature-gated — leave unset to keep the feature off |
@@ -419,7 +419,7 @@ is already in use on the host (e.g. another instance), set `API_HOST_PORT` to
 a free port. Point your reverse proxy's upstream at this host's `:8000` (or
 your `API_HOST_PORT`), exactly as in the CLI path.
 
-**Updating:** change the `APP_VERSION` variable to the release you want and
+**Updating:** change the `IMAGE_TAG` variable to the release you want and
 redeploy the stack — Portainer re-pulls the image. (The in-app "Update now"
 button is for the CLI deployment only; it isn't wired into the Portainer
 path, which is why the `updater` service is omitted from this compose file.)

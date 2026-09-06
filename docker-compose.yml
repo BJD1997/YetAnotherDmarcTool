@@ -44,10 +44,13 @@ services:
     # image: lets `docker compose pull` fetch a published release instead
     # of rebuilding from source — `docker compose build` still builds
     # fresh and tags locally as this same name, so local dev is unaffected.
-    # APP_VERSION here picks which published tag to pull; it's unrelated
-    # to the Dockerfile ARG of the same name, which only matters for a
-    # from-source build (see .env.example).
-    image: ghcr.io/bjd1997/yetanotherdmarctool:${APP_VERSION:-latest}
+    # IMAGE_TAG here picks which published tag to pull; it's a pure
+    # compose-time selector, deliberately never forwarded into the
+    # container's own environment (see api's env_file/environment below) —
+    # the running app reports its version from the Dockerfile ARG of the
+    # same name baked in at build/publish time (see .env.example), which
+    # must stay authoritative and can't be shadowed by a stale .env value.
+    image: ghcr.io/bjd1997/yetanotherdmarctool:${IMAGE_TAG:-latest}
     command: sh -c "alembic upgrade head && python -m app.scripts.bootstrap_platform_admin"
     env_file:
       - .env
@@ -63,7 +66,7 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    image: ghcr.io/bjd1997/yetanotherdmarctool:${APP_VERSION:-latest}
+    image: ghcr.io/bjd1997/yetanotherdmarctool:${IMAGE_TAG:-latest}
     restart: unless-stopped
     # --forwarded-allow-ips: without this, request.client.host (used for
     # session/sign-in-event ip_address) is the reverse proxy's own IP, not
@@ -101,7 +104,7 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    image: ghcr.io/bjd1997/yetanotherdmarctool:${APP_VERSION:-latest}
+    image: ghcr.io/bjd1997/yetanotherdmarctool:${IMAGE_TAG:-latest}
     restart: unless-stopped
     command: python -m app.workers.scheduler
     env_file:
@@ -129,7 +132,7 @@ services:
   updater:
     build:
       context: ./updater
-    image: ghcr.io/bjd1997/yetanotherdmarctool-updater:${APP_VERSION:-latest}
+    image: ghcr.io/bjd1997/yetanotherdmarctool-updater:${IMAGE_TAG:-latest}
     restart: unless-stopped
     environment:
       UPDATER_SHARED_SECRET: ${UPDATER_SHARED_SECRET:-}

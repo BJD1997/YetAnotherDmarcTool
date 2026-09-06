@@ -114,7 +114,7 @@ services:
       - internal
 
   migrate:
-    image: ghcr.io/bjd1997/yetanotherdmarctool:${APP_VERSION:-latest}
+    image: ghcr.io/bjd1997/yetanotherdmarctool:${IMAGE_TAG:-latest}
     command: sh -c "alembic upgrade head && python -m app.scripts.bootstrap_platform_admin"
     environment:
       <<: *app-environment
@@ -126,7 +126,7 @@ services:
       - internal
 
   api:
-    image: ghcr.io/bjd1997/yetanotherdmarctool:${APP_VERSION:-latest}
+    image: ghcr.io/bjd1997/yetanotherdmarctool:${IMAGE_TAG:-latest}
     restart: unless-stopped
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips=${FORWARDED_ALLOW_IPS:-127.0.0.1}
     environment:
@@ -143,7 +143,7 @@ services:
       - internal
 
   worker:
-    image: ghcr.io/bjd1997/yetanotherdmarctool:${APP_VERSION:-latest}
+    image: ghcr.io/bjd1997/yetanotherdmarctool:${IMAGE_TAG:-latest}
     restart: unless-stopped
     command: python -m app.workers.scheduler
     environment:

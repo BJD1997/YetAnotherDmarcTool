@@ -15,7 +15,7 @@ class UpdaterUnavailableError(Exception):
 async def trigger_update(version: str) -> None:
     """`version` (e.g. "v0.1.2-rc4") is the specific tag to pull — the
     updater has no other way to know which release the admin console
-    resolved as "latest", since a static APP_VERSION in .env only ever
+    resolved as "latest", since a static IMAGE_TAG in .env only ever
     covers one fixed value (usually unset, i.e. :latest). See
     updater/server.py's _run_update for how this gets applied."""
     if not settings.updater_url or not settings.updater_shared_secret:
