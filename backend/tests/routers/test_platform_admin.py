@@ -268,6 +268,66 @@ async def test_list_organizations_includes_aggregates(api):
         assert org["last_report_at"] is None
 
 
+async def test_list_organizations_aggregates_reflect_real_data(api):
+    """test_list_organizations_includes_aggregates only exercises the
+    all-zero fallback path (fresh orgs, nothing related seeded yet). This
+    covers the actual GROUP BY/.in_(org_ids) batching in org_aggregates,
+    the 7-day job-error cutoff, and the last_report_at.isoformat() branch —
+    real non-zero data in, real non-zero rollup values out."""
+    from datetime import datetime, timezone
+
+    from app.models.dmarc_aggregate import DmarcAggregateReport
+    from app.models.domain import Domain
+    from app.models.enums import JobStatus, JobType
+    from app.models.job_run import JobRun
+
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+    org_id = (await client.post("/api/admin/organizations", json={"name": "Org With Data"})).json()["id"]
+    other_org_id = (await client.post("/api/admin/organizations", json={"name": "Org Without Data"})).json()["id"]
+
+    async with owner_factory() as db:
+        domain = Domain(organization_id=uuid.UUID(org_id), name="example.com")
+        db.add(domain)
+        await db.flush()
+
+        db.add(
+            JobRun(
+                job_type=JobType.mailbox_poll,
+                organization_id=uuid.UUID(org_id),
+                status=JobStatus.failure,
+                started_at=datetime.now(timezone.utc),
+            )
+        )
+        db.add(
+            DmarcAggregateReport(
+                organization_id=uuid.UUID(org_id),
+                domain_id=domain.id,
+                report_id="report-1",
+                org_name="reporter.example",
+                date_range_begin=datetime.now(timezone.utc),
+                date_range_end=datetime.now(timezone.utc),
+                policy_published_domain="example.com",
+                received_at=datetime.now(timezone.utc),
+            )
+        )
+        await db.commit()
+
+    response = await client.get("/api/admin/organizations")
+
+    assert response.status_code == 200
+    body = response.json()
+    org = next(o for o in body if o["id"] == org_id)
+    assert org["domain_count"] == 1
+    assert org["job_error_count_7d"] == 1
+    assert org["last_report_at"] is not None
+
+    other_org = next(o for o in body if o["id"] == other_org_id)
+    assert other_org["domain_count"] == 0
+    assert other_org["job_error_count_7d"] == 0
+    assert other_org["last_report_at"] is None
+
+
 async def test_job_runs_empty(api):
     client, owner_factory = api
     await login_as_platform_admin(client, owner_factory)
