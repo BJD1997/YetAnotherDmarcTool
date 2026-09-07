@@ -575,3 +575,24 @@ async def test_dismiss_detected_domain_removes_it_and_is_idempotent(api):
 
     repeat_dismiss = await client.post("/api/dmarc/detected-domains/lookalike.example/dismiss")
     assert repeat_dismiss.status_code == 204  # idempotent, not a 409/500
+
+
+async def test_dmarc_policy_builder_insufficient_data_recommends_monitor_only(api, monkeypatch):
+    from app.services.dns_checks.dmarc_record import DnsLookupError
+
+    async def _raise_lookup_error(domain_name: str):
+        raise DnsLookupError("no resolver in test env")
+
+    monkeypatch.setattr("app.routers.dmarc_reports.fetch_current_dmarc_record", _raise_lookup_error)
+
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org, verification_status=DomainVerificationStatus.verified)
+
+    response = await client.get(f"/api/domains/{domain.id}/dmarc/policy-builder")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["current_record_lookup_error"] is True
+    assert body["recommendation"]["policy"] == "none"
