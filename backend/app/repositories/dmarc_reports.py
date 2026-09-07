@@ -559,6 +559,44 @@ async def unmatched_forensic_domain_counts(db: AsyncSession, organization_id: UU
     return result.all()
 
 
+async def per_source_ip_volume_breakdown(
+    db: AsyncSession, domain_id: UUID, *, since: datetime | None = None
+) -> Sequence:
+    """Volume/alignment/disposition aggregated per-source-IP for one domain
+    — the SQL half of dmarc_analytics.py's service_breakdown (identifying
+    each IP's sending service and rolling up by service label happens in
+    Python there, not here). `since` windows to reports whose traffic
+    period begins on or after it (joining the parent report's
+    date_range_begin), so a decommissioned host or a retired sender with
+    no recent traffic simply drops out. None = all-time."""
+    dmarc_pass = (DmarcAggregateRecord.dkim_result == AuthResult.pass_) | (
+        DmarcAggregateRecord.spf_result == AuthResult.pass_
+    )
+
+    def _sum_where(condition):
+        return func.sum(case((condition, DmarcAggregateRecord.count), else_=0))
+
+    query = (
+        select(
+            DmarcAggregateRecord.source_ip,
+            func.sum(DmarcAggregateRecord.count),
+            _sum_where(DmarcAggregateRecord.spf_result == AuthResult.pass_),
+            _sum_where(DmarcAggregateRecord.dkim_result == AuthResult.pass_),
+            _sum_where(dmarc_pass),
+            _sum_where(DmarcAggregateRecord.disposition == Disposition.none),
+            _sum_where(DmarcAggregateRecord.disposition == Disposition.quarantine),
+            _sum_where(DmarcAggregateRecord.disposition == Disposition.reject),
+        )
+        .where(DmarcAggregateRecord.domain_id == domain_id)
+        .group_by(DmarcAggregateRecord.source_ip)
+    )
+    if since is not None:
+        query = query.join(
+            DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id
+        ).where(DmarcAggregateReport.date_range_begin >= since)
+    return (await db.execute(query)).all()
+
+
 async def dismiss_detected_domain_name(db: AsyncSession, *, organization_id: UUID, name: str, dismissed_by: UUID) -> None:
     """ON CONFLICT DO NOTHING rather than add()-then-catch: dismissing an
     already-dismissed name (e.g. a retried click) is a no-op, not an
