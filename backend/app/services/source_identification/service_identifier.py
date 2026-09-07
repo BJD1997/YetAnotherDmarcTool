@@ -9,12 +9,10 @@ import dataclasses
 import ipaddress
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.enums import SourceMatchMethod
-from app.models.source_ip_identity import SourceIpIdentity
+from app.repositories.source_identification import get_cached_identities, upsert_resolved_identities
 from app.services.dns_checks.resolver import DnsLookupError, resolve_address, resolve_ptr
 from app.services.source_identification.patterns import match_known_service
 from app.services.source_identification.registrable_domain import registrable_domain
@@ -114,24 +112,7 @@ async def identify_many(
     unique_ips = list(dict.fromkeys(ips))
     results: dict[str, SourceIdentity] = {}
 
-    # source_ip is INET; comparing it against a Python str list needs some
-    # cast, but CAST(inet AS text) (unlike inet's default display format)
-    # includes a "/32" or "/128" netmask suffix and would never match a bare
-    # address string — confirmed directly against this table's real data.
-    # host(inet) returns the bare address as text with no such suffix.
-    cache_rows = (
-        (
-            await db.execute(
-                select(SourceIpIdentity).where(func.host(SourceIpIdentity.source_ip).in_(unique_ips))
-            )
-        )
-        .scalars()
-        .all()
-    )
-    # asyncpg round-trips INET columns as ipaddress.IPv4Address/IPv6Address,
-    # not str — normalize to str so lookups against the plain-string `ips`
-    # argument actually hit (an IPv4Address key would never equal a str key).
-    cache_by_ip = {str(row.source_ip): row for row in cache_rows}
+    cache_by_ip = await get_cached_identities(db, unique_ips)
     fresh_cutoff = datetime.now(timezone.utc) - CACHE_FRESHNESS
 
     misses: list[str] = []
@@ -173,29 +154,17 @@ async def identify_many(
 
     if resolved_now:
         now = datetime.now(timezone.utc)
-        stmt = pg_insert(SourceIpIdentity).values(
-            [
-                {
-                    "source_ip": ip,
-                    "ptr_hostname": identity.ptr_hostname,
-                    "service_label": identity.service_label,
-                    "match_method": identity.match_method.value,
-                    "fcrdns_valid": identity.fcrdns_valid,
-                    "resolved_at": now,
-                }
-                for ip, identity in resolved_now.items()
-            ]
-        )
-        stmt = stmt.on_conflict_do_update(
-            index_elements=[SourceIpIdentity.source_ip],
-            set_={
-                "ptr_hostname": stmt.excluded.ptr_hostname,
-                "service_label": stmt.excluded.service_label,
-                "match_method": stmt.excluded.match_method,
-                "fcrdns_valid": stmt.excluded.fcrdns_valid,
-                "resolved_at": stmt.excluded.resolved_at,
-            },
-        )
-        await db.execute(stmt)
+        rows = [
+            {
+                "source_ip": ip,
+                "ptr_hostname": identity.ptr_hostname,
+                "service_label": identity.service_label,
+                "match_method": identity.match_method.value,
+                "fcrdns_valid": identity.fcrdns_valid,
+                "resolved_at": now,
+            }
+            for ip, identity in resolved_now.items()
+        ]
+        await upsert_resolved_identities(db, rows)
 
     return results
