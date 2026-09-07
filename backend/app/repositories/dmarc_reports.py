@@ -273,6 +273,24 @@ async def list_sender_reviews_for_domain(db: AsyncSession, domain_id: UUID) -> S
     return result.scalars().all()
 
 
+async def list_reviewed_service_labels_for_domain(db: AsyncSession, domain_id: UUID) -> set[str]:
+    """service_labels with an explicit approved/ignored/blocked review row
+    for this domain — a service is "unreviewed" if it's missing here
+    entirely (no sender_reviews row at all) or the row is still pending,
+    both read the same way by callers so this doesn't depend on the
+    lazy-create-on-read timing of the sender-inventory endpoint having
+    already run for this domain."""
+    result = await db.execute(
+        select(SenderReview.service_label).where(
+            SenderReview.domain_id == domain_id,
+            SenderReview.status.in_(
+                [SenderReviewStatus.approved, SenderReviewStatus.ignored, SenderReviewStatus.blocked]
+            ),
+        )
+    )
+    return {row[0] for row in result.all()}
+
+
 async def upsert_missing_sender_reviews(
     db: AsyncSession, organization_id: UUID, domain_id: UUID, service_labels: list[str]
 ) -> None:

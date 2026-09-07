@@ -61,6 +61,33 @@ async def list_dns_check_results_at_latest_run(db: AsyncSession, domain_id: UUID
     return findings_by_type
 
 
+async def latest_dns_check_results_of_type_for_domain(
+    db: AsyncSession, domain_id: UUID, check_type: CheckType
+) -> Sequence[DnsCheckResult]:
+    """Directly surfaces the existing finding for one check_type from the
+    last check run — used by action_queue/rules.py's spf_lookup_limit_risk.
+    Deliberately narrower than list_dns_check_results_at_latest_run (which
+    returns every check_type): that function's other caller
+    (domain_rating.py, and via it app/routers/domains.py) genuinely needs
+    every type at once, but this caller only ever wants one, so a separate
+    narrow query avoids fetching and discarding unrelated check types on
+    every action-queue evaluation (which runs per-domain, potentially in a
+    loop over every domain in an org)."""
+    latest_ts = (
+        select(func.max(DnsCheckResult.checked_at))
+        .where(DnsCheckResult.domain_id == domain_id, DnsCheckResult.check_type == check_type)
+        .scalar_subquery()
+    )
+    result = await db.execute(
+        select(DnsCheckResult).where(
+            DnsCheckResult.domain_id == domain_id,
+            DnsCheckResult.check_type == check_type,
+            DnsCheckResult.checked_at == latest_ts,
+        )
+    )
+    return result.scalars().all()
+
+
 async def list_tls_rpt_reports_for_domain(
     db: AsyncSession,
     domain_id: UUID,

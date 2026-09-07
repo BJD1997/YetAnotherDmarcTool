@@ -10,6 +10,7 @@ from app.models.enums import AuthResult, Disposition, SenderReviewStatus, Source
 from app.models.sender_review import SenderReview
 from app.models.source_ip_identity import SourceIpIdentity
 from app.repositories.dmarc_reports import (
+    list_reviewed_service_labels_for_domain,
     per_source_ip_volume_breakdown,
     policy_p_by_day_since,
     windowed_totals_excluding_blocked,
@@ -221,3 +222,54 @@ async def test_policy_p_by_day_since_returns_distinct_day_policy_pairs_newest_fi
     }
     # Newest-day-first ordering.
     assert list(rows)[0][0].date() == newer_day.date()
+
+
+async def test_list_reviewed_service_labels_for_domain_only_includes_terminal_statuses(api):
+    """approved/ignored/blocked all count as "reviewed"; pending does not,
+    and neither does a service with no SenderReview row at all."""
+    _client, owner_factory = api
+    org, _user = await seed_org_and_user(owner_factory)
+    domain = await _add_domain(owner_factory, org)
+
+    async with owner_factory() as db:
+        db.add(
+            SenderReview(
+                organization_id=org.id, domain_id=domain.id, service_label="Approved ESP",
+                status=SenderReviewStatus.approved,
+            )
+        )
+        db.add(
+            SenderReview(
+                organization_id=org.id, domain_id=domain.id, service_label="Ignored ESP",
+                status=SenderReviewStatus.ignored,
+            )
+        )
+        db.add(
+            SenderReview(
+                organization_id=org.id, domain_id=domain.id, service_label="Blocked ESP",
+                status=SenderReviewStatus.blocked,
+            )
+        )
+        db.add(
+            SenderReview(
+                organization_id=org.id, domain_id=domain.id, service_label="Pending ESP",
+                status=SenderReviewStatus.pending,
+            )
+        )
+        await db.commit()
+
+    async with owner_factory() as db:
+        labels = await list_reviewed_service_labels_for_domain(db, domain.id)
+
+    assert labels == {"Approved ESP", "Ignored ESP", "Blocked ESP"}
+
+
+async def test_list_reviewed_service_labels_for_domain_empty_for_domain_with_no_reviews(api):
+    _client, owner_factory = api
+    org, _user = await seed_org_and_user(owner_factory)
+    domain = await _add_domain(owner_factory, org)
+
+    async with owner_factory() as db:
+        labels = await list_reviewed_service_labels_for_domain(db, domain.id)
+
+    assert labels == set()

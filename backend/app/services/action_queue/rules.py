@@ -17,22 +17,19 @@ import dataclasses
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.dmarc_aggregate import DmarcAggregateReport
-from app.models.dns_check import DnsCheckResult
 from app.models.domain import Domain
 from app.models.enums import (
     CheckType,
     ConsentStatus,
     DomainMailProfile,
     DomainVerificationStatus,
-    SenderReviewStatus,
     SyncStatus,
 )
-from app.models.mailbox_connection import MailboxConnection
-from app.models.sender_review import SenderReview
+from app.repositories.dmarc_reports import last_report_received_at_for_org, list_reviewed_service_labels_for_domain
+from app.repositories.dns_checks import latest_dns_check_results_of_type_for_domain
+from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.services.dns_checks.dmarc_record import check_rua_destination, fetch_current_dmarc_record
 from app.services.dns_checks.resolver import DnsLookupError
 from app.services.rating.domain_rating import _windowed_totals, compute_domain_rating, domain_policy_readiness
@@ -78,15 +75,7 @@ async def reviewed_service_labels(db: AsyncSession, domain_id: uuid.UUID) -> set
     both read the same way by callers so this doesn't depend on the
     lazy-create-on-read timing of the sender-inventory endpoint having
     already run for this domain."""
-    reviewed_result = await db.execute(
-        select(SenderReview.service_label).where(
-            SenderReview.domain_id == domain_id,
-            SenderReview.status.in_(
-                [SenderReviewStatus.approved, SenderReviewStatus.ignored, SenderReviewStatus.blocked]
-            ),
-        )
-    )
-    return {row[0] for row in reviewed_result.all()}
+    return await list_reviewed_service_labels_for_domain(db, domain_id)
 
 
 def unreviewed_high_volume_senders(services: list[dict], reviewed_labels: set[str]) -> list[dict]:
@@ -159,9 +148,7 @@ async def mailbox_stopped_receiving_reports(db: AsyncSession, organization_id: u
     domain_id filter the caller applies elsewhere — a stale mailbox affects
     every domain's data quality at once, which is exactly the "quietly lies"
     concern that made mailbox health a first-class Overview concept."""
-    connection = (
-        await db.execute(select(MailboxConnection).where(MailboxConnection.organization_id == organization_id))
-    ).scalar_one_or_none()
+    connection = await get_org_mailbox_connection(db, organization_id)
     if connection is None or connection.consent_status != ConsentStatus.granted:
         return []
     if connection.last_sync_status == SyncStatus.error:
@@ -173,13 +160,7 @@ async def mailbox_stopped_receiving_reports(db: AsyncSession, organization_id: u
     if connection.last_sync_at < cutoff:
         return []  # sync itself hasn't run recently either — a scheduling/worker problem, not this rule
 
-    latest_report_at = (
-        await db.execute(
-            select(func.max(DmarcAggregateReport.received_at)).where(
-                DmarcAggregateReport.organization_id == organization_id
-            )
-        )
-    ).scalar_one_or_none()
+    latest_report_at = await last_report_received_at_for_org(db, organization_id)
     if latest_report_at is not None and latest_report_at >= cutoff:
         return []
 
@@ -320,24 +301,7 @@ async def spf_lookup_limit_risk(db: AsyncSession, domain: Domain) -> list[Action
     """Directly surfaces the existing SPF near/over-limit finding
     (app/services/dns_checks/spf.py) from the last check run — no new
     checker logic, just reads what's already stored."""
-    latest_ts = (
-        select(func.max(DnsCheckResult.checked_at))
-        .where(DnsCheckResult.domain_id == domain.id, DnsCheckResult.check_type == CheckType.spf)
-        .scalar_subquery()
-    )
-    rows = (
-        (
-            await db.execute(
-                select(DnsCheckResult).where(
-                    DnsCheckResult.domain_id == domain.id,
-                    DnsCheckResult.check_type == CheckType.spf,
-                    DnsCheckResult.checked_at == latest_ts,
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
+    rows = await latest_dns_check_results_of_type_for_domain(db, domain.id, CheckType.spf)
 
     items = []
     for r in rows:
