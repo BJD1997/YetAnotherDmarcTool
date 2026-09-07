@@ -193,6 +193,54 @@ async def dmarc_disposition_breakdown(db: AsyncSession, domain_id: UUID) -> dict
     return {disposition.value: count for disposition, count in rows.all()}
 
 
+RATING_WINDOW_DAYS = 90
+
+
+async def windowed_totals_excluding_blocked(db: AsyncSession, domain_id: UUID, since: datetime) -> tuple[int, int]:
+    """(total_count, dmarc_pass_count) over the window starting at `since`,
+    excluding traffic from senders explicitly marked blocked (SenderReview)
+    — confirmed spoofing/abuse a domain owner has already dealt with
+    shouldn't keep dragging the rating down forever. Pending/unreviewed
+    traffic still counts normally (only an explicit "blocked" excludes).
+
+    Windowed on DmarcAggregateReport.date_range_begin (the report's mail
+    period), not DmarcAggregateRecord.created_at (ingestion time) — same
+    join/filter idiom dmarc_trend/_apply_report_filters/policy_stability_days
+    already use.
+
+    The blocked-sender exclusion is a pure SQL join — source_ip (INET) on
+    both DmarcAggregateRecord and the global SourceIpIdentity cache, then
+    SourceIpIdentity.service_label against SenderReview.service_label — no
+    identify_many() round-trip and no commit needed. A source_ip with no
+    cached identity yet simply can't match a blocked service_label, so it's
+    conservatively still counted (correct default: only proven-blocked
+    traffic drops out)."""
+    dmarc_pass = (DmarcAggregateRecord.dkim_result == AuthResult.pass_) | (
+        DmarcAggregateRecord.spf_result == AuthResult.pass_
+    )
+    blocked_source_ips = (
+        select(SourceIpIdentity.source_ip)
+        .join(SenderReview, SenderReview.service_label == SourceIpIdentity.service_label)
+        .where(SenderReview.domain_id == domain_id, SenderReview.status == SenderReviewStatus.blocked)
+    )
+    total_count, pass_count = (
+        await db.execute(
+            select(
+                func.coalesce(func.sum(DmarcAggregateRecord.count), 0),
+                func.coalesce(func.sum(case((dmarc_pass, DmarcAggregateRecord.count), else_=0)), 0),
+            )
+            .select_from(DmarcAggregateRecord)
+            .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
+            .where(
+                DmarcAggregateRecord.domain_id == domain_id,
+                DmarcAggregateReport.date_range_begin >= since,
+                DmarcAggregateRecord.source_ip.not_in(blocked_source_ips),
+            )
+        )
+    ).one()
+    return int(total_count), int(pass_count)
+
+
 async def latest_published_policy_for_domain(db: AsyncSession, domain_id: UUID) -> str | None:
     return (
         await db.execute(
@@ -202,6 +250,22 @@ async def latest_published_policy_for_domain(db: AsyncSession, domain_id: UUID) 
             .limit(1)
         )
     ).scalar_one_or_none()
+
+
+async def policy_p_by_day_since(db: AsyncSession, domain_id: UUID, since: datetime) -> Sequence:
+    """(day, policy_p) for every distinct day+policy combination reported
+    in the window — the raw material for policy_stability_days' streak
+    count, which lives in domain_rating.py (that's business logic, not a
+    query). Ordered newest-day-first."""
+    day_col = func.date_trunc("day", DmarcAggregateReport.date_range_begin)
+    return (
+        await db.execute(
+            select(day_col, DmarcAggregateReport.policy_p)
+            .where(DmarcAggregateReport.domain_id == domain_id, DmarcAggregateReport.date_range_begin >= since)
+            .distinct()
+            .order_by(day_col.desc())
+        )
+    ).all()
 
 
 async def list_sender_reviews_for_domain(db: AsyncSession, domain_id: UUID) -> Sequence[SenderReview]:

@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.dns_check import DnsCheckResult
+from app.models.enums import CheckType
 from app.models.tls_rpt import TlsRptReport
 
 
@@ -36,6 +37,28 @@ async def list_latest_check_results(db: AsyncSession, domain_id: UUID) -> Sequen
         .order_by(DnsCheckResult.check_type, DnsCheckResult.subject.nulls_first())
     )
     return result.scalars().all()
+
+
+async def list_dns_check_results_at_latest_run(db: AsyncSession, domain_id: UUID) -> dict[CheckType, list[DnsCheckResult]]:
+    """Every DnsCheckResult row from the domain's most recent recheck,
+    grouped by check_type. Used by domain_rating.py's compute_domain_rating
+    (via latest_findings_by_type) and app/routers/domains.py directly."""
+    latest_ts = (
+        select(func.max(DnsCheckResult.checked_at)).where(DnsCheckResult.domain_id == domain_id).scalar_subquery()
+    )
+    check_rows = (
+        (
+            await db.execute(
+                select(DnsCheckResult).where(DnsCheckResult.domain_id == domain_id, DnsCheckResult.checked_at == latest_ts)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    findings_by_type: dict[CheckType, list[DnsCheckResult]] = {}
+    for row in check_rows:
+        findings_by_type.setdefault(row.check_type, []).append(row)
+    return findings_by_type
 
 
 async def list_tls_rpt_reports_for_domain(
