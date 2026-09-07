@@ -2,7 +2,6 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
@@ -10,9 +9,8 @@ from app.middleware.tenant_context import get_current_user, require_org_admin
 from app.models.dns_check import DnsCheckResult
 from app.models.enums import DomainVerificationStatus
 from app.models.organization import Organization
-from app.models.tls_rpt import TlsRptReport
 from app.models.user import User
-from app.repositories.dns_checks import list_latest_check_results
+from app.repositories.dns_checks import list_latest_check_results, list_tls_rpt_reports_for_domain
 from app.repositories.domains import get_owned_domain
 from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.services.dns_checks.base import is_null_mx
@@ -88,17 +86,10 @@ async def _fetch_tls_rpt_rows(
     failure_details, not just the matching entries — the point of drilling
     into one report is seeing everything it said, not a pre-filtered slice.
     Returns newest-first."""
-    query = select(TlsRptReport).where(TlsRptReport.domain_id == domain_id)
-    if days is not None:
-        since = datetime.now(timezone.utc) - timedelta(days=days)
-        query = query.where(TlsRptReport.date_range_begin >= since)
-    if org_name is not None:
-        query = query.where(TlsRptReport.org_name.ilike(f"%{org_name}%"))
-    if failures_only:
-        query = query.where(TlsRptReport.summary_failure_count > 0)
-    query = query.order_by(TlsRptReport.date_range_begin.desc())
-
-    reports = (await db.execute(query)).scalars().all()
+    since = datetime.now(timezone.utc) - timedelta(days=days) if days is not None else None
+    reports = await list_tls_rpt_reports_for_domain(
+        db, domain_id, since=since, org_name=org_name, failures_only=failures_only
+    )
 
     rows = []
     for r in reports:
