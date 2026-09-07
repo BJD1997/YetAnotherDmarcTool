@@ -8,7 +8,7 @@ Lets a domain be marked receive_only or parked (no mail sent or received)
 so the DMARC policy recommendation can skip straight to p=reject/np=reject
 instead of waiting on report volume/pass-rate that will never arrive for a
 domain with no legitimate outbound mail — see
-_build_base_recommendation in app/routers/dmarc_reports.py.
+_build_base_recommendation in app/services/rating/policy_recommendation.py.
 """
 
 from alembic import op
