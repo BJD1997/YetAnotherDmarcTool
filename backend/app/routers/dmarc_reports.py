@@ -3,7 +3,6 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
@@ -276,6 +275,10 @@ async def dmarc_reports_by_day(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict:
+    """Row granularity is one DmarcAggregateRecord (one sending host within
+    one report), not one whole report — a report with several source IPs
+    shows as several rows on its day. Keyset-paginated on
+    (date_range_begin, record id)."""
     await get_owned_domain(db, domain_id, user.organization_id)
     since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
 

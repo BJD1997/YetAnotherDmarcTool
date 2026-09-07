@@ -399,7 +399,8 @@ async def test_dmarc_reports_by_day_keyset_pagination_with_before_id(api):
     record1_day2 = await _add_aggregate_record(owner_factory, org, domain, report2, source_ip="203.0.113.3", count=3)
     record2_day2 = await _add_aggregate_record(owner_factory, org, domain, report2, source_ip="203.0.113.4", count=4)
 
-    # Fetch first page with limit=2 (should get 2 records from day2)
+    # Fetch first page with limit=2 (should get 2 records from day2, the more
+    # recent day, since results are ordered date_range_begin desc)
     response1 = await client.get(f"/api/domains/{domain.id}/dmarc/reports/by-day?limit=2")
     assert response1.status_code == 200
     body1 = response1.json()
@@ -407,6 +408,7 @@ async def test_dmarc_reports_by_day_keyset_pagination_with_before_id(api):
     page1_records = body1["days"][0]["rows"]
     assert len(page1_records) == 2
     first_page_ids = {r["record_id"] for r in page1_records}
+    assert first_page_ids == {str(record1_day2.id), str(record2_day2.id)}
 
     # Fetch second page using last record's ID as before_id cursor
     last_record_id = page1_records[-1]["record_id"]
@@ -417,8 +419,12 @@ async def test_dmarc_reports_by_day_keyset_pagination_with_before_id(api):
     for day in body2["days"]:
         page2_records.extend(day["rows"])
 
-    # Verify no record from page1 appears on page2 (keyset cursor excludes them)
+    # Page 2 should be exactly the two day1 records (not empty, not overlapping
+    # page1's day2 records) — the keyset cursor excludes page1 without
+    # skipping or duplicating the remaining rows.
     page2_ids = {r["record_id"] for r in page2_records}
+    assert len(page2_records) == 2
+    assert page2_ids == {str(record1_day1.id), str(record2_day1.id)}
     assert len(first_page_ids & page2_ids) == 0, "Page 2 should not contain records from Page 1"
 
 
@@ -558,6 +564,26 @@ async def test_detected_domains_flags_subdomain_of_registered(api):
     entry = next(item for item in response.json() if item["name"] == "mail.example.com")
     assert entry["relationship"] == "subdomain_of_registered"
     assert entry["suggested_parent_id"] == str(parent.id)
+
+
+async def test_detected_domains_flags_subdomain_of_detected(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    await login_as(client, owner_factory, user)
+    report = await _add_aggregate_report(owner_factory, org, None, org_name="reporter.com")
+    await _add_aggregate_record(
+        owner_factory, org, None, report, header_from="detected-parent.example", count=5, source_ip="203.0.113.30"
+    )
+    await _add_aggregate_record(
+        owner_factory, org, None, report, header_from="sub.detected-parent.example", count=2, source_ip="203.0.113.31"
+    )
+
+    response = await client.get("/api/dmarc/detected-domains")
+
+    assert response.status_code == 200
+    entry = next(item for item in response.json() if item["name"] == "sub.detected-parent.example")
+    assert entry["relationship"] == "subdomain_of_detected"
+    assert entry["suggested_parent_name"] == "detected-parent.example"
 
 
 async def test_dismiss_detected_domain_removes_it_and_is_idempotent(api):
