@@ -5,6 +5,7 @@ import { api, ApiError } from "../../api/client";
 import type { Organization, SpfAllQualifierMode } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import MailboxConnectionSection from "../../components/settings/MailboxConnectionSection";
+import { queryKeys } from "../../hooks/queryKeys";
 
 const SPF_MODES: { key: SpfAllQualifierMode; label: string; description: string }[] = [
   {
@@ -68,7 +69,7 @@ function SpfModeSection({ org }: { org: Organization }) {
       api.patch<Organization>("/organizations/current", { name: org.name, spf_all_qualifier_mode: mode }),
     onSuccess: () => {
       setError(null);
-      queryClient.invalidateQueries({ queryKey: ["organization", "current"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.organization.current });
     },
     onError: (err) => setError(err instanceof ApiError ? err.message : "failed to save"),
   });
@@ -104,7 +105,7 @@ function HostedMailboxSection({ org }: { org: Organization }) {
     mutationFn: (optIn: boolean) => api.patch<Organization>("/organizations/current", { name: org.name, hosted_mailbox_opt_in: optIn }),
     onSuccess: () => {
       setError(null);
-      queryClient.invalidateQueries({ queryKey: ["organization", "current"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.organization.current });
     },
     onError: (err) => setError(err instanceof ApiError ? err.message : "failed to save"),
   });

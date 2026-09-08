@@ -9,6 +9,7 @@ import { MailProfileSelect, Stat } from "../../components/domain/shared";
 import DomainRatingCard from "../../components/domain/DomainRatingCard";
 import { IssueRow } from "../../components/shared/IssueRow";
 import { useAuth } from "../../auth/AuthContext";
+import { queryKeys } from "../../hooks/queryKeys";
 
 const SEVERITY_ICON: Record<ActionItem["severity"], typeof AlertTriangle> = {
   critical: AlertOctagon,
@@ -27,10 +28,10 @@ export default function OverviewTab() {
   const setMailProfile = useMutation({
     mutationFn: (mail_profile: DomainMailProfile) => api.patch<Domain>(`/domains/${domain.id}`, { mail_profile }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["domains", domain.id] });
-      queryClient.invalidateQueries({ queryKey: ["domains"] });
-      queryClient.invalidateQueries({ queryKey: ["domains-ranked"] });
-      queryClient.invalidateQueries({ queryKey: ["action-queue", domain.id] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.domains.detail(domain.id) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.domains.all });
+      queryClient.invalidateQueries({ queryKey: queryKeys.domains.ranked });
+      queryClient.invalidateQueries({ queryKey: queryKeys.actionQueue(domain.id) });
     },
   });
 

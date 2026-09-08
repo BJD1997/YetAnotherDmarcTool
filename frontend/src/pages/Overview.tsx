@@ -1,5 +1,4 @@
 import { Link, Navigate, useSearchParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, Download, KeyRound, ShieldCheck, Users } from "lucide-react";
 import { api } from "../api/client";
 import type { Domain } from "../api/types";
@@ -17,6 +16,7 @@ import { useDomains } from "../hooks/useDomains";
 import { useMailboxConnection } from "../hooks/useMailboxConnection";
 import { useOnboardingStatus } from "../hooks/useOnboarding";
 import { useCurrentOrganization } from "../hooks/useOrganization";
+import { useAdminUpdates } from "../hooks/useAdmin";
 
 export default function Overview() {
   const [params, setParams] = useSearchParams();
@@ -31,9 +31,7 @@ export default function Overview() {
   // Same population that can reach /admin at all — a plain org user would
   // just get a 401 from this endpoint.
   const canSeeUpdates = !!(org?.is_operator && user?.role === "org_admin");
-  const { data: updateStatus } = useQuery({
-    queryKey: ["admin-updates"],
-    queryFn: () => api.get<{ update_available: boolean; latest_version: string | null }>("/admin/updates"),
+  const { data: updateStatus } = useAdminUpdates({
     enabled: canSeeUpdates,
     staleTime: 5 * 60 * 1000,
   });

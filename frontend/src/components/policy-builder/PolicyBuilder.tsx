@@ -3,7 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { X, Copy, RefreshCw, Check, Plus } from "lucide-react";
 import { api, ApiError } from "../../api/client";
 import type { DmarcPolicy, PolicyBuilderData } from "../../api/policyBuilder";
-import type { Organization } from "../../api/types";
+import { useCurrentOrganization } from "../../hooks/useOrganization";
 
 const RUA_STATUS_TEXT: Record<string, { text: string; role: "good" | "warning" | "critical" | "neutral" }> = {
   correct: { text: "Reports are reaching your connected mailbox", role: "good" },
@@ -43,10 +43,7 @@ export default function PolicyBuilder({ domainId, domainName, onClose }: { domai
     queryKey: ["policy-builder", domainId],
     queryFn: () => api.get<PolicyBuilderData>(`/domains/${domainId}/dmarc/policy-builder`),
   });
-  const { data: org } = useQuery({
-    queryKey: ["organization", "current"],
-    queryFn: () => api.get<Organization>("/organizations/current"),
-  });
+  const { data: org } = useCurrentOrganization();
   const hostedMailboxAvailable = !org?.entra_tenant_id || org?.hosted_mailbox_opt_in;
 
   const [policy, setPolicy] = useState<DmarcPolicy>("none");

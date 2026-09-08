@@ -1,38 +1,11 @@
 import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Plus, Trash2, UserPlus } from "lucide-react";
 import { api, ApiError } from "../api/client";
 import { useAdminAuth } from "../auth/AdminAuthContext";
 import { ReportFreshnessValue } from "../components/overview/widgets";
-
-interface MailboxConnectionInfo {
-  id: string;
-  mailbox_address: string;
-  consent_status: "pending" | "granted" | "revoked";
-  consent_granted_at: string | null;
-  last_sync_at: string | null;
-  last_sync_status: "success" | "error" | null;
-  last_sync_error: string | null;
-}
-
-interface EntraConsentUrls {
-  mail_access_consent_url: string;
-  sso_consent_url: string;
-}
-
-interface AdminOrganization {
-  id: string;
-  name: string;
-  entra_tenant_id: string | null;
-  status: "active" | "suspended";
-  is_operator: boolean;
-  created_at: string;
-  mailbox_connection: MailboxConnectionInfo | null;
-  entra_consent_urls: EntraConsentUrls | null;
-  domain_count: number;
-  job_error_count_7d: number;
-  last_report_at: string | null;
-}
+import { queryKeys } from "../hooks/queryKeys";
+import { useAdminOrganizations, type AdminOrganization } from "../hooks/useAdmin";
 
 const STATUS_ROLE: Record<AdminOrganization["status"], "good" | "serious"> = {
   active: "good",
@@ -42,10 +15,7 @@ const STATUS_ROLE: Record<AdminOrganization["status"], "good" | "serious"> = {
 export default function AdminOrganizations() {
   const { admin } = useAdminAuth();
   const queryClient = useQueryClient();
-  const { data: orgs, isLoading } = useQuery({
-    queryKey: ["admin-organizations"],
-    queryFn: () => api.get<AdminOrganization[]>("/admin/organizations"),
-  });
+  const { data: orgs, isLoading } = useAdminOrganizations();
 
   const [name, setName] = useState("");
   const [tenantId, setTenantId] = useState("");
@@ -58,7 +28,7 @@ export default function AdminOrganizations() {
       setName("");
       setTenantId("");
       setError(null);
-      queryClient.invalidateQueries({ queryKey: ["admin-organizations"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.admin.organizations });
     },
     onError: (err) => setError(err instanceof ApiError ? err.message : "failed to create organization"),
   });
@@ -119,13 +89,13 @@ function OrgCard({ org }: { org: AdminOrganization }) {
   const updateOrg = useMutation({
     mutationFn: (body: Partial<Pick<AdminOrganization, "entra_tenant_id" | "status">>) =>
       api.patch<AdminOrganization>(`/admin/organizations/${org.id}`, body),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-organizations"] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.admin.organizations }),
   });
 
   const setMailboxConnection = useMutation({
     mutationFn: (body: { mailbox_address: string; consent_status?: string }) =>
       api.post(`/admin/organizations/${org.id}/mailbox-connection`, body),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-organizations"] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.admin.organizations }),
   });
 
   const connection = org.mailbox_connection;
@@ -327,7 +297,7 @@ function DeleteOrgSection({ org }: { org: AdminOrganization }) {
 
   const deleteOrg = useMutation({
     mutationFn: () => api.delete(`/admin/organizations/${org.id}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-organizations"] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.admin.organizations }),
   });
 
   if (org.is_operator) {

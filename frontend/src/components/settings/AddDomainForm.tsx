@@ -1,18 +1,17 @@
 import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { api, ApiError } from "../../api/client";
 import type { Domain, DomainMailProfile } from "../../api/types";
 import { MailProfileSelect } from "../domain/shared";
+import { queryKeys } from "../../hooks/queryKeys";
+import { useDomains } from "../../hooks/useDomains";
 
 // Shared between Settings.tsx and the onboarding wizard — one implementation
 // of the add-domain mutation/UI, not two.
 export default function AddDomainForm({ onAdded }: { onAdded?: (domain: Domain) => void }) {
   const queryClient = useQueryClient();
-  const { data: domains } = useQuery({
-    queryKey: ["domains"],
-    queryFn: () => api.get<Domain[]>("/domains"),
-  });
+  const { data: domains } = useDomains();
 
   const [name, setName] = useState("");
   const [parentId, setParentId] = useState<string>("");
@@ -52,8 +51,8 @@ export default function AddDomainForm({ onAdded }: { onAdded?: (domain: Domain) 
         notices.push(`Re-attributed ${created.reattributed_records} record(s) from a parent domain to ${created.name}.`);
       }
       setFormNotice(notices.length > 0 ? notices.join(" ") : null);
-      queryClient.invalidateQueries({ queryKey: ["domains"] });
-      queryClient.invalidateQueries({ queryKey: ["onboarding-status"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.domains.all });
+      queryClient.invalidateQueries({ queryKey: queryKeys.onboarding.status });
       onAdded?.(created);
     },
     onError: (err) => {

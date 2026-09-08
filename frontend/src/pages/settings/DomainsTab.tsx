@@ -4,6 +4,7 @@ import { X } from "lucide-react";
 import { api, ApiError } from "../../api/client";
 import type { DetectedDomain, Domain } from "../../api/types";
 import AddDomainForm from "../../components/settings/AddDomainForm";
+import { queryKeys } from "../../hooks/queryKeys";
 
 export default function DomainsTab() {
   return (
@@ -32,8 +33,8 @@ function DetectedDomains() {
       }),
     onSuccess: () => {
       setError(null);
-      queryClient.invalidateQueries({ queryKey: ["domains"] });
-      queryClient.invalidateQueries({ queryKey: ["detected-domains"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.domains.all });
+      queryClient.invalidateQueries({ queryKey: queryKeys.detectedDomains });
     },
     onError: (err) => setError(err instanceof ApiError ? err.message : "failed to add domain"),
   });
@@ -42,7 +43,7 @@ function DetectedDomains() {
     mutationFn: (item: DetectedDomain) => api.post<void>(`/dmarc/detected-domains/${encodeURIComponent(item.name)}/dismiss`),
     onSuccess: () => {
       setError(null);
-      queryClient.invalidateQueries({ queryKey: ["detected-domains"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.detectedDomains });
     },
     onError: (err) => setError(err instanceof ApiError ? err.message : "failed to dismiss"),
   });

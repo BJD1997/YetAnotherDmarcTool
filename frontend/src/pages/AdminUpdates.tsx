@@ -1,19 +1,8 @@
 import { useEffect, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "../api/client";
-
-interface UpdateStatus {
-  running_version: string;
-  latest_version: string | null;
-  latest_release_url: string | null;
-  latest_release_notes: string | null;
-  latest_published_at: string | null;
-  checked_at: string | null;
-  check_error: string | null;
-  include_prereleases: boolean;
-  update_available: boolean;
-  is_dev_build: boolean;
-}
+import { queryKeys } from "../hooks/queryKeys";
+import { useAdminUpdates, type UpdateStatus } from "../hooks/useAdmin";
 
 type UpdatePhase = "idle" | "checking" | "updating" | "success" | "error";
 
@@ -23,10 +12,7 @@ export default function AdminUpdates() {
   const [phase, setPhase] = useState<UpdatePhase>("idle");
   const [error, setError] = useState<string | null>(null);
 
-  const { data: status, isLoading } = useQuery({
-    queryKey: ["admin-updates"],
-    queryFn: () => api.get<UpdateStatus>("/admin/updates"),
-  });
+  const { data: status, isLoading } = useAdminUpdates();
 
   const setPrereleases = useMutation({
     mutationFn: (include: boolean) => api.patch<UpdateStatus>("/admin/updates", { include_prereleases: include }),
@@ -35,7 +21,7 @@ export default function AdminUpdates() {
       // the next scheduled check (up to 6h away) — re-check immediately so
       // the page reflects the new channel right away.
       await api.post("/admin/updates/check-now");
-      queryClient.invalidateQueries({ queryKey: ["admin-updates"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.admin.updates });
     },
   });
 
@@ -44,7 +30,7 @@ export default function AdminUpdates() {
     setError(null);
     try {
       await api.post("/admin/updates/check-now");
-      await queryClient.invalidateQueries({ queryKey: ["admin-updates"] });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.admin.updates });
       setPhase("idle");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "check failed");

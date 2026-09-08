@@ -3,7 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { X, Copy, RefreshCw, Check, Plus } from "lucide-react";
 import { api, ApiError } from "../../api/client";
 import type { TlsRptBuilderData } from "../../api/dnsChecks";
-import type { Organization } from "../../api/types";
+import { useCurrentOrganization } from "../../hooks/useOrganization";
 
 const RUA_STATUS_TEXT: Record<string, { text: string; role: "good" | "warning" | "critical" | "neutral" }> = {
   correct: { text: "Reports are reaching your configured mailbox", role: "good" },
@@ -32,10 +32,7 @@ export default function TlsRptPolicyBuilder({ domainId, domainName, onClose }: {
     queryKey: ["tls-rpt-builder", domainId],
     queryFn: () => api.get<TlsRptBuilderData>(`/domains/${domainId}/dns/tls-rpt-builder`),
   });
-  const { data: org } = useQuery({
-    queryKey: ["organization", "current"],
-    queryFn: () => api.get<Organization>("/organizations/current"),
-  });
+  const { data: org } = useCurrentOrganization();
   const hostedMailboxAvailable = !org?.entra_tenant_id || org?.hosted_mailbox_opt_in;
 
   const [copied, setCopied] = useState(false);

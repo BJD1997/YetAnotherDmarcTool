@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { api } from "../api/client";
 import { ReportFreshnessValue, RiskTile } from "../components/overview/widgets";
+import { useAdminOrganizations } from "../hooks/useAdmin";
 
 interface JobRun {
   id: string;
@@ -14,11 +15,6 @@ interface JobRun {
   finished_at: string | null;
   error_message: string | null;
   stats: Record<string, unknown> | null;
-}
-
-interface AdminOrganization {
-  id: string;
-  name: string;
 }
 
 interface JobRunsSummary {
@@ -44,10 +40,7 @@ export default function AdminJobRuns() {
   const [statusFilter, setStatusFilter] = useState("");
   const [sinceFilter, setSinceFilter] = useState("");
 
-  const { data: orgs } = useQuery({
-    queryKey: ["admin-organizations"],
-    queryFn: () => api.get<AdminOrganization[]>("/admin/organizations"),
-  });
+  const { data: orgs } = useAdminOrganizations();
   const orgNameById = new Map((orgs ?? []).map((o) => [o.id, o.name]));
 
   const { data: summary } = useQuery({

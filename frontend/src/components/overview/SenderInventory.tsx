@@ -6,6 +6,7 @@ import { api } from "../../api/client";
 import type { Domain } from "../../api/types";
 import type { SenderInventoryRow, SenderReviewStatus, SenderReviewUpdate, SenderSourceIp } from "../../api/overview";
 import { useAuth } from "../../auth/AuthContext";
+import { queryKeys } from "../../hooks/queryKeys";
 import { ServiceBadge, riskScore, passRateStyle } from "../domain/shared";
 
 interface MergedRow extends SenderInventoryRow {
@@ -103,7 +104,7 @@ export default function SenderInventory({ domainId, domains }: { domainId: strin
       service_label: string;
       body: Partial<Pick<SenderReviewUpdate, "status" | "owner">>;
     }) => api.patch<SenderReviewUpdate>(`/domains/${domain_id}/dmarc/sender-inventory/${encodeURIComponent(service_label)}`, body),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["sender-inventory"] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.senderInventory }),
   });
 
   const allRows = data ?? [];

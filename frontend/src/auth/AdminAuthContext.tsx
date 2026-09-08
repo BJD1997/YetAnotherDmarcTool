@@ -2,6 +2,7 @@ import { createContext, useContext, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "../api/client";
 import type { AdminMe } from "../api/types";
+import { queryKeys } from "../hooks/queryKeys";
 
 interface AdminAuthContextValue {
   admin: AdminMe | null;
@@ -14,7 +15,7 @@ const AdminAuthContext = createContext<AdminAuthContextValue | undefined>(undefi
 export function AdminAuthProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const { data, isLoading } = useQuery({
-    queryKey: ["admin-me"],
+    queryKey: queryKeys.admin.currentUser,
     queryFn: async () => {
       try {
         return await api.get<AdminMe>("/admin/me");
@@ -33,7 +34,7 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
         isLoading,
         // See AuthContext's refetch for why callers that navigate right
         // after this must await it.
-        refetch: () => queryClient.invalidateQueries({ queryKey: ["admin-me"] }),
+        refetch: () => queryClient.invalidateQueries({ queryKey: queryKeys.admin.currentUser }),
       }}
     >
       {children}

@@ -23,6 +23,7 @@ import { useAuth } from "../auth/AuthContext";
 import { ReportFreshnessValue } from "../components/overview/widgets";
 import { MAIL_PROFILE_LABELS, VerificationBadge } from "../components/domain/shared";
 import { useDomains } from "../hooks/useDomains";
+import { queryKeys } from "../hooks/queryKeys";
 
 export default function Domains() {
   const { user } = useAuth();
@@ -156,7 +157,7 @@ function DomainRow({
   const verifyDomain = useMutation({
     mutationFn: () => api.post<VerifyDomainResponse>(`/domains/${domain.id}/verify`),
     onSuccess: (res) => {
-      queryClient.invalidateQueries({ queryKey: ["domains"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.domains.all });
       if (!res.verified) setShowInstructions(true);
     },
   });
@@ -165,7 +166,7 @@ function DomainRow({
     mutationFn: () => api.delete(`/domains/${domain.id}`),
     onSuccess: () => {
       setActionError(null);
-      queryClient.invalidateQueries({ queryKey: ["domains"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.domains.all });
     },
     onError: (err) => setActionError(err instanceof ApiError ? err.message : "failed to remove domain"),
   });
@@ -175,7 +176,7 @@ function DomainRow({
     onSuccess: () => {
       setActionError(null);
       setMenuOpen(false);
-      queryClient.invalidateQueries({ queryKey: ["domains"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.domains.all });
     },
     onError: (err) => setActionError(err instanceof ApiError ? err.message : "failed to update domain"),
   });

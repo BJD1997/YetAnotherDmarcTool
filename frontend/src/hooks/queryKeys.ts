@@ -3,7 +3,7 @@
 export const queryKeys = {
   domains: {
     all: ["domains"] as const,
-    ranked: (days: number) => ["domains", "ranked", days] as const,
+    ranked: ["domains-ranked"] as const,
     detail: (domainId: string) => ["domains", domainId] as const,
   },
   organization: {
@@ -19,7 +19,16 @@ export const queryKeys = {
     all: ["users"] as const,
   },
   admin: {
+    currentUser: ["admin-me"] as const,
     organizations: ["admin-organizations"] as const,
     updates: ["admin-updates"] as const,
   },
+  currentUser: ["me"] as const,
+  health: ["health"] as const,
+  actionQueue: (domainId: string | null) => ["action-queue", domainId] as const,
+  detectedDomains: ["detected-domains"] as const,
+  dnsChecks: (domainId: string) => ["dns-checks", domainId] as const,
+  dkimSelectors: (domainId: string) => ["dkim-selectors", domainId] as const,
+  detectedDkimSelectors: (domainId: string) => ["dkim-selectors-detected", domainId] as const,
+  senderInventory: ["sender-inventory"] as const,
 } as const;

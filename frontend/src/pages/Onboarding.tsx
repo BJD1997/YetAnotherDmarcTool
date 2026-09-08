@@ -3,14 +3,18 @@ import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, ArrowRight, RefreshCw, CheckCircle2, KeyRound, Users, ShieldCheck } from "lucide-react";
 import { api, ApiError } from "../api/client";
-import type { Domain, Organization, VerifyDomainResponse } from "../api/types";
+import type { Domain, VerifyDomainResponse } from "../api/types";
 import type { OnboardingStatus } from "../api/onboarding";
 import type { CheckResult } from "../api/dnsChecks";
-import type { MailboxConnectionStatus } from "../api/dmarc";
 import MailboxConnectionSection from "../components/settings/MailboxConnectionSection";
 import AddDomainForm from "../components/settings/AddDomainForm";
 import PolicyBuilder from "../components/policy-builder/PolicyBuilder";
 import { MailboxHealthWidget } from "../components/overview/widgets";
+import { queryKeys } from "../hooks/queryKeys";
+import { useDomains } from "../hooks/useDomains";
+import { useMailboxConnection } from "../hooks/useMailboxConnection";
+import { useOnboardingStatus } from "../hooks/useOnboarding";
+import { useCurrentOrganization } from "../hooks/useOrganization";
 
 const STEP_LABELS = ["Welcome", "Mailbox", "Domain", "Verify", "DNS baseline", "Reporting", "Waiting room"];
 
@@ -33,17 +37,9 @@ function deriveStep(status: OnboardingStatus, hasEntraTenant: boolean): number {
 }
 
 export default function Onboarding() {
-  const { data: status } = useQuery({
-    queryKey: ["onboarding-status"],
-    queryFn: () => api.get<OnboardingStatus>("/onboarding/status"),
-  });
-  const { data: org } = useQuery({
-    queryKey: ["organization", "current"],
-    queryFn: () => api.get<Organization>("/organizations/current"),
-  });
-  const { data: domains } = useQuery({
-    queryKey: ["domains"],
-    queryFn: () => api.get<Domain[]>("/domains"),
+  const { data: status } = useOnboardingStatus();
+  const { data: org } = useCurrentOrganization();
+  const { data: domains } = useDomains({
     // Live-updates VerifyStep/BaselineStep while DNS propagates, so a
     // background verification (see run_domain_verification_sweep) shows up
     // here without the user needing to do anything.
@@ -147,15 +143,8 @@ function WelcomeStep({ status, onNext }: { status: OnboardingStatus; onNext: () 
 function MailboxStep({ onBack, onNext }: { onBack: () => void; onNext: () => void }) {
   // Same query key/options MailboxConnectionSection uses below, so
   // react-query dedupes into one shared fetch/poll rather than two.
-  const { data: connection } = useQuery({
-    queryKey: ["mailbox-connection"],
-    queryFn: () => api.get<MailboxConnectionStatus>("/mailbox-connection"),
-    retry: false,
-  });
-  const { data: org } = useQuery({
-    queryKey: ["organization", "current"],
-    queryFn: () => api.get<Organization>("/organizations/current"),
-  });
+  const { data: connection } = useMailboxConnection();
+  const { data: org } = useCurrentOrganization();
 
   // No Entra tenant means no Mail Access consent is possible — this org
   // gets a hosted address per domain instead (offered later, once a domain
@@ -197,14 +186,8 @@ function MailboxStep({ onBack, onNext }: { onBack: () => void; onNext: () => voi
 }
 
 function DomainStep({ onBack, onNext }: { onBack: () => void; onNext: () => void }) {
-  const { data: domains } = useQuery({
-    queryKey: ["domains"],
-    queryFn: () => api.get<Domain[]>("/domains"),
-  });
-  const { data: org } = useQuery({
-    queryKey: ["organization", "current"],
-    queryFn: () => api.get<Organization>("/organizations/current"),
-  });
+  const { data: domains } = useDomains();
+  const { data: org } = useCurrentOrganization();
   const hasDomain = (domains ?? []).length > 0;
   const apexDomains = (domains ?? []).filter((d) => !d.parent_domain_id);
   const latestDomain = [...apexDomains].sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
@@ -270,8 +253,8 @@ function VerifyStep({ domain, onBack, onNext }: { domain: Domain | undefined; on
   const verifyDomain = useMutation({
     mutationFn: () => api.post<VerifyDomainResponse>(`/domains/${domain!.id}/verify`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["domains"] });
-      queryClient.invalidateQueries({ queryKey: ["onboarding-status"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.domains.all });
+      queryClient.invalidateQueries({ queryKey: queryKeys.onboarding.status });
     },
   });
 
@@ -463,11 +446,7 @@ function ReportingStep({ domain, onBack, onNext }: { domain: Domain | undefined;
 }
 
 function WaitingRoomStep({ domain, onBack }: { domain: Domain | undefined; onBack: () => void }) {
-  const { data: connection, isLoading: mailboxLoading } = useQuery({
-    queryKey: ["mailbox-connection"],
-    queryFn: () => api.get<MailboxConnectionStatus>("/mailbox-connection"),
-    retry: false,
-  });
+  const { data: connection, isLoading: mailboxLoading } = useMailboxConnection();
 
   return (
     <div>

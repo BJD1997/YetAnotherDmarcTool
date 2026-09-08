@@ -2,19 +2,18 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Mail, RefreshCw, ChevronDown, ChevronUp, History } from "lucide-react";
 import { api, ApiError } from "../../api/client";
-import type { Organization } from "../../api/types";
 import type { MailboxConnectionStatus, MailboxJobRun } from "../../api/dmarc";
 import { ReportFreshnessValue } from "../overview/widgets";
+import { queryKeys } from "../../hooks/queryKeys";
+import { useMailboxConnection } from "../../hooks/useMailboxConnection";
+import { useCurrentOrganization } from "../../hooks/useOrganization";
 
 // Shared between Settings.tsx and the onboarding wizard — one implementation
 // of the mailbox-connect mutation/UI, not two.
 export default function MailboxConnectionSection({ canManage }: { canManage: boolean }) {
   const queryClient = useQueryClient();
 
-  const { data: org } = useQuery({
-    queryKey: ["organization", "current"],
-    queryFn: () => api.get<Organization>("/organizations/current"),
-  });
+  const { data: org } = useCurrentOrganization();
 
   // pollingSince drives a short-lived refetchInterval right after a
   // save/resync — catches the real sync result (kicked off immediately by
@@ -24,10 +23,7 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
   // stale status left over from the previous connection.
   const [pollingSince, setPollingSince] = useState<number | null>(null);
 
-  const { data: connection, error } = useQuery({
-    queryKey: ["mailbox-connection"],
-    queryFn: () => api.get<MailboxConnectionStatus>("/mailbox-connection"),
-    retry: false,
+  const { data: connection, error } = useMailboxConnection({
     refetchInterval: (query) => {
       if (pollingSince === null) return false;
       const conn = query.state.data;
@@ -49,8 +45,8 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
       setSaveError(null);
       setEditing(false);
       setMailbox("");
-      queryClient.invalidateQueries({ queryKey: ["mailbox-connection"] });
-      queryClient.invalidateQueries({ queryKey: ["onboarding-status"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.mailboxConnection.current });
+      queryClient.invalidateQueries({ queryKey: queryKeys.onboarding.status });
       setPollingSince(Date.now());
     },
     onError: (err) => setSaveError(err instanceof ApiError ? err.message : "failed to save mailbox"),

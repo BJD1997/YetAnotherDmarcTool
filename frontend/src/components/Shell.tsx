@@ -5,6 +5,7 @@ import { LayoutDashboard, Globe, Users, Building2, LogOut, Menu, X, Settings } f
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { useCurrentOrganization } from "../hooks/useOrganization";
+import { queryKeys } from "../hooks/queryKeys";
 import ThemeToggle from "./ThemeToggle";
 
 export default function Shell({ children }: { children: ReactNode }) {
@@ -21,7 +22,7 @@ export default function Shell({ children }: { children: ReactNode }) {
 
   // Shown to every user, not just admins — /api/health needs no auth.
   const { data: health } = useQuery({
-    queryKey: ["health"],
+    queryKey: queryKeys.health,
     queryFn: () => api.get<{ version: string }>("/health"),
     staleTime: 5 * 60 * 1000,
   });

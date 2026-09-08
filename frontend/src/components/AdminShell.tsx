@@ -5,6 +5,8 @@ import { Building2, Download, ListChecks, LogOut, Menu, X, ArrowLeft } from "luc
 import { api } from "../api/client";
 import { useAdminAuth } from "../auth/AdminAuthContext";
 import ThemeToggle from "./ThemeToggle";
+import { useAdminUpdates } from "../hooks/useAdmin";
+import { queryKeys } from "../hooks/queryKeys";
 
 export default function AdminShell({ children }: { children: ReactNode }) {
   const { admin } = useAdminAuth();
@@ -12,17 +14,13 @@ export default function AdminShell({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  const { data: updateStatus } = useQuery({
-    queryKey: ["admin-updates"],
-    queryFn: () => api.get<{ update_available: boolean; latest_version: string | null }>("/admin/updates"),
-    staleTime: 5 * 60 * 1000,
-  });
+  const { data: updateStatus } = useAdminUpdates({ staleTime: 5 * 60 * 1000 });
 
   // Same public, unauthenticated /api/health source as the main Shell's
   // sidebar footer — shown here too since this is a different component,
   // not covered by that one.
   const { data: health } = useQuery({
-    queryKey: ["health"],
+    queryKey: queryKeys.health,
     queryFn: () => api.get<{ version: string }>("/health"),
     staleTime: 5 * 60 * 1000,
   });

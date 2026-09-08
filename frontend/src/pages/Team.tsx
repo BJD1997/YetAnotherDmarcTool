@@ -1,10 +1,13 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Check, Copy, UserPlus } from "lucide-react";
 import { api, ApiError } from "../api/client";
-import type { Organization, TeamMember } from "../api/types";
+import type { TeamMember } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
+import { queryKeys } from "../hooks/queryKeys";
+import { useCurrentOrganization } from "../hooks/useOrganization";
+import { useUsers } from "../hooks/useUsers";
 
 function ShareSignInLink() {
   const [copied, setCopied] = useState(false);
@@ -52,7 +55,7 @@ function AddLocalTeammate() {
       setEmail("");
       setError(null);
       setSetupLink(created.setup_link);
-      queryClient.invalidateQueries({ queryKey: ["users"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.users.all });
     },
     onError: (err) => setError(err instanceof ApiError ? err.message : "failed to add teammate"),
   });
@@ -118,14 +121,8 @@ function AddLocalTeammate() {
 export default function Team() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
-  const { data: org } = useQuery({
-    queryKey: ["organization", "current"],
-    queryFn: () => api.get<Organization>("/organizations/current"),
-  });
-  const { data: members, isLoading } = useQuery({
-    queryKey: ["users"],
-    queryFn: () => api.get<TeamMember[]>("/users"),
-  });
+  const { data: org } = useCurrentOrganization();
+  const { data: members, isLoading } = useUsers();
   const [error, setError] = useState<string | null>(null);
 
   const canManage = user?.role === "org_admin";
@@ -135,7 +132,7 @@ export default function Team() {
       api.patch<TeamMember>(`/users/${id}`, body),
     onSuccess: () => {
       setError(null);
-      queryClient.invalidateQueries({ queryKey: ["users"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.users.all });
     },
     onError: (err) => setError(err instanceof ApiError ? err.message : "failed to update user"),
   });

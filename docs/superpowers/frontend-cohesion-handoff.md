@@ -80,7 +80,7 @@ and Vite production build passed.
 
 ### Chunk 3 — page/component hook migrations
 
-**Status:** in progress
+**Status:** complete
 
 #### Chunk 3A — application shell and overview/domain entry points
 
@@ -96,8 +96,34 @@ and Vite production build passed.
 **Verification (Node 20 container):** 4 test files, 17 tests passed; TypeScript
 and Vite production build passed.
 
-**Next:** migrate Onboarding, settings components, policy builders, Team, and
-domain-detail consumers; replace raw invalidation arrays with `queryKeys`.
+The remaining migrations from this checkpoint were completed in Chunk 3B below.
+
+#### Chunk 3B — remaining shared resources and cache invalidation
+
+- Migrated Onboarding, Team, add-domain and mailbox settings, both reporting
+  policy builders, DNS checks, domain detail, admin organizations/job runs/
+  updates, and auth-context consumers onto shared resource hooks or canonical
+  query keys.
+- Added hooks for users, domain detail, admin organizations, and admin update
+  status. Shared admin response shapes now have one canonical type definition.
+- Expanded the narrowly allowed hook options to preserve the onboarding domain
+  polling and mailbox post-save polling exactly as they behaved before.
+- Replaced raw invalidation arrays for shared resources with `queryKeys`, so a
+  future key change cannot leave mutations refreshing a different cache entry.
+- Deliberately left feature-local, parameterized queries (individual report
+  views, charts, filters, and policy-builder payloads) beside their only current
+  consumer. Wrapping those one-for-one would add files without centralizing
+  shared policy; they can move when a second consumer exists or during the
+  focused component splits in Chunk 4.
+- Extended resource-hook tests to cover users, admin organizations, admin
+  updates, and parameterized domain detail.
+
+**Verification (Node 20 container):** 4 test files, 21 tests passed; TypeScript
+and Vite production build passed. A targeted sweep found no remaining raw keys
+or invalidations for the migrated shared resources.
+
+**Next:** Chunk 4—add characterization tests around the large screens, then
+split only their independent responsibilities and group the admin pages.
 
 ### Chunk 4 — focused component and page organization
 

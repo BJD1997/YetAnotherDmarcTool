@@ -5,12 +5,13 @@ import { RefreshCw, Trash2, Plus, Wand2, ChevronDown, ChevronRight, Copy, Check 
 import { api, ApiError } from "../../api/client";
 import type { Domain } from "../../api/types";
 import type { CheckResult, CheckStatus, CheckType, DetectedSelector, DkimSelectorItem } from "../../api/dnsChecks";
-import type { MailboxConnectionStatus } from "../../api/dmarc";
 import { useAuth } from "../../auth/AuthContext";
 import { StatusBadge } from "../../components/domain/shared";
 import PolicyBuilder from "../../components/policy-builder/PolicyBuilder";
 import MtaStsPolicyBuilder from "../../components/policy-builder/MtaStsPolicyBuilder";
 import TlsRptPolicyBuilder from "../../components/policy-builder/TlsRptPolicyBuilder";
+import { queryKeys } from "../../hooks/queryKeys";
+import { useMailboxConnection } from "../../hooks/useMailboxConnection";
 
 const CHECK_LABELS: Record<CheckType, string> = {
   spf: "SPF",
@@ -89,11 +90,7 @@ export default function DnsChecksTab() {
     queryKey: ["dns-checks", domainId],
     queryFn: () => api.get<CheckResult[]>(`/domains/${domainId}/checks`),
   });
-  const { data: connection } = useQuery({
-    queryKey: ["mailbox-connection"],
-    queryFn: () => api.get<MailboxConnectionStatus>("/mailbox-connection"),
-    retry: false,
-  });
+  const { data: connection } = useMailboxConnection();
   const [error, setError] = useState<string | null>(null);
   const [showPolicyBuilder, setShowPolicyBuilder] = useState(false);
   const [showMtaStsBuilder, setShowMtaStsBuilder] = useState(false);
@@ -104,7 +101,7 @@ export default function DnsChecksTab() {
     mutationFn: () => api.post<CheckResult[]>(`/domains/${domainId}/checks/recheck`),
     onSuccess: () => {
       setError(null);
-      queryClient.invalidateQueries({ queryKey: ["dns-checks", domainId] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.dnsChecks(domainId) });
     },
     onError: (err) => setError(err instanceof ApiError ? err.message : "recheck failed"),
   });
@@ -428,15 +425,15 @@ function DkimSelectors({ domainId, canManage }: { domainId: string; canManage: b
     onSuccess: () => {
       setSelector("");
       setError(null);
-      queryClient.invalidateQueries({ queryKey: ["dkim-selectors", domainId] });
-      queryClient.invalidateQueries({ queryKey: ["dkim-selectors-detected", domainId] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.dkimSelectors(domainId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.detectedDkimSelectors(domainId) });
     },
     onError: (err) => setError(err instanceof ApiError ? err.message : "failed to add selector"),
   });
 
   const deleteSelector = useMutation({
     mutationFn: (id: string) => api.delete(`/domains/${domainId}/selectors/${id}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["dkim-selectors", domainId] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.dkimSelectors(domainId) }),
   });
 
   return (
