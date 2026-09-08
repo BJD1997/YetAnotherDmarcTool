@@ -35,6 +35,7 @@ small commits so either effort can proceed or be handed over separately.
 - `a5475ab` — shell, overview, domains, and settings entry points (Chunk 3A)
 - `3fe62f6` — remaining shared-resource migrations and invalidations (Chunk 3B)
 - `4f8fa67` — page organization and shared clipboard interaction (Chunk 4)
+- `8606db1` — ignore generated Vitest configuration artifacts (final audit)
 
 ### Chunk 0 — branch, inventory, and handoff log
 
@@ -167,15 +168,92 @@ frontend and repository checks, and finish the Claude handoff/rebase guidance.
 
 ### Chunk 5 — final verification and handoff
 
-**Status:** pending
+**Status:** complete
 
-## Resume instructions
+- Reviewed the complete `master...refactor/frontend-cohesion` diff for scope,
+  route/import moves, query-key usage, generated files, and whitespace errors.
+- Removed accidentally tracked JavaScript/declaration output generated from
+  `vitest.config.ts` and added it to `.gitignore`, matching the existing rule
+  for generated `vite.config` output.
+- Re-ran the complete frontend suite and production build in the repository's
+  Node 20 environment.
+- Ran the backend suite as a regression check even though this branch changes
+  no backend application code. All 144 locally runnable tests passed; 172
+  database/configuration integration cases skipped because the local invocation
+  did not supply CI's Postgres service and test settings. The authoritative PR
+  CI must run those cases with its configured Postgres service.
+- Built the complete multi-stage production Docker image successfully. This
+  installs from the committed frontend lockfile, builds the SPA, installs the
+  backend runtime, and copies the built SPA into the final Python image.
+
+**Final verification:** 5 frontend test files / 22 tests passed; TypeScript and
+Vite production build passed; 144 backend tests passed locally with 172
+environment-gated skips; full production container build passed; npm reported
+0 vulnerabilities; final diff and worktree checks passed.
+
+## Final outcome
+
+The frontend cohesion work is complete on this branch. Shared server-resource
+policy now has one home in the hooks/query-key layer, repeated consumers use
+that layer, the frontend has a CI regression net, related routes have clear
+source ownership, and repeated clipboard lifecycle code has one tested owner.
+The work intentionally does not add or change Azure scaling, Postgres queue,
+leader-election, IMAP ingestion, or deployment behavior.
+
+This branch is ready for review and merge into `master`. It does not by itself
+make `v0.1.4-beta` ready to deploy: the scale-out branch must still be rebased
+onto the resulting `master`, conflicts resolved against the new hooks and page
+locations, and its own queue/replica/Azure verification completed.
+
+## Claude continuation checklist
+
+1. Review and merge `refactor/frontend-cohesion` into `master` through the
+   normal PR process; require both CI jobs to pass, especially the backend job
+   with Postgres that runs the locally skipped integration tests.
+2. Do not squash away this handoff before recording the final merged commit or
+   PR reference. The small commits deliberately separate test infrastructure,
+   hook introduction, consumer migration, page organization, and final audit.
+3. Update local `v0.1.4-beta` from its remote, create a safety/reference branch,
+   and rebase it onto the newly merged `master`. Do not rebase it onto this
+   feature branch before the review result is known.
+4. Resolve frontend conflicts by retaining the canonical `queryKeys` and
+   resource-hook ownership introduced here. Adapt beta-only consumers to these
+   hooks rather than restoring inline duplicate queries.
+5. Account for moved source files when resolving conflicts:
+   platform-admin routes live in `pages/admin/`; domain report routes live in
+   `pages/domain-detail/`.
+6. Keep beta-only scale-out concerns separate: Postgres queue correctness,
+   replica-safe scheduling/leadership, IMAP ingestion, Azure Bicep, managed
+   identity/secrets, health probes, graceful shutdown, and autoscaling rules
+   still need their own review and tests after the rebase.
+7. After the rebase, run the full CI suite, build the production image, and run
+   multi-replica integration tests before calling the Azure scale-out work
+   deployment-ready.
+
+## Conflict guide for the beta rebase
+
+- If beta changes a component migrated here, keep beta's new user-facing
+  capability but obtain shared domains, organization, mailbox, onboarding,
+  users, or admin resources through the matching hook in `frontend/src/hooks/`.
+- If beta adds invalidations, use the matching builder from `queryKeys.ts`; add
+  a new canonical key there when the resource is genuinely new.
+- Keep feature-local report/chart/filter queries beside their sole consumer.
+  Promote them to a resource hook only when beta introduces another consumer or
+  shared cache/refetch policy.
+- Preserve route URLs from `App.tsx`; Chunk 4 moved source files only and did
+  not authorize URL changes.
+- Preserve the exact Node 20-compatible test versions unless the production
+  container is deliberately upgraded and tested at the same time.
+
+## Handoff entry point
 
 1. Read this file and `docs/superpowers/specs/2026-09-05-cohesion-refactor-design.md`.
 2. Check `git status` and the latest commits on `refactor/frontend-cohesion`.
-3. Resume the first ledger chunk still marked `in progress` or `pending`.
-4. Do not assume a chunk is complete unless its verification results and commit
-   hash are recorded here.
+3. All planned chunks are complete; begin with branch review/merge and then the
+   beta rebase checklist above. Do not add unrelated scale-out changes to this
+   completed frontend branch.
+4. If review requires a correction, record its commit and fresh verification
+   results in this file before merging.
 
 ## Known local-environment issue
 
