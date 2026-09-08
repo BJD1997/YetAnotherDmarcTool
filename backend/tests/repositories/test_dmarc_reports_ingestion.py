@@ -5,13 +5,16 @@ from datetime import datetime, timezone
 from app.models.dmarc_aggregate import DmarcAggregateRecord, DmarcAggregateReport
 from app.models.dmarc_forensic import DmarcForensicReport
 from app.models.domain import Domain
-from app.models.enums import AuthResult, Disposition
+from app.models.enums import AuthResult, Disposition, TlsRptPolicyType
+from app.models.tls_rpt import TlsRptReport
 from app.repositories.dmarc_reports import (
     distinct_header_froms_for_domain_or_descendants,
     insert_aggregate_report_if_new,
     insert_forensic_report_if_new,
+    insert_tls_rpt_report_if_new,
     list_unmatched_aggregate_reports,
     list_unmatched_forensic_reports_for_org,
+    list_unmatched_tls_rpt_reports_for_org,
     update_record_domain_id_for_header_from,
 )
 
@@ -63,6 +66,53 @@ async def test_insert_forensic_report_if_new_rejects_duplicate(api):
         second = await insert_forensic_report_if_new(db, _forensic("msg-1"))
         await db.commit()
     assert second is False
+
+
+async def test_insert_tls_rpt_report_if_new_rejects_duplicate(api):
+    _client, owner_factory = api
+    org, _user = await seed_org_and_user(owner_factory)
+    now = datetime.now(timezone.utc)
+    # uq_tls_rpt_reports_natural_key: organization_id, policy_domain, org_name,
+    # date_range_begin, date_range_end — held fixed across both insert attempts.
+    date_range_begin = now
+    date_range_end = now
+
+    def _tls_report():
+        return TlsRptReport(
+            organization_id=org.id, domain_id=None, org_name="reporter.example",
+            date_range_begin=date_range_begin, date_range_end=date_range_end,
+            policy_type=TlsRptPolicyType.sts, policy_domain="example.com",
+            source_message_id="tls-msg-1", received_at=now, created_at=now,
+        )
+
+    async with owner_factory() as db:
+        first = await insert_tls_rpt_report_if_new(db, _tls_report())
+        await db.commit()
+    assert first is True
+
+    async with owner_factory() as db:
+        second = await insert_tls_rpt_report_if_new(db, _tls_report())
+        await db.commit()
+    assert second is False
+
+
+async def test_list_unmatched_tls_rpt_reports_for_org(api):
+    _client, owner_factory = api
+    org, _user = await seed_org_and_user(owner_factory)
+    now = datetime.now(timezone.utc)
+
+    async with owner_factory() as db:
+        db.add(TlsRptReport(
+            organization_id=org.id, domain_id=None, org_name="reporter.example",
+            date_range_begin=now, date_range_end=now,
+            policy_type=TlsRptPolicyType.sts, policy_domain="example.com",
+            source_message_id="tls-msg-2", received_at=now, created_at=now,
+        ))
+        await db.commit()
+
+    async with owner_factory() as db:
+        results = await list_unmatched_tls_rpt_reports_for_org(db, org.id)
+    assert len(results) == 1
 
 
 async def test_list_unmatched_aggregate_reports_no_limit_returns_all(api):
