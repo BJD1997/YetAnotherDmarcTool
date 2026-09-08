@@ -28,6 +28,13 @@ small commits so either effort can proceed or be handed over separately.
 
 ## Chunk ledger
 
+### Commit checkpoints
+
+- `c6c8778` — test infrastructure and baseline coverage (Chunks 0–1)
+- `adb71e0` — canonical query keys and initial resource hooks (Chunk 2)
+- `a5475ab` — shell, overview, domains, and settings entry points (Chunk 3A)
+- `3fe62f6` — remaining shared-resource migrations and invalidations (Chunk 3B)
+
 ### Chunk 0 — branch, inventory, and handoff log
 
 **Status:** complete
