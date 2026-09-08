@@ -34,13 +34,13 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select, text
+from sqlalchemy import text
 
 from app.db.rls import set_org_context
 from app.db.session import async_session_factory, engine
 from app.models.enums import ConsentStatus, JobStatus, JobType, SyncStatus
 from app.models.job_run import JobRun
-from app.models.mailbox_connection import MailboxConnection
+from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.services.graph.mailbox_poller import fetch_message_raw_mime, fetch_new_message_ids
 from app.services.ingestion import report_writer
 from app.services.ingestion.parsedmarc_adapter import UnparseableReportError, parse_report_email
@@ -94,10 +94,7 @@ async def _do_poll(organization_id: uuid.UUID, tenant_id: str) -> None:
         async with async_session_factory() as db:
             await set_org_context(db, organization_id)
 
-            result = await db.execute(
-                select(MailboxConnection).where(MailboxConnection.organization_id == organization_id)
-            )
-            connection = result.scalar_one_or_none()
+            connection = await get_org_mailbox_connection(db, organization_id)
             if connection is None or connection.consent_status != ConsentStatus.granted:
                 return
 
@@ -169,10 +166,7 @@ async def _do_poll(organization_id: uuid.UUID, tenant_id: str) -> None:
         logger.exception("mailbox poll failed for org %s", organization_id)
         async with async_session_factory() as db:
             await set_org_context(db, organization_id)
-            result = await db.execute(
-                select(MailboxConnection).where(MailboxConnection.organization_id == organization_id)
-            )
-            connection = result.scalar_one_or_none()
+            connection = await get_org_mailbox_connection(db, organization_id)
             if connection is not None:
                 connection.last_sync_status = SyncStatus.error
                 connection.last_sync_error = str(exc)[:2000]
