@@ -2,12 +2,12 @@ import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.platform_admin_session import PlatformAdminSession
 from app.models.session import UserSession
+from app.repositories.auth import get_platform_admin_session_by_token_hash, get_user_session_by_token_hash
 
 _IDLE_TIMEOUT = timedelta(hours=settings.session_idle_timeout_hours)
 _ABSOLUTE_TIMEOUT = timedelta(days=settings.session_absolute_timeout_days)
@@ -52,8 +52,7 @@ async def create_user_session(
 
 async def get_active_user_session(db: AsyncSession, raw_token: str) -> UserSession | None:
     token_hash = _hash_token(raw_token)
-    result = await db.execute(select(UserSession).where(UserSession.session_token_hash == token_hash))
-    session = result.scalar_one_or_none()
+    session = await get_user_session_by_token_hash(db, token_hash)
     if session is None:
         return None
     return _validate_and_refresh(session)
@@ -86,10 +85,7 @@ async def get_active_platform_admin_session(
     db: AsyncSession, raw_token: str
 ) -> PlatformAdminSession | None:
     token_hash = _hash_token(raw_token)
-    result = await db.execute(
-        select(PlatformAdminSession).where(PlatformAdminSession.session_token_hash == token_hash)
-    )
-    session = result.scalar_one_or_none()
+    session = await get_platform_admin_session_by_token_hash(db, token_hash)
     if session is None:
         return None
     return _validate_and_refresh(session)

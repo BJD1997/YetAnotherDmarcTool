@@ -11,15 +11,14 @@ import email.utils
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text
 
 from app.config import settings
 from app.db.rls import set_org_context, set_platform_admin_context
 from app.db.session import async_session_factory, engine
-from app.models.domain import Domain
 from app.models.enums import SyncStatus
-from app.models.hosted_reports_poll_state import HostedReportsPollState
+from app.repositories.domains import list_domains_with_hosted_report_address
+from app.repositories.mailbox_connections import get_or_create_hosted_reports_poll_state
 from app.services.graph.mailbox_poller import fetch_message_raw_mime, fetch_new_message_ids
 from app.services.ingestion import report_writer
 from app.services.ingestion.parsedmarc_adapter import UnparseableReportError, parse_report_email
@@ -33,16 +32,6 @@ def _recipient_addresses(raw_mime: bytes) -> list[str]:
     msg = email.message_from_bytes(raw_mime)
     to_header = msg.get("To", "") or ""
     return [addr.lower() for _name, addr in email.utils.getaddresses([to_header]) if addr]
-
-
-async def _get_or_create_state(db: AsyncSession) -> HostedReportsPollState:
-    result = await db.execute(select(HostedReportsPollState).limit(1))
-    state = result.scalar_one_or_none()
-    if state is None:
-        state = HostedReportsPollState()
-        db.add(state)
-        await db.flush()
-    return state
 
 
 async def poll_hosted_reports_mailbox() -> None:
@@ -71,13 +60,11 @@ async def _do_poll() -> None:
     try:
         async with async_session_factory() as db:
             await set_platform_admin_context(db, is_admin=True)
-            state = await _get_or_create_state(db)
+            state = await get_or_create_hosted_reports_poll_state(db)
 
             address_map = {
                 d.hosted_report_address.lower(): (d.id, d.organization_id)
-                for d in (
-                    await db.execute(select(Domain).where(Domain.hosted_report_address.is_not(None)))
-                ).scalars()
+                for d in await list_domains_with_hosted_report_address(db)
             }
 
             message_ids, new_delta_link = await fetch_new_message_ids(
@@ -140,7 +127,7 @@ async def _do_poll() -> None:
         logger.exception("hosted reports poll failed")
         async with async_session_factory() as db:
             await set_platform_admin_context(db, is_admin=True)
-            state = await _get_or_create_state(db)
+            state = await get_or_create_hosted_reports_poll_state(db)
             state.last_sync_at = datetime.now(timezone.utc)
             state.last_sync_status = SyncStatus.error
             state.last_sync_error = str(exc)[:2000]

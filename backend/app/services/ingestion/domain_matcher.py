@@ -1,9 +1,8 @@
 import uuid
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.domain import Domain
+from app.repositories.domains import get_domain_id_by_org_and_name
 
 
 async def match_domain(db: AsyncSession, organization_id: uuid.UUID, published_domain: str) -> uuid.UUID | None:
@@ -19,10 +18,7 @@ async def match_domain(db: AsyncSession, organization_id: uuid.UUID, published_d
     labels = published_domain.split(".")
     for start in range(len(labels) - 1):
         candidate = ".".join(labels[start:])
-        result = await db.execute(
-            select(Domain.id).where(Domain.organization_id == organization_id, Domain.name == candidate)
-        )
-        domain_id = result.scalar_one_or_none()
+        domain_id = await get_domain_id_by_org_and_name(db, organization_id, candidate)
         if domain_id is not None:
             return domain_id
 

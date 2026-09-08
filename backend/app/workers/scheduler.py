@@ -12,13 +12,10 @@ import logging
 from datetime import datetime, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import select
 
 from app.db.rls import set_platform_admin_context
 from app.db.session import async_session_factory
-from app.models.enums import ConsentStatus
-from app.models.mailbox_connection import MailboxConnection
-from app.models.organization import Organization
+from app.repositories.mailbox_connections import list_orgs_with_granted_mailbox_connections
 from app.services.dns_checks.domain_verification import run_domain_verification_sweep
 from app.services.dns_checks.scheduled_recheck import DNS_CHECK_SWEEP_TICK_SECONDS, run_dns_check_sweep
 from app.services.retention.forensic_purge import run_retention_purge
@@ -46,15 +43,7 @@ async def _list_pollable_orgs() -> list:
     context, same mechanism the platform-admin API routes use."""
     async with async_session_factory() as db:
         await set_platform_admin_context(db, is_admin=True)
-        result = await db.execute(
-            select(Organization.id, Organization.entra_tenant_id)
-            .join(MailboxConnection, MailboxConnection.organization_id == Organization.id)
-            .where(
-                MailboxConnection.consent_status == ConsentStatus.granted,
-                Organization.entra_tenant_id.is_not(None),
-            )
-        )
-        return result.all()
+        return list(await list_orgs_with_granted_mailbox_connections(db))
 
 
 async def _reconcile_jobs() -> None:

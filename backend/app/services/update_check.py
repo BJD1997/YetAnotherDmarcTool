@@ -8,11 +8,11 @@ import re
 from datetime import datetime, timezone
 
 import httpx
-from sqlalchemy import select
 
 from app.config import settings
 from app.db.session import async_session_factory
 from app.models.update_check_state import UpdateCheckState
+from app.repositories.admin_updates import get_or_create_update_check_state
 
 logger = logging.getLogger(__name__)
 
@@ -62,13 +62,7 @@ def is_dev_build(version: str) -> bool:
 async def get_or_create_state(db) -> UpdateCheckState:
     """Also used directly by GET /admin/updates to read the cached result
     without re-running the check."""
-    result = await db.execute(select(UpdateCheckState).limit(1))
-    state = result.scalar_one_or_none()
-    if state is None:
-        state = UpdateCheckState()
-        db.add(state)
-        await db.flush()
-    return state
+    return await get_or_create_update_check_state(db)
 
 
 async def run_update_check() -> None:

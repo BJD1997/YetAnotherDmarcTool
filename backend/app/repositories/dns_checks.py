@@ -6,7 +6,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.dns_check import DnsCheckResult
-from app.models.enums import CheckType
+from app.models.domain import Domain
+from app.models.enums import CheckType, DomainVerificationStatus
 from app.models.tls_rpt import TlsRptReport
 
 
@@ -107,3 +108,24 @@ async def list_tls_rpt_reports_for_domain(
     query = query.order_by(TlsRptReport.date_range_begin.desc())
     result = await db.execute(query)
     return result.scalars().all()
+
+
+async def list_domains_due_for_check(db: AsyncSession, cutoff: datetime) -> Sequence[UUID]:
+    """Verified, active domains whose latest DnsCheckResult is older than
+    `cutoff`, or that have never been checked at all. See
+    app/services/dns_checks/scheduled_recheck.py's run_dns_check_sweep."""
+    latest_checked = (
+        select(DnsCheckResult.domain_id, func.max(DnsCheckResult.checked_at).label("latest"))
+        .group_by(DnsCheckResult.domain_id)
+        .subquery()
+    )
+    result = await db.execute(
+        select(Domain.id)
+        .outerjoin(latest_checked, latest_checked.c.domain_id == Domain.id)
+        .where(
+            Domain.verification_status == DomainVerificationStatus.verified,
+            Domain.is_active.is_(True),
+            (latest_checked.c.latest.is_(None)) | (latest_checked.c.latest < cutoff),
+        )
+    )
+    return list(result.scalars().all())

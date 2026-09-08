@@ -132,6 +132,11 @@ async def list_job_runs(
     return result.scalars().all()
 
 
+async def count_platform_admins(db: AsyncSession) -> int:
+    result = await db.execute(select(func.count()).select_from(PlatformAdmin))
+    return result.scalar_one()
+
+
 async def job_runs_summary_stats(db: AsyncSession) -> dict:
     """Bundles the /job-runs/summary dashboard-card stats in one call,
     matching this codebase's existing pattern of bundling multi-stat

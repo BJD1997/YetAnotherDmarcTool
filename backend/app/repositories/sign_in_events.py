@@ -1,7 +1,7 @@
 import uuid
 from collections.abc import Sequence
 
-from sqlalchemy import select, tuple_
+from sqlalchemy import func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.enums import AuthMethod, SignInResult
@@ -40,3 +40,10 @@ async def list_sign_in_events(
     query = query.order_by(SignInEvent.created_at.desc(), SignInEvent.id.desc()).limit(limit)
     result_rows = await db.execute(query)
     return result_rows.scalars().all()
+
+
+async def count_sign_in_events_for_org(db: AsyncSession, organization_id: uuid.UUID) -> int:
+    result = await db.execute(
+        select(func.count()).select_from(SignInEvent).where(SignInEvent.organization_id == organization_id)
+    )
+    return result.scalar_one()

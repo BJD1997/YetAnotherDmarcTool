@@ -7,6 +7,8 @@ from app.models.enums import AuthMethod
 from app.models.mfa_pending_challenge import MfaPendingChallenge
 from app.models.organization import Organization
 from app.models.password_setup_token import PasswordSetupToken
+from app.models.platform_admin_session import PlatformAdminSession
+from app.models.session import UserSession
 from app.models.user import User
 from app.models.user_recovery_code import UserRecoveryCode
 
@@ -53,4 +55,14 @@ async def get_unused_recovery_code(db: AsyncSession, user_id: UUID, code_hash: s
 
 async def get_password_setup_token(db: AsyncSession, token_hash: str) -> PasswordSetupToken | None:
     result = await db.execute(select(PasswordSetupToken).where(PasswordSetupToken.token_hash == token_hash))
+    return result.scalar_one_or_none()
+
+
+async def get_user_session_by_token_hash(db: AsyncSession, token_hash: str) -> UserSession | None:
+    result = await db.execute(select(UserSession).where(UserSession.session_token_hash == token_hash))
+    return result.scalar_one_or_none()
+
+
+async def get_platform_admin_session_by_token_hash(db: AsyncSession, token_hash: str) -> PlatformAdminSession | None:
+    result = await db.execute(select(PlatformAdminSession).where(PlatformAdminSession.session_token_hash == token_hash))
     return result.scalar_one_or_none()

@@ -17,3 +17,11 @@ async def get_user_in_org(db: AsyncSession, user_id: UUID, organization_id: UUID
     if user is None or user.organization_id != organization_id:
         return None
     return user
+
+
+async def get_user_by_org_and_email(db: AsyncSession, organization_id: UUID, email: str) -> User | None:
+    """Exact, case-sensitive match within one org — contrast with
+    auth.py's get_local_user_by_email, which is case-insensitive and
+    cross-org but scoped to local-auth users only."""
+    result = await db.execute(select(User).where(User.organization_id == organization_id, User.email == email))
+    return result.scalar_one_or_none()

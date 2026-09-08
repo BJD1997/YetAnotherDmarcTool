@@ -1,13 +1,13 @@
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.rls import set_platform_admin_context
 from app.db.session import async_session_factory
 from app.models.domain import Domain
 from app.models.enums import DomainVerificationStatus
+from app.repositories.domains import list_pending_domains, mark_pending_subdomains_verified
 from app.services.dns_checks.resolver import resolve_txt
 
 logger = logging.getLogger(__name__)
@@ -41,14 +41,7 @@ async def apply_domain_verification(db: AsyncSession, domain: Domain) -> bool:
     domain.verified_at = now
 
     if domain.parent_domain_id is None:
-        await db.execute(
-            Domain.__table__.update()
-            .where(
-                Domain.parent_domain_id == domain.id,
-                Domain.verification_status == DomainVerificationStatus.pending,
-            )
-            .values(verification_status=DomainVerificationStatus.verified, verified_at=now)
-        )
+        await mark_pending_subdomains_verified(db, domain.id, now)
     return True
 
 
@@ -60,11 +53,7 @@ async def run_domain_verification_sweep() -> None:
     bypass forensic_purge.run_retention_purge uses."""
     async with async_session_factory() as db:
         await set_platform_admin_context(db, is_admin=True)
-        pending = (
-            (await db.execute(select(Domain).where(Domain.verification_status == DomainVerificationStatus.pending)))
-            .scalars()
-            .all()
-        )
+        pending = await list_pending_domains(db)
         verified_count = 0
         for domain in pending:
             if await apply_domain_verification(db, domain):

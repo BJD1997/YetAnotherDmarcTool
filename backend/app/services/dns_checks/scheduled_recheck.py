@@ -10,18 +10,18 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.rls import set_platform_admin_context
 from app.db.session import async_session_factory
-from app.models.dkim_selector import DkimSelector
 from app.models.dns_check import DnsCheckResult
 from app.models.domain import Domain
-from app.models.enums import CheckStatus, CheckType, DomainVerificationStatus, JobStatus, JobType
+from app.models.enums import CheckStatus, CheckType, JobStatus, JobType
 from app.models.job_run import JobRun
-from app.models.mailbox_connection import MailboxConnection
 from app.models.organization import Organization
+from app.repositories.dns_checks import list_domains_due_for_check
+from app.repositories.mailbox_connections import get_org_mailbox_connection
+from app.repositories.selectors import list_selectors_for_domain
 from app.services.dns_checks.registry import run_all
 
 logger = logging.getLogger(__name__)
@@ -42,8 +42,7 @@ DNS_CHECK_SWEEP_TICK_SECONDS = 900
 
 
 async def run_and_persist_checks(db: AsyncSession, domain: Domain, org: Organization) -> list[DnsCheckResult]:
-    selector_result = await db.execute(select(DkimSelector).where(DkimSelector.domain_id == domain.id))
-    selectors = selector_result.scalars().all()
+    selectors = await list_selectors_for_domain(db, domain.id)
     selector_id_by_name = {s.selector: s.id for s in selectors}
 
     parent_domain_name = None
@@ -57,9 +56,7 @@ async def run_and_persist_checks(db: AsyncSession, domain: Domain, org: Organiza
     # hosted address takes priority over the org's shared connected
     # mailbox. Passed through to tls_rpt_check.check() so the scored check
     # can flag a rua= that doesn't include it, not just the builder.
-    connection = (
-        await db.execute(select(MailboxConnection).where(MailboxConnection.organization_id == domain.organization_id))
-    ).scalar_one_or_none()
+    connection = await get_org_mailbox_connection(db, domain.organization_id)
     mailbox_address = domain.hosted_report_address or (connection.mailbox_address if connection is not None else None)
 
     findings_by_type = await run_all(
@@ -94,21 +91,7 @@ async def run_and_persist_checks(db: AsyncSession, domain: Domain, org: Organiza
 
 
 async def _due_domain_ids(db: AsyncSession, cutoff: datetime) -> list[uuid.UUID]:
-    latest_checked = (
-        select(DnsCheckResult.domain_id, func.max(DnsCheckResult.checked_at).label("latest"))
-        .group_by(DnsCheckResult.domain_id)
-        .subquery()
-    )
-    result = await db.execute(
-        select(Domain.id)
-        .outerjoin(latest_checked, latest_checked.c.domain_id == Domain.id)
-        .where(
-            Domain.verification_status == DomainVerificationStatus.verified,
-            Domain.is_active.is_(True),
-            (latest_checked.c.latest.is_(None)) | (latest_checked.c.latest < cutoff),
-        )
-    )
-    return list(result.scalars().all())
+    return list(await list_domains_due_for_check(db, cutoff))
 
 
 async def run_dns_check_sweep() -> None:

@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.rls import set_platform_admin_context
 from app.db.session import async_session_factory
-from app.models.dmarc_forensic import DmarcForensicReport
+from app.repositories.dmarc_reports import purge_forensic_raw_messages_older_than
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +28,7 @@ RETENTION_DAYS = 30
 
 async def purge_old_forensic_raw_messages(db: AsyncSession) -> int:
     cutoff = datetime.now(timezone.utc) - timedelta(days=RETENTION_DAYS)
-    result = await db.execute(
-        DmarcForensicReport.__table__.update()
-        .where(DmarcForensicReport.raw_message.is_not(None), DmarcForensicReport.created_at < cutoff)
-        .values(raw_message=None)
-    )
-    return result.rowcount
+    return await purge_forensic_raw_messages_older_than(db, cutoff)
 
 
 async def run_retention_purge() -> None:
