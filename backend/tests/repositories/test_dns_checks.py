@@ -157,3 +157,31 @@ async def test_latest_dns_check_results_of_type_for_domain_empty_when_type_absen
         rows = await latest_dns_check_results_of_type_for_domain(db, domain.id, CheckType.spf)
 
     assert list(rows) == []
+
+
+async def test_list_domains_due_for_check_includes_never_checked_and_stale(api):
+    from datetime import datetime, timedelta, timezone
+
+    from app.models.domain import Domain
+    from app.models.enums import DomainVerificationStatus
+    from app.repositories.dns_checks import list_domains_due_for_check
+
+    _client, owner_factory = api
+    org, _user = await seed_org_and_user(owner_factory)
+    async with owner_factory() as db:
+        never_checked = Domain(
+            organization_id=org.id, name="never.example",
+            verification_status=DomainVerificationStatus.verified, is_active=True,
+        )
+        not_due = Domain(
+            organization_id=org.id, name="unverified.example",
+            verification_status=DomainVerificationStatus.pending, is_active=True,
+        )
+        db.add_all([never_checked, not_due])
+        await db.commit()
+        await db.refresh(never_checked)
+
+    async with owner_factory() as db:
+        due = await list_domains_due_for_check(db, datetime.now(timezone.utc) - timedelta(hours=6))
+    assert never_checked.id in due
+    assert not_due.id not in due  # not verified, never eligible regardless of check history

@@ -6,11 +6,10 @@ registry.py already runs; this is presentation only."""
 import dataclasses
 import uuid
 
-from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.dns_check import DnsCheckResult
 from app.models.enums import CheckType
+from app.repositories.dns_checks import list_latest_check_results
 from app.services.source_identification.patterns import match_known_service
 from app.services.source_identification.registrable_domain import registrable_domain
 
@@ -27,13 +26,7 @@ class InboundHostRow:
 
 
 async def build_inbound_hosts(db: AsyncSession, domain_id: uuid.UUID) -> list[InboundHostRow]:
-    latest_ts = (
-        select(func.max(DnsCheckResult.checked_at)).where(DnsCheckResult.domain_id == domain_id).scalar_subquery()
-    )
-    result = await db.execute(
-        select(DnsCheckResult).where(DnsCheckResult.domain_id == domain_id, DnsCheckResult.checked_at == latest_ts)
-    )
-    rows = result.scalars().all()
+    rows = await list_latest_check_results(db, domain_id)
     if not rows:
         return []
 
