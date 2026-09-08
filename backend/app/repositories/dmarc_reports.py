@@ -17,18 +17,6 @@ from app.models.source_ip_identity import SourceIpIdentity
 from app.models.tls_rpt import TlsRptReport
 
 
-async def purge_forensic_raw_messages_older_than(db: AsyncSession, cutoff: datetime) -> int:
-    """Nulls out raw_message (and only that column — see the caller's own
-    docstring for why authentication_results is left alone) for rows older
-    than `cutoff`. Returns the number of rows affected."""
-    result = await db.execute(
-        DmarcForensicReport.__table__.update()
-        .where(DmarcForensicReport.raw_message.is_not(None), DmarcForensicReport.created_at < cutoff)
-        .values(raw_message=None)
-    )
-    return result.rowcount
-
-
 def _apply_report_filters(
     query,
     *,
@@ -703,39 +691,43 @@ async def dismiss_detected_domain_name(db: AsyncSession, *, organization_id: UUI
     await db.execute(stmt)
 
 
+async def purge_forensic_raw_messages_older_than(db: AsyncSession, cutoff: datetime) -> int:
+    """Nulls out raw_message (and only that column — see the caller's own
+    docstring for why authentication_results is left alone) for rows older
+    than `cutoff`. Returns the number of rows affected."""
+    result = await db.execute(
+        DmarcForensicReport.__table__.update()
+        .where(DmarcForensicReport.raw_message.is_not(None), DmarcForensicReport.created_at < cutoff)
+        .values(raw_message=None)
+    )
+    return result.rowcount
+
+
+async def _insert_if_new(db: AsyncSession, obj) -> bool:
+    try:
+        async with db.begin_nested():
+            db.add(obj)
+            await db.flush()
+    except IntegrityError:
+        return False
+    return True
+
+
 async def insert_aggregate_report_if_new(db: AsyncSession, report: DmarcAggregateReport) -> bool:
     """Returns True if newly written, False if this exact report was already
     ingested (natural key: organization + org_name + report_id + published domain,
     per RFC 7489's own dedup guidance). Caller builds the fully-populated
     `report` object (including its DmarcAggregateRecord children, added via
     db.add_all separately) — this function only owns the idempotent insert."""
-    try:
-        async with db.begin_nested():
-            db.add(report)
-            await db.flush()
-    except IntegrityError:
-        return False
-    return True
+    return await _insert_if_new(db, report)
 
 
 async def insert_forensic_report_if_new(db: AsyncSession, report: DmarcForensicReport) -> bool:
-    try:
-        async with db.begin_nested():
-            db.add(report)
-            await db.flush()
-    except IntegrityError:
-        return False
-    return True
+    return await _insert_if_new(db, report)
 
 
 async def insert_tls_rpt_report_if_new(db: AsyncSession, report: TlsRptReport) -> bool:
-    try:
-        async with db.begin_nested():
-            db.add(report)
-            await db.flush()
-    except IntegrityError:
-        return False
-    return True
+    return await _insert_if_new(db, report)
 
 
 async def list_unmatched_forensic_reports_for_org(db: AsyncSession, organization_id: UUID) -> Sequence[DmarcForensicReport]:

@@ -1,5 +1,4 @@
 # backend/tests/repositories/test_domains.py
-import uuid
 from datetime import datetime, timezone
 
 from app.models.domain import Domain

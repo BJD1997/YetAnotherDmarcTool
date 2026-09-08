@@ -1,3 +1,4 @@
+from app.models.enums import OrganizationStatus
 from app.models.organization import Organization
 from app.repositories.organizations import get_org_by_demo_flag
 
@@ -17,8 +18,6 @@ async def test_get_org_by_demo_flag_returns_none_when_no_demo_org(api):
 async def test_get_org_by_demo_flag_finds_the_demo_org(api):
     _client, owner_factory = api
     async with owner_factory() as db:
-        from app.models.enums import OrganizationStatus
-
         org = Organization(name="Demo", status=OrganizationStatus.active, is_demo_read_only=True)
         db.add(org)
         await db.commit()

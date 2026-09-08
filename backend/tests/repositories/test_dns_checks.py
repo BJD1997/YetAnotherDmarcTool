@@ -1,10 +1,14 @@
 # backend/tests/repositories/test_dns_checks.py
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.models.dns_check import DnsCheckResult
 from app.models.domain import Domain
-from app.models.enums import CheckStatus, CheckType
-from app.repositories.dns_checks import latest_dns_check_results_of_type_for_domain, list_dns_check_results_at_latest_run
+from app.models.enums import CheckStatus, CheckType, DomainVerificationStatus
+from app.repositories.dns_checks import (
+    latest_dns_check_results_of_type_for_domain,
+    list_dns_check_results_at_latest_run,
+    list_domains_due_for_check,
+)
 
 from tests.conftest import seed_org_and_user
 
@@ -160,12 +164,6 @@ async def test_latest_dns_check_results_of_type_for_domain_empty_when_type_absen
 
 
 async def test_list_domains_due_for_check_includes_never_checked_and_stale(api):
-    from datetime import datetime, timedelta, timezone
-
-    from app.models.domain import Domain
-    from app.models.enums import DomainVerificationStatus
-    from app.repositories.dns_checks import list_domains_due_for_check
-
     _client, owner_factory = api
     org, _user = await seed_org_and_user(owner_factory)
     async with owner_factory() as db:
