@@ -1,6 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
-import { api } from "../../api/client";
-import type { Posture } from "../../api/overview";
+import { usePosture } from "../../hooks/useOverviewResources";
 import { freshnessRole, PolicyLadder, ReportFreshnessValue, RiskTile } from "./widgets";
 
 function complianceRole(pct: number | null): "good" | "warning" | "serious" | "critical" | undefined {
@@ -12,10 +10,7 @@ function complianceRole(pct: number | null): "good" | "warning" | "serious" | "c
 }
 
 export default function PostureStrip({ domainId, days }: { domainId: string | null; days: number }) {
-  const { data, isLoading } = useQuery({
-    queryKey: ["dmarc-posture", domainId, days],
-    queryFn: () => api.get<Posture>(`/dmarc/posture?days=${days}${domainId ? `&domain_id=${domainId}` : ""}`),
-  });
+  const { data, isLoading } = usePosture(domainId, days);
 
   if (isLoading || !data) {
     return (

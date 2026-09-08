@@ -1,11 +1,10 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Pencil, Plus } from "lucide-react";
-import { api } from "../../api/client";
 import type { Domain } from "../../api/types";
 import type { SenderInventoryRow, SenderReviewStatus, SenderReviewUpdate, SenderSourceIp } from "../../api/overview";
 import { useAuth } from "../../auth/AuthContext";
+import { useSenderInventory, useUpdateSenderReview } from "../../hooks/useOverviewResources";
 import { ServiceBadge, riskScore, passRateStyle } from "../domain/shared";
 
 interface MergedRow extends SenderInventoryRow {
@@ -17,12 +16,6 @@ interface MergedRow extends SenderInventoryRow {
 // long-tail noise (scanners, one-off misconfigured hosts) — worth keeping
 // out of the main scan, not worth deleting the record of.
 const BLOCKED_LOW_VOLUME_THRESHOLD = 10;
-
-async function fetchDomainInventory(domain: Domain, days: number | null): Promise<MergedRow[]> {
-  const qs = days === null ? "" : `?days=${days}`;
-  const rows = await api.get<SenderInventoryRow[]>(`/domains/${domain.id}/dmarc/sender-inventory${qs}`);
-  return rows.map((r) => ({ ...r, domain_id: domain.id, domain_name: domain.name }));
-}
 
 // Recency window: senders/IPs with no traffic in this window drop out, so a
 // decommissioned host (e.g. an old web01 replaced by web02) stops cluttering
@@ -74,37 +67,13 @@ function matchesFilter(row: MergedRow, filter: FilterKey): boolean {
 export default function SenderInventory({ domainId, domains }: { domainId: string | null; domains: Domain[] }) {
   const { user } = useAuth();
   const canManage = user?.role === "org_admin";
-  const queryClient = useQueryClient();
   const [filter, setFilter] = useState<FilterKey>("all");
   const [showBlockedGroup, setShowBlockedGroup] = useState(false);
   const [windowDays, setWindowDays] = useState<number | null>(DEFAULT_WINDOW_DAYS);
 
   const targetDomains = domainId ? domains.filter((d) => d.id === domainId) : domains;
-  const targetIds = targetDomains.map((d) => d.id).join(",");
-
-  const { data, isLoading } = useQuery({
-    queryKey: ["sender-inventory", targetIds, windowDays],
-    queryFn: async () => {
-      const results = await Promise.all(targetDomains.map((d) => fetchDomainInventory(d, windowDays)));
-      // Worst first (volume x fail rate), not raw volume — the same
-      // "top failing" ordering OutboundTable uses.
-      return results.flat().sort((a, b) => riskScore(b) - riskScore(a));
-    },
-    enabled: targetDomains.length > 0,
-  });
-
-  const updateReview = useMutation({
-    mutationFn: ({
-      domain_id,
-      service_label,
-      body,
-    }: {
-      domain_id: string;
-      service_label: string;
-      body: Partial<Pick<SenderReviewUpdate, "status" | "owner">>;
-    }) => api.patch<SenderReviewUpdate>(`/domains/${domain_id}/dmarc/sender-inventory/${encodeURIComponent(service_label)}`, body),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["sender-inventory"] }),
-  });
+  const { data, isLoading } = useSenderInventory(targetDomains, windowDays, riskScore);
+  const updateReview = useUpdateSenderReview();
 
   const allRows = data ?? [];
   // Archived senders are hidden everywhere except the explicit "Archived"

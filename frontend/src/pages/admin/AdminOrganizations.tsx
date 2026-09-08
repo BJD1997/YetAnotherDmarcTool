@@ -1,38 +1,10 @@
 import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Plus, Trash2, UserPlus } from "lucide-react";
-import { api, ApiError } from "../api/client";
-import { useAdminAuth } from "../auth/AdminAuthContext";
-import { ReportFreshnessValue } from "../components/overview/widgets";
-
-interface MailboxConnectionInfo {
-  id: string;
-  mailbox_address: string;
-  consent_status: "pending" | "granted" | "revoked";
-  consent_granted_at: string | null;
-  last_sync_at: string | null;
-  last_sync_status: "success" | "error" | null;
-  last_sync_error: string | null;
-}
-
-interface EntraConsentUrls {
-  mail_access_consent_url: string;
-  sso_consent_url: string;
-}
-
-interface AdminOrganization {
-  id: string;
-  name: string;
-  entra_tenant_id: string | null;
-  status: "active" | "suspended";
-  is_operator: boolean;
-  created_at: string;
-  mailbox_connection: MailboxConnectionInfo | null;
-  entra_consent_urls: EntraConsentUrls | null;
-  domain_count: number;
-  job_error_count_7d: number;
-  last_report_at: string | null;
-}
+import { ApiError } from "../../api/client";
+import { useAdminAuth } from "../../auth/AdminAuthContext";
+import { ReportFreshnessValue } from "../../components/overview/widgets";
+import { useAdminOrganizations, useChangeAdminPassword, useCreateAdminOrganization, useCreateAdminUser, useDeleteAdminOrganization, useSetAdminMailboxConnection, useUpdateAdminOrganization, type AdminOrganization } from "../../hooks/useAdmin";
+import { useClipboardFeedback } from "../../hooks/useClipboardFeedback";
 
 const STATUS_ROLE: Record<AdminOrganization["status"], "good" | "serious"> = {
   active: "good",
@@ -41,27 +13,20 @@ const STATUS_ROLE: Record<AdminOrganization["status"], "good" | "serious"> = {
 
 export default function AdminOrganizations() {
   const { admin } = useAdminAuth();
-  const queryClient = useQueryClient();
-  const { data: orgs, isLoading } = useQuery({
-    queryKey: ["admin-organizations"],
-    queryFn: () => api.get<AdminOrganization[]>("/admin/organizations"),
-  });
+  const { data: orgs, isLoading } = useAdminOrganizations();
 
   const [name, setName] = useState("");
   const [tenantId, setTenantId] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  const createOrg = useMutation({
-    mutationFn: () =>
-      api.post<AdminOrganization>("/admin/organizations", { name, entra_tenant_id: tenantId || null }),
-    onSuccess: () => {
+  const createOrg = useCreateAdminOrganization(
+    () => {
       setName("");
       setTenantId("");
       setError(null);
-      queryClient.invalidateQueries({ queryKey: ["admin-organizations"] });
     },
-    onError: (err) => setError(err instanceof ApiError ? err.message : "failed to create organization"),
-  });
+    (err) => setError(err instanceof ApiError ? err.message : "failed to create organization"),
+  );
 
   return (
     <section>
@@ -75,7 +40,7 @@ export default function AdminOrganizations() {
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            createOrg.mutate();
+            createOrg.mutate({ name, entra_tenant_id: tenantId || null });
           }}
           className="field-row"
         >
@@ -112,21 +77,11 @@ export default function AdminOrganizations() {
 }
 
 function OrgCard({ org }: { org: AdminOrganization }) {
-  const queryClient = useQueryClient();
   const [tenantId, setTenantId] = useState(org.entra_tenant_id ?? "");
   const [mailbox, setMailbox] = useState(org.mailbox_connection?.mailbox_address ?? "");
 
-  const updateOrg = useMutation({
-    mutationFn: (body: Partial<Pick<AdminOrganization, "entra_tenant_id" | "status">>) =>
-      api.patch<AdminOrganization>(`/admin/organizations/${org.id}`, body),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-organizations"] }),
-  });
-
-  const setMailboxConnection = useMutation({
-    mutationFn: (body: { mailbox_address: string; consent_status?: string }) =>
-      api.post(`/admin/organizations/${org.id}/mailbox-connection`, body),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-organizations"] }),
-  });
+  const updateOrg = useUpdateAdminOrganization(org.id);
+  const setMailboxConnection = useSetAdminMailboxConnection(org.id);
 
   const connection = org.mailbox_connection;
   const consentRole = connection
@@ -254,24 +209,21 @@ function CreateLocalUser({ orgId }: { orgId: string }) {
   const [email, setEmail] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [setupLink, setSetupLink] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const { copied, copy: copyToClipboard } = useClipboardFeedback();
 
-  const createUser = useMutation({
-    mutationFn: () => api.post<{ setup_link: string }>(`/admin/organizations/${orgId}/users`, { email }),
-    onSuccess: (created) => {
+  const createUser = useCreateAdminUser(
+    orgId,
+    (created) => {
       setEmail("");
       setError(null);
       setSetupLink(created.setup_link);
     },
-    onError: (err) => setError(err instanceof ApiError ? err.message : "failed to create user"),
-  });
+    (err) => setError(err instanceof ApiError ? err.message : "failed to create user"),
+  );
 
   function copy() {
     if (!setupLink) return;
-    navigator.clipboard.writeText(setupLink).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+    void copyToClipboard(setupLink);
   }
 
   return (
@@ -282,7 +234,7 @@ function CreateLocalUser({ orgId }: { orgId: string }) {
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          createUser.mutate();
+          createUser.mutate(email);
         }}
         className="field-row"
       >
@@ -321,14 +273,10 @@ function CreateLocalUser({ orgId }: { orgId: string }) {
 }
 
 function DeleteOrgSection({ org }: { org: AdminOrganization }) {
-  const queryClient = useQueryClient();
   const [confirming, setConfirming] = useState(false);
   const [confirmText, setConfirmText] = useState("");
 
-  const deleteOrg = useMutation({
-    mutationFn: () => api.delete(`/admin/organizations/${org.id}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-organizations"] }),
-  });
+  const deleteOrg = useDeleteAdminOrganization(org.id);
 
   if (org.is_operator) {
     return (
@@ -397,19 +345,18 @@ function ChangePassword() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
-  const change = useMutation({
-    mutationFn: () => api.post("/admin/change-password", { current_password: currentPassword, new_password: newPassword }),
-    onSuccess: () => {
+  const change = useChangeAdminPassword(
+    () => {
       setError(null);
       setSuccess(true);
       setCurrentPassword("");
       setNewPassword("");
     },
-    onError: (err) => {
+    (err) => {
       setSuccess(false);
       setError(err instanceof ApiError ? err.message : "failed to change password");
     },
-  });
+  );
 
   if (!open) {
     return (
@@ -425,7 +372,7 @@ function ChangePassword() {
     <form
       onSubmit={(e) => {
         e.preventDefault();
-        change.mutate();
+        change.mutate({ current_password: currentPassword, new_password: newPassword });
       }}
       className="field-row"
       style={{ margin: "0.5rem 0 1.25rem" }}

@@ -1,13 +1,12 @@
 import { useEffect, useState } from "react";
 import { useOutletContext, useSearchParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { api } from "../api/client";
-import type { Domain } from "../api/types";
-import type { TlsRptFilters, TlsRptReportRow, TlsRptSenderSummary, TlsRptSummary } from "../api/dmarc";
-import { TLS_RPT_RESULT_TYPES, tlsRptFilterQuery } from "../api/dmarc";
-import { DATE_RANGE_PRESETS } from "../api/overview";
-import { Stat } from "../components/domain/shared";
+import type { Domain } from "../../api/types";
+import type { TlsRptFilters, TlsRptReportRow, TlsRptSenderSummary, TlsRptSummary } from "../../api/dmarc";
+import { TLS_RPT_RESULT_TYPES, tlsRptFilterQuery } from "../../api/dmarc";
+import { DATE_RANGE_PRESETS } from "../../api/overview";
+import { Stat } from "../../components/domain/shared";
+import { useTlsReportRows, useTlsReportSummary, useTlsReportsBySender } from "../../hooks/useTlsReports";
 
 const GROUPINGS = [
   { key: "day", label: "Day" },
@@ -37,22 +36,9 @@ export default function DomainTlsReports() {
     setParams(next, { replace: true });
   }
 
-  const summaryQuery = useQuery({
-    queryKey: ["tls-rpt-summary", domainId, filterQS],
-    queryFn: () => api.get<TlsRptSummary>(`/domains/${domainId}/dmarc/tls-rpt/summary${filterQS ? `?${filterQS}` : ""}`),
-  });
-
-  const reportsQuery = useQuery({
-    queryKey: ["tls-rpt-reports", domainId, filterQS],
-    queryFn: () => api.get<TlsRptReportRow[]>(`/domains/${domainId}/dmarc/tls-rpt/reports${filterQS ? `?${filterQS}` : ""}`),
-    enabled: grouping === "day",
-  });
-
-  const bySenderQuery = useQuery({
-    queryKey: ["tls-rpt-by-sender", domainId, filterQS],
-    queryFn: () => api.get<TlsRptSenderSummary[]>(`/domains/${domainId}/dmarc/tls-rpt/by-sender${filterQS ? `?${filterQS}` : ""}`),
-    enabled: grouping === "sender",
-  });
+  const summaryQuery = useTlsReportSummary(domainId, filterQS);
+  const reportsQuery = useTlsReportRows(domainId, filterQS, grouping === "day");
+  const bySenderQuery = useTlsReportsBySender(domainId, filterQS, grouping === "sender");
 
   const days = groupByDay(reportsQuery.data ?? []);
 

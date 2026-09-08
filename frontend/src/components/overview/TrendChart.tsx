@@ -1,7 +1,6 @@
 import { useMemo, useState, type MouseEvent } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { api } from "../../api/client";
 import type { TrendPoint } from "../../api/overview";
+import { useTrend } from "../../hooks/useOverviewResources";
 
 const SERIES = [
   { key: "dmarc_pass_pct", label: "DMARC pass", color: "var(--cat-1)" },
@@ -43,10 +42,7 @@ const PAD = { top: 16, right: 16, bottom: 28, left: 34 };
 export default function TrendChart({ domainId, days }: { domainId: string | null; days: number }) {
   const [tableView, setTableView] = useState(false);
 
-  const { data, isLoading } = useQuery({
-    queryKey: ["dmarc-trend", domainId, days],
-    queryFn: () => api.get<TrendPoint[]>(`/dmarc/trend?days=${days}${domainId ? `&domain_id=${domainId}` : ""}`),
-  });
+  const { data, isLoading } = useTrend(domainId, days);
 
   const rows = useMemo(() => toRows(data ?? []), [data]);
 

@@ -1,9 +1,7 @@
 import { useParams, Link, NavLink, Outlet } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
-import { api } from "../../api/client";
-import type { Domain } from "../../api/types";
 import { VerificationBadge } from "../../components/domain/shared";
+import { useDomain } from "../../hooks/useDomains";
 
 const TABS: { to: string; label: string; end?: boolean }[] = [
   { to: "", label: "Overview", end: true },
@@ -18,11 +16,7 @@ const TABS: { to: string; label: string; end?: boolean }[] = [
 export default function DomainDetailLayout() {
   const { domainId } = useParams<{ domainId: string }>();
 
-  const { data: domain } = useQuery({
-    queryKey: ["domains", domainId],
-    queryFn: () => api.get<Domain>(`/domains/${domainId}`),
-    enabled: !!domainId,
-  });
+  const { data: domain } = useDomain(domainId);
 
   if (!domainId) return null;
 

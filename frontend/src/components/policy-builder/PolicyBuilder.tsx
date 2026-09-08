@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
 import { X, Copy, RefreshCw, Check, Plus } from "lucide-react";
-import { api, ApiError } from "../../api/client";
-import type { DmarcPolicy, PolicyBuilderData } from "../../api/policyBuilder";
-import type { Organization } from "../../api/types";
+import { ApiError } from "../../api/client";
+import type { DmarcPolicy } from "../../api/policyBuilder";
+import { useCurrentOrganization } from "../../hooks/useOrganization";
+import { useClipboardFeedback } from "../../hooks/useClipboardFeedback";
+import { useDmarcPolicyBuilder, useRequestHostedReportAddress } from "../../hooks/usePolicyBuilders";
 
 const RUA_STATUS_TEXT: Record<string, { text: string; role: "good" | "warning" | "critical" | "neutral" }> = {
   correct: { text: "Reports are reaching your connected mailbox", role: "good" },
@@ -39,14 +40,8 @@ function buildRecord(opts: {
 }
 
 export default function PolicyBuilder({ domainId, domainName, onClose }: { domainId: string; domainName: string; onClose: () => void }) {
-  const { data, isLoading, refetch, isFetching } = useQuery({
-    queryKey: ["policy-builder", domainId],
-    queryFn: () => api.get<PolicyBuilderData>(`/domains/${domainId}/dmarc/policy-builder`),
-  });
-  const { data: org } = useQuery({
-    queryKey: ["organization", "current"],
-    queryFn: () => api.get<Organization>("/organizations/current"),
-  });
+  const { data, isLoading, refetch, isFetching } = useDmarcPolicyBuilder(domainId);
+  const { data: org } = useCurrentOrganization();
   const hostedMailboxAvailable = !org?.entra_tenant_id || org?.hosted_mailbox_opt_in;
 
   const [policy, setPolicy] = useState<DmarcPolicy>("none");
@@ -55,7 +50,7 @@ export default function PolicyBuilder({ domainId, domainName, onClose }: { domai
   const [advanced, setAdvanced] = useState(false);
   const [adkim, setAdkim] = useState<"r" | "s">("r");
   const [aspf, setAspf] = useState<"r" | "s">("r");
-  const [copied, setCopied] = useState(false);
+  const { copied, copy } = useClipboardFeedback();
   // Which rua= mailto addresses end up in the generated record — the org
   // mailbox plus whichever of the domain's currently-published addresses
   // the user hasn't unchecked. Without this, regenerating the record would
@@ -71,22 +66,17 @@ export default function PolicyBuilder({ domainId, domainName, onClose }: { domai
   // authorized to receive reports.
   const [authWarning, setAuthWarning] = useState<string | null>(null);
 
-  const requestHostedAddress = useMutation({
-    mutationFn: () =>
-      api.post<{
-        hosted_report_address: string;
-        authorization_record_status: "created" | "already_exists" | "unconfigured" | "error";
-        authorization_record_detail: string | null;
-      }>(`/domains/${domainId}/hosted-report-address`),
-    onSuccess: (result) => {
+  const requestHostedAddress = useRequestHostedReportAddress(
+    domainId,
+    (result) => {
       setHostedAddressError(null);
       setHostedAddress(result.hosted_report_address);
       setSelectedRua((prev) => (prev.includes(result.hosted_report_address) ? prev : [...prev, result.hosted_report_address]));
       const needsAttention = result.authorization_record_status === "unconfigured" || result.authorization_record_status === "error";
       setAuthWarning(needsAttention ? result.authorization_record_detail : null);
     },
-    onError: (err) => setHostedAddressError(err instanceof ApiError ? err.message : "couldn't generate a hosted address"),
-  });
+    (err) => setHostedAddressError(err instanceof ApiError ? err.message : "couldn't generate a hosted address"),
+  );
 
   // Seed the form from the recommendation exactly once, when it first loads.
   useEffect(() => {
@@ -122,10 +112,7 @@ export default function PolicyBuilder({ domainId, domainName, onClose }: { domai
     : [];
 
   function copyRecord() {
-    navigator.clipboard.writeText(generated).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+    void copy(generated);
   }
 
   function useRecommendation() {

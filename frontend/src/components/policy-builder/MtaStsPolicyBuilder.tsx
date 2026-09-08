@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { X, Copy, Check } from "lucide-react";
-import { api } from "../../api/client";
-import type { MtaStsBuilderData, MtaStsMode } from "../../api/dnsChecks";
+import type { MtaStsMode } from "../../api/dnsChecks";
+import { useClipboardFeedback } from "../../hooks/useClipboardFeedback";
+import { useMtaStsPolicyBuilder } from "../../hooks/usePolicyBuilders";
 
 // RFC 8461 §4.1: a leading "*." wildcard matches exactly one label, not
 // "one or more" — *.mx.microsoft covers foo.mx.microsoft but NOT
@@ -52,15 +52,12 @@ export default function MtaStsPolicyBuilder({
   domainName: string;
   onClose: () => void;
 }) {
-  const { data, isLoading } = useQuery({
-    queryKey: ["mta-sts-builder", domainId],
-    queryFn: () => api.get<MtaStsBuilderData>(`/domains/${domainId}/dns/mta-sts-builder`),
-  });
+  const { data, isLoading } = useMtaStsPolicyBuilder(domainId);
 
   const [mode, setMode] = useState<MtaStsMode>("testing");
   const [mxPatternsText, setMxPatternsText] = useState("");
-  const [copiedTxt, setCopiedTxt] = useState(false);
-  const [copiedPolicy, setCopiedPolicy] = useState(false);
+  const { copied: copiedTxt, copy: copyTxt } = useClipboardFeedback();
+  const { copied: copiedPolicy, copy: copyPolicy } = useClipboardFeedback();
 
   // Seed once, when data first loads. If the domain already has a policy
   // that fully covers its real MX hosts, keep editing that (no reason to
@@ -93,13 +90,6 @@ export default function MtaStsPolicyBuilder({
   const policyId = useMemo(() => generatePolicyId(), [mode, mxPatternsText]);
   const txtRecord = `v=STSv1; id=${policyId}`;
   const policyFile = ["version: STSv1", `mode: ${mode}`, ...mxPatterns.map((p) => `mx: ${p}`), "max_age: 604800"].join("\n");
-
-  function copy(text: string, setCopied: (v: boolean) => void) {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  }
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -206,7 +196,7 @@ export default function MtaStsPolicyBuilder({
                 {txtRecord}
               </div>
               <div className="chip-row" style={{ marginTop: "0.6rem" }}>
-                <button className="btn btn--primary btn--sm" onClick={() => copy(txtRecord, setCopiedTxt)}>
+                <button className="btn btn--primary btn--sm" onClick={() => void copyTxt(txtRecord)}>
                   {copiedTxt ? <Check /> : <Copy />}
                   {copiedTxt ? "Copied" : "Copy DNS value"}
                 </button>
@@ -235,7 +225,7 @@ export default function MtaStsPolicyBuilder({
                 {policyFile}
               </div>
               <div className="chip-row" style={{ marginTop: "0.6rem" }}>
-                <button className="btn btn--primary btn--sm" onClick={() => copy(policyFile, setCopiedPolicy)}>
+                <button className="btn btn--primary btn--sm" onClick={() => void copyPolicy(policyFile)}>
                   {copiedPolicy ? <Check /> : <Copy />}
                   {copiedPolicy ? "Copied" : "Copy policy file"}
                 </button>

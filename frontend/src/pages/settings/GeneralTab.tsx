@@ -1,10 +1,10 @@
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useOutletContext } from "react-router-dom";
-import { api, ApiError } from "../../api/client";
+import { ApiError } from "../../api/client";
 import type { Organization, SpfAllQualifierMode } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import MailboxConnectionSection from "../../components/settings/MailboxConnectionSection";
+import { useUpdateOrganization } from "../../hooks/useOrganization";
 
 const SPF_MODES: { key: SpfAllQualifierMode; label: string; description: string }[] = [
   {
@@ -60,18 +60,12 @@ export default function GeneralTab() {
 }
 
 function SpfModeSection({ org }: { org: Organization }) {
-  const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
 
-  const setMode = useMutation({
-    mutationFn: (mode: SpfAllQualifierMode) =>
-      api.patch<Organization>("/organizations/current", { name: org.name, spf_all_qualifier_mode: mode }),
-    onSuccess: () => {
-      setError(null);
-      queryClient.invalidateQueries({ queryKey: ["organization", "current"] });
-    },
-    onError: (err) => setError(err instanceof ApiError ? err.message : "failed to save"),
-  });
+  const setMode = useUpdateOrganization(
+    () => setError(null),
+    (err) => setError(err instanceof ApiError ? err.message : "failed to save"),
+  );
 
   return (
     <div className="card" style={{ padding: "1rem" }}>
@@ -82,7 +76,7 @@ function SpfModeSection({ org }: { org: Organization }) {
             className="btn btn--ghost btn--sm"
             style={org.spf_all_qualifier_mode === m.key ? { background: "var(--accent-wash)", color: "var(--accent)" } : undefined}
             disabled={setMode.isPending}
-            onClick={() => setMode.mutate(m.key)}
+            onClick={() => setMode.mutate({ name: org.name, spf_all_qualifier_mode: m.key })}
           >
             {m.label}
           </button>
@@ -97,17 +91,12 @@ function SpfModeSection({ org }: { org: Organization }) {
 }
 
 function HostedMailboxSection({ org }: { org: Organization }) {
-  const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
 
-  const setOptIn = useMutation({
-    mutationFn: (optIn: boolean) => api.patch<Organization>("/organizations/current", { name: org.name, hosted_mailbox_opt_in: optIn }),
-    onSuccess: () => {
-      setError(null);
-      queryClient.invalidateQueries({ queryKey: ["organization", "current"] });
-    },
-    onError: (err) => setError(err instanceof ApiError ? err.message : "failed to save"),
-  });
+  const setOptIn = useUpdateOrganization(
+    () => setError(null),
+    (err) => setError(err instanceof ApiError ? err.message : "failed to save"),
+  );
 
   // Local-auth orgs have no Entra tenant to grant Mail Access consent from
   // — a hosted mailbox is their only way to receive reports at all, so
@@ -136,7 +125,7 @@ function HostedMailboxSection({ org }: { org: Organization }) {
             className="btn btn--ghost btn--sm"
             style={org.hosted_mailbox_opt_in === opt.key ? { background: "var(--accent-wash)", color: "var(--accent)" } : undefined}
             disabled={setOptIn.isPending}
-            onClick={() => setOptIn.mutate(opt.key)}
+            onClick={() => setOptIn.mutate({ name: org.name, hosted_mailbox_opt_in: opt.key })}
           >
             {opt.label}
           </button>

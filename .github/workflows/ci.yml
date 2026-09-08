@@ -48,5 +48,6 @@ jobs:
         with:
           node-version: "20"
       - run: npm install
+      - run: npm test
       # tsc -b runs as part of the build script, so this also catches type errors
       - run: npm run build

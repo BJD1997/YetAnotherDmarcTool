@@ -1,10 +1,11 @@
 import { useState, type ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { LayoutDashboard, Globe, Users, Building2, LogOut, Menu, X, Settings } from "lucide-react";
 import { api } from "../api/client";
-import type { Organization } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
+import { useCurrentOrganization } from "../hooks/useOrganization";
+import { useHealth } from "../hooks/useOverviewResources";
 import ThemeToggle from "./ThemeToggle";
 
 export default function Shell({ children }: { children: ReactNode }) {
@@ -12,11 +13,7 @@ export default function Shell({ children }: { children: ReactNode }) {
   const location = useLocation();
   const queryClient = useQueryClient();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const { data: org } = useQuery({
-    queryKey: ["organization", "current"],
-    queryFn: () => api.get<Organization>("/organizations/current"),
-    enabled: !!user,
-  });
+  const { data: org } = useCurrentOrganization({ enabled: !!user });
 
   // Same population that can see /admin — a plain org user would just get
   // a 401 from admin-only routes, so links into that area are gated on the
@@ -24,11 +21,7 @@ export default function Shell({ children }: { children: ReactNode }) {
   const canSeeAdmin = !!(org?.is_operator && user?.role === "org_admin");
 
   // Shown to every user, not just admins — /api/health needs no auth.
-  const { data: health } = useQuery({
-    queryKey: ["health"],
-    queryFn: () => api.get<{ version: string }>("/health"),
-    staleTime: 5 * 60 * 1000,
-  });
+  const { data: health } = useHealth();
 
   async function handleLogout() {
     try {

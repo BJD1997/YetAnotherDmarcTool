@@ -1,18 +1,14 @@
 import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
-import { api, ApiError } from "../../api/client";
+import { ApiError } from "../../api/client";
 import type { Domain, DomainMailProfile } from "../../api/types";
 import { MailProfileSelect } from "../domain/shared";
+import { useCreateDomain, useDomains } from "../../hooks/useDomains";
 
 // Shared between Settings.tsx and the onboarding wizard — one implementation
 // of the add-domain mutation/UI, not two.
 export default function AddDomainForm({ onAdded }: { onAdded?: (domain: Domain) => void }) {
-  const queryClient = useQueryClient();
-  const { data: domains } = useQuery({
-    queryKey: ["domains"],
-    queryFn: () => api.get<Domain[]>("/domains"),
-  });
+  const { data: domains } = useDomains();
 
   const [name, setName] = useState("");
   const [parentId, setParentId] = useState<string>("");
@@ -28,14 +24,8 @@ export default function AddDomainForm({ onAdded }: { onAdded?: (domain: Domain) 
   // label like "mail" fails the full-FQDN validation, giving a confusing 422).
   const fullName = selectedParent ? `${name}.${selectedParent.name}` : name;
 
-  const createDomain = useMutation({
-    mutationFn: () =>
-      api.post<Domain & { reattributed_reports: number; reattributed_records: number }>("/domains", {
-        name: fullName,
-        parent_domain_id: parentId || null,
-        mail_profile: mailProfile,
-      }),
-    onSuccess: (created) => {
+  const createDomain = useCreateDomain(
+    (created) => {
       setName("");
       setParentId("");
       setMailProfile("sends_mail");
@@ -52,22 +42,20 @@ export default function AddDomainForm({ onAdded }: { onAdded?: (domain: Domain) 
         notices.push(`Re-attributed ${created.reattributed_records} record(s) from a parent domain to ${created.name}.`);
       }
       setFormNotice(notices.length > 0 ? notices.join(" ") : null);
-      queryClient.invalidateQueries({ queryKey: ["domains"] });
-      queryClient.invalidateQueries({ queryKey: ["onboarding-status"] });
       onAdded?.(created);
     },
-    onError: (err) => {
+    (err) => {
       setFormNotice(null);
       setFormError(err instanceof ApiError ? err.message : "failed to add domain");
     },
-  });
+  );
 
   return (
     <div className="card">
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          createDomain.mutate();
+          createDomain.mutate({ name: fullName, parent_domain_id: parentId || null, mail_profile: mailProfile });
         }}
         className="field-row"
       >

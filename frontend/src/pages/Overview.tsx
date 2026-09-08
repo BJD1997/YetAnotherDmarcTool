@@ -1,11 +1,8 @@
 import { Link, Navigate, useSearchParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, Download, KeyRound, ShieldCheck, Users } from "lucide-react";
 import { api } from "../api/client";
-import type { Domain, Organization } from "../api/types";
+import type { Domain } from "../api/types";
 import type { Posture, TrendPoint } from "../api/overview";
-import type { OnboardingStatus } from "../api/onboarding";
-import type { MailboxConnectionStatus } from "../api/dmarc";
 import { DATE_RANGE_PRESETS } from "../api/overview";
 import { useAuth } from "../auth/AuthContext";
 import CommandBar from "../components/overview/CommandBar";
@@ -15,6 +12,11 @@ import ActionQueue from "../components/overview/ActionQueue";
 import DomainsNeedingAttention from "../components/overview/DomainsNeedingAttention";
 import SenderInventory from "../components/overview/SenderInventory";
 import { MailboxHealthWidget } from "../components/overview/widgets";
+import { useDomains } from "../hooks/useDomains";
+import { useMailboxConnection } from "../hooks/useMailboxConnection";
+import { useOnboardingStatus } from "../hooks/useOnboarding";
+import { useCurrentOrganization } from "../hooks/useOrganization";
+import { useAdminUpdates } from "../hooks/useAdmin";
 
 export default function Overview() {
   const [params, setParams] = useSearchParams();
@@ -23,26 +25,13 @@ export default function Overview() {
   const days = (DATE_RANGE_PRESETS as readonly number[]).includes(requestedDays) ? requestedDays : 30;
   const { user } = useAuth();
 
-  const { data: domains } = useQuery({
-    queryKey: ["domains"],
-    queryFn: () => api.get<Domain[]>("/domains"),
-  });
-
-  const { data: onboarding, isLoading: onboardingLoading } = useQuery({
-    queryKey: ["onboarding-status"],
-    queryFn: () => api.get<OnboardingStatus>("/onboarding/status"),
-  });
-
-  const { data: org } = useQuery({
-    queryKey: ["organization", "current"],
-    queryFn: () => api.get<Organization>("/organizations/current"),
-  });
+  const { data: domains } = useDomains();
+  const { data: onboarding, isLoading: onboardingLoading } = useOnboardingStatus();
+  const { data: org } = useCurrentOrganization();
   // Same population that can reach /admin at all — a plain org user would
   // just get a 401 from this endpoint.
   const canSeeUpdates = !!(org?.is_operator && user?.role === "org_admin");
-  const { data: updateStatus } = useQuery({
-    queryKey: ["admin-updates"],
-    queryFn: () => api.get<{ update_available: boolean; latest_version: string | null }>("/admin/updates"),
+  const { data: updateStatus } = useAdminUpdates({
     enabled: canSeeUpdates,
     staleTime: 5 * 60 * 1000,
   });
@@ -149,11 +138,7 @@ export default function Overview() {
 }
 
 function WaitingForReports({ domains }: { domains: Domain[] }) {
-  const { data: connection, isLoading: mailboxLoading } = useQuery({
-    queryKey: ["mailbox-connection"],
-    queryFn: () => api.get<MailboxConnectionStatus>("/mailbox-connection"),
-    retry: false,
-  });
+  const { data: connection, isLoading: mailboxLoading } = useMailboxConnection();
   const focusDomain = [...domains.filter((d) => !d.parent_domain_id)].sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
 
   return (

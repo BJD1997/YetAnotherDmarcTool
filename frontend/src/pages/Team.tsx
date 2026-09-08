@@ -1,20 +1,18 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Check, Copy, UserPlus } from "lucide-react";
-import { api, ApiError } from "../api/client";
-import type { Organization, TeamMember } from "../api/types";
+import { ApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import { useCurrentOrganization } from "../hooks/useOrganization";
+import { useCreateUser, useUpdateUser, useUsers } from "../hooks/useUsers";
+import { useClipboardFeedback } from "../hooks/useClipboardFeedback";
 
 function ShareSignInLink() {
-  const [copied, setCopied] = useState(false);
+  const { copied, copy: copyToClipboard } = useClipboardFeedback();
   const signInUrl = `${window.location.origin}/login`;
 
   function copy() {
-    navigator.clipboard.writeText(signInUrl).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+    void copyToClipboard(signInUrl);
   }
 
   return (
@@ -40,29 +38,23 @@ function ShareSignInLink() {
 }
 
 function AddLocalTeammate() {
-  const queryClient = useQueryClient();
   const [email, setEmail] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [setupLink, setSetupLink] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const { copied, copy: copyToClipboard } = useClipboardFeedback();
 
-  const createUser = useMutation({
-    mutationFn: () => api.post<TeamMember & { setup_link: string }>("/users", { email }),
-    onSuccess: (created) => {
+  const createUser = useCreateUser(
+    (created) => {
       setEmail("");
       setError(null);
       setSetupLink(created.setup_link);
-      queryClient.invalidateQueries({ queryKey: ["users"] });
     },
-    onError: (err) => setError(err instanceof ApiError ? err.message : "failed to add teammate"),
-  });
+    (err) => setError(err instanceof ApiError ? err.message : "failed to add teammate"),
+  );
 
   function copy() {
     if (!setupLink) return;
-    navigator.clipboard.writeText(setupLink).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+    void copyToClipboard(setupLink);
   }
 
   return (
@@ -78,7 +70,7 @@ function AddLocalTeammate() {
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          createUser.mutate();
+          createUser.mutate(email);
         }}
         className="field-row"
       >
@@ -117,28 +109,16 @@ function AddLocalTeammate() {
 
 export default function Team() {
   const { user } = useAuth();
-  const queryClient = useQueryClient();
-  const { data: org } = useQuery({
-    queryKey: ["organization", "current"],
-    queryFn: () => api.get<Organization>("/organizations/current"),
-  });
-  const { data: members, isLoading } = useQuery({
-    queryKey: ["users"],
-    queryFn: () => api.get<TeamMember[]>("/users"),
-  });
+  const { data: org } = useCurrentOrganization();
+  const { data: members, isLoading } = useUsers();
   const [error, setError] = useState<string | null>(null);
 
   const canManage = user?.role === "org_admin";
 
-  const updateMember = useMutation({
-    mutationFn: ({ id, body }: { id: string; body: Partial<Pick<TeamMember, "role" | "status">> }) =>
-      api.patch<TeamMember>(`/users/${id}`, body),
-    onSuccess: () => {
-      setError(null);
-      queryClient.invalidateQueries({ queryKey: ["users"] });
-    },
-    onError: (err) => setError(err instanceof ApiError ? err.message : "failed to update user"),
-  });
+  const updateMember = useUpdateUser(
+    () => setError(null),
+    (err) => setError(err instanceof ApiError ? err.message : "failed to update user"),
+  );
 
   return (
     <section>

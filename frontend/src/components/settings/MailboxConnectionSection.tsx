@@ -1,20 +1,14 @@
 import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Mail, RefreshCw, ChevronDown, ChevronUp, History } from "lucide-react";
-import { api, ApiError } from "../../api/client";
-import type { Organization } from "../../api/types";
-import type { MailboxConnectionStatus, MailboxJobRun } from "../../api/dmarc";
+import { ApiError } from "../../api/client";
 import { ReportFreshnessValue } from "../overview/widgets";
+import { useMailboxConnection, useMailboxJobRuns, useResyncMailbox, useSetMailboxConnection } from "../../hooks/useMailboxConnection";
+import { useCurrentOrganization } from "../../hooks/useOrganization";
 
 // Shared between Settings.tsx and the onboarding wizard — one implementation
 // of the mailbox-connect mutation/UI, not two.
 export default function MailboxConnectionSection({ canManage }: { canManage: boolean }) {
-  const queryClient = useQueryClient();
-
-  const { data: org } = useQuery({
-    queryKey: ["organization", "current"],
-    queryFn: () => api.get<Organization>("/organizations/current"),
-  });
+  const { data: org } = useCurrentOrganization();
 
   // pollingSince drives a short-lived refetchInterval right after a
   // save/resync — catches the real sync result (kicked off immediately by
@@ -24,10 +18,7 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
   // stale status left over from the previous connection.
   const [pollingSince, setPollingSince] = useState<number | null>(null);
 
-  const { data: connection, error } = useQuery({
-    queryKey: ["mailbox-connection"],
-    queryFn: () => api.get<MailboxConnectionStatus>("/mailbox-connection"),
-    retry: false,
+  const { data: connection, error } = useMailboxConnection({
     refetchInterval: (query) => {
       if (pollingSince === null) return false;
       const conn = query.state.data;
@@ -43,23 +34,17 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
   const [showLinks, setShowLinks] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
 
-  const setConnection = useMutation({
-    mutationFn: () => api.put<MailboxConnectionStatus>("/mailbox-connection", { mailbox_address: mailbox }),
-    onSuccess: () => {
+  const setConnection = useSetMailboxConnection(
+    () => {
       setSaveError(null);
       setEditing(false);
       setMailbox("");
-      queryClient.invalidateQueries({ queryKey: ["mailbox-connection"] });
-      queryClient.invalidateQueries({ queryKey: ["onboarding-status"] });
       setPollingSince(Date.now());
     },
-    onError: (err) => setSaveError(err instanceof ApiError ? err.message : "failed to save mailbox"),
-  });
+    (err) => setSaveError(err instanceof ApiError ? err.message : "failed to save mailbox"),
+  );
 
-  const resync = useMutation({
-    mutationFn: () => api.post("/mailbox-connection/resync"),
-    onSuccess: () => setPollingSince(Date.now()),
-  });
+  const resync = useResyncMailbox(() => setPollingSince(Date.now()));
 
   const consentLinks = org?.entra_consent_urls;
   const consentGuidance = consentLinks && (
@@ -126,7 +111,7 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              setConnection.mutate();
+              setConnection.mutate(mailbox);
             }}
             className="field-row"
           >
@@ -156,7 +141,7 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            setConnection.mutate();
+            setConnection.mutate(mailbox);
           }}
           className="field-row"
         >
@@ -250,10 +235,7 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
 }
 
 function RecentSyncs() {
-  const { data, isLoading } = useQuery({
-    queryKey: ["mailbox-job-runs"],
-    queryFn: () => api.get<MailboxJobRun[]>("/mailbox-connection/job-runs?limit=15"),
-  });
+  const { data, isLoading } = useMailboxJobRuns();
 
   return (
     <div className="table-wrap" style={{ marginTop: "0.75rem" }}>

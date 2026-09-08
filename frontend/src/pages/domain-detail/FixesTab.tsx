@@ -1,17 +1,12 @@
 import { useOutletContext } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { api } from "../../api/client";
 import type { Domain } from "../../api/types";
-import type { ActionItem } from "../../api/overview";
 import { IssueRow } from "../../components/shared/IssueRow";
+import { useActionQueue } from "../../hooks/useDomainInsights";
 
 export default function FixesTab() {
   const domain = useOutletContext<Domain>();
 
-  const { data: fixes, isLoading } = useQuery({
-    queryKey: ["action-queue", domain.id],
-    queryFn: () => api.get<ActionItem[]>(`/action-queue?domain_id=${domain.id}`),
-  });
+  const { data: fixes, isLoading } = useActionQueue(domain.id);
 
   return (
     <div className="card">

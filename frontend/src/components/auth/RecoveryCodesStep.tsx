@@ -1,17 +1,15 @@
 import { useState } from "react";
 import { Copy, Check } from "lucide-react";
+import { useClipboardFeedback } from "../../hooks/useClipboardFeedback";
 
 // Shown exactly once, right after TOTP enrollment completes — these codes
 // can't be retrieved again afterward (only their hashes are stored).
 export default function RecoveryCodesStep({ codes, onContinue }: { codes: string[]; onContinue: () => void }) {
-  const [copied, setCopied] = useState(false);
+  const { copied, copy } = useClipboardFeedback();
   const [acknowledged, setAcknowledged] = useState(false);
 
   function copyAll() {
-    navigator.clipboard.writeText(codes.join("\n")).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+    void copy(codes.join("\n"));
   }
 
   return (
