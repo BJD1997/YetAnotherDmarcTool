@@ -10,8 +10,6 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import or_, select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.dmarc_aggregate import DmarcAggregateRecord, DmarcAggregateReport
@@ -19,6 +17,16 @@ from app.models.dmarc_forensic import DmarcForensicReport
 from app.models.domain import Domain
 from app.models.enums import AuthResult, Disposition, TlsRptPolicyType
 from app.models.tls_rpt import TlsRptReport
+from app.repositories.dmarc_reports import (
+    distinct_header_froms_for_domain_or_descendants,
+    insert_aggregate_report_if_new,
+    insert_forensic_report_if_new,
+    insert_tls_rpt_report_if_new,
+    list_unmatched_aggregate_reports,
+    list_unmatched_forensic_reports_for_org,
+    list_unmatched_tls_rpt_reports_for_org,
+    update_record_domain_id_for_header_from,
+)
 from app.services.ingestion.domain_matcher import match_domain
 
 logger = logging.getLogger(__name__)
@@ -58,11 +66,7 @@ async def write_aggregate_report(
         received_at=datetime.now(timezone.utc),
     )
 
-    try:
-        async with db.begin_nested():
-            db.add(report)
-            await db.flush()
-    except IntegrityError:
+    if not await insert_aggregate_report_if_new(db, report):
         logger.debug("duplicate aggregate report %s from %s, skipping", metadata.get("report_id"), metadata.get("org_name"))
         return False
 
@@ -129,11 +133,7 @@ async def write_forensic_report(
         source_message_id=source_message_id,
         created_at=datetime.now(timezone.utc),
     )
-    try:
-        async with db.begin_nested():
-            db.add(report)
-            await db.flush()
-    except IntegrityError:
+    if not await insert_forensic_report_if_new(db, report):
         logger.debug("duplicate forensic report for message %s, skipping", source_message_id)
         return False
     return True
@@ -173,12 +173,9 @@ async def write_smtp_tls_report(
             received_at=datetime.now(timezone.utc),
             created_at=datetime.now(timezone.utc),
         )
-        try:
-            async with db.begin_nested():
-                db.add(report)
-                await db.flush()
+        if await insert_tls_rpt_report_if_new(db, report):
             written += 1
-        except IntegrityError:
+        else:
             logger.debug("duplicate TLS-RPT policy %s from %s, skipping", policy_domain, parsed.get("organization_name"))
 
     return written
@@ -194,12 +191,7 @@ async def resweep_unmatched_reports(db: AsyncSession, organization_id: uuid.UUID
     reports start arriving and when the relevant domain gets registered)."""
     counts = {"aggregate_reports": 0, "forensic_reports": 0, "tls_rpt_reports": 0}
 
-    agg_result = await db.execute(
-        select(DmarcAggregateReport).where(
-            DmarcAggregateReport.organization_id == organization_id, DmarcAggregateReport.domain_id.is_(None)
-        )
-    )
-    for report in agg_result.scalars().all():
+    for report in await list_unmatched_aggregate_reports(db, organization_id, limit=None):
         domain_id = await match_domain(db, organization_id, report.policy_published_domain)
         if domain_id is not None:
             report.domain_id = domain_id
@@ -212,12 +204,7 @@ async def resweep_unmatched_reports(db: AsyncSession, organization_id: uuid.UUID
             # re-matches records by their own header_from instead.
             counts["aggregate_reports"] += 1
 
-    forensic_result = await db.execute(
-        select(DmarcForensicReport).where(
-            DmarcForensicReport.organization_id == organization_id, DmarcForensicReport.domain_id.is_(None)
-        )
-    )
-    for report in forensic_result.scalars().all():
+    for report in await list_unmatched_forensic_reports_for_org(db, organization_id):
         if not report.reported_domain:
             continue
         domain_id = await match_domain(db, organization_id, report.reported_domain)
@@ -225,10 +212,7 @@ async def resweep_unmatched_reports(db: AsyncSession, organization_id: uuid.UUID
             report.domain_id = domain_id
             counts["forensic_reports"] += 1
 
-    tls_result = await db.execute(
-        select(TlsRptReport).where(TlsRptReport.organization_id == organization_id, TlsRptReport.domain_id.is_(None))
-    )
-    for report in tls_result.scalars().all():
+    for report in await list_unmatched_tls_rpt_reports_for_org(db, organization_id):
         domain_id = await match_domain(db, organization_id, report.policy_domain)
         if domain_id is not None:
             report.domain_id = domain_id
@@ -252,33 +236,12 @@ async def resweep_domain_records(db: AsyncSession, organization_id: uuid.UUID, d
     resweep_unmatched_reports right after every domain is created (see
     app/routers/domains.py) — apex or subdomain, going forward or backfill,
     same call site."""
-    candidates = (
-        await db.execute(
-            select(DmarcAggregateRecord.header_from)
-            .where(
-                DmarcAggregateRecord.organization_id == organization_id,
-                or_(
-                    DmarcAggregateRecord.header_from == domain.name,
-                    DmarcAggregateRecord.header_from.like(f"%.{domain.name}"),
-                ),
-            )
-            .distinct()
-        )
-    ).scalars().all()
+    candidates = await distinct_header_froms_for_domain_or_descendants(db, organization_id, domain.name)
 
     updated = 0
     for header_from in candidates:
         resolved_domain_id = await match_domain(db, organization_id, header_from)
-        result = await db.execute(
-            DmarcAggregateRecord.__table__.update()
-            .where(
-                DmarcAggregateRecord.organization_id == organization_id,
-                DmarcAggregateRecord.header_from == header_from,
-                DmarcAggregateRecord.domain_id.is_distinct_from(resolved_domain_id),
-            )
-            .values(domain_id=resolved_domain_id)
-        )
-        updated += result.rowcount
+        updated += await update_record_domain_id_for_header_from(db, organization_id, header_from, resolved_domain_id)
 
     if updated:
         await db.flush()

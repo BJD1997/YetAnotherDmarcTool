@@ -2,8 +2,9 @@ from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import case, func, select, tuple_
+from sqlalchemy import case, func, or_, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.dismissed_detected_domain import DismissedDetectedDomain
@@ -528,17 +529,19 @@ async def report_records_grouped(
 
 
 async def list_unmatched_aggregate_reports(
-    db: AsyncSession, organization_id: UUID, limit: int
+    db: AsyncSession, organization_id: UUID, limit: int | None = None
 ) -> Sequence[DmarcAggregateReport]:
     """Aggregate reports whose policy_published domain didn't match any
     registered Domain in this org — surfaced rather than silently dropped
     (see domain_matcher.py)."""
-    result = await db.execute(
+    query = (
         select(DmarcAggregateReport)
         .where(DmarcAggregateReport.organization_id == organization_id, DmarcAggregateReport.domain_id.is_(None))
         .order_by(DmarcAggregateReport.received_at.desc())
-        .limit(limit)
     )
+    if limit is not None:
+        query = query.limit(limit)
+    result = await db.execute(query)
     return result.scalars().all()
 
 
@@ -686,3 +689,91 @@ async def dismiss_detected_domain_name(db: AsyncSession, *, organization_id: UUI
     )
     stmt = stmt.on_conflict_do_nothing(index_elements=["organization_id", "name"])
     await db.execute(stmt)
+
+
+async def insert_aggregate_report_if_new(db: AsyncSession, report: DmarcAggregateReport) -> bool:
+    """Returns True if newly written, False if this exact report was already
+    ingested (natural key: organization + org_name + report_id + published domain,
+    per RFC 7489's own dedup guidance). Caller builds the fully-populated
+    `report` object (including its DmarcAggregateRecord children, added via
+    db.add_all separately) — this function only owns the idempotent insert."""
+    try:
+        async with db.begin_nested():
+            db.add(report)
+            await db.flush()
+    except IntegrityError:
+        return False
+    return True
+
+
+async def insert_forensic_report_if_new(db: AsyncSession, report: DmarcForensicReport) -> bool:
+    try:
+        async with db.begin_nested():
+            db.add(report)
+            await db.flush()
+    except IntegrityError:
+        return False
+    return True
+
+
+async def insert_tls_rpt_report_if_new(db: AsyncSession, report: TlsRptReport) -> bool:
+    try:
+        async with db.begin_nested():
+            db.add(report)
+            await db.flush()
+    except IntegrityError:
+        return False
+    return True
+
+
+async def list_unmatched_forensic_reports_for_org(db: AsyncSession, organization_id: UUID) -> Sequence[DmarcForensicReport]:
+    result = await db.execute(
+        select(DmarcForensicReport).where(
+            DmarcForensicReport.organization_id == organization_id, DmarcForensicReport.domain_id.is_(None)
+        )
+    )
+    return result.scalars().all()
+
+
+async def list_unmatched_tls_rpt_reports_for_org(db: AsyncSession, organization_id: UUID) -> Sequence[TlsRptReport]:
+    result = await db.execute(
+        select(TlsRptReport).where(TlsRptReport.organization_id == organization_id, TlsRptReport.domain_id.is_(None))
+    )
+    return result.scalars().all()
+
+
+async def distinct_header_froms_for_domain_or_descendants(
+    db: AsyncSession, organization_id: UUID, domain_name: str
+) -> Sequence[str]:
+    """Every distinct header_from value that could possibly be affected by a
+    newly-registered domain: itself, or anything ending in '.{domain_name}'
+    — nothing else is reachable by match_domain's ancestor walk now that
+    this domain exists. See resweep_domain_records in
+    app/services/ingestion/report_writer.py."""
+    result = await db.execute(
+        select(DmarcAggregateRecord.header_from)
+        .where(
+            DmarcAggregateRecord.organization_id == organization_id,
+            or_(
+                DmarcAggregateRecord.header_from == domain_name,
+                DmarcAggregateRecord.header_from.like(f"%.{domain_name}"),
+            ),
+        )
+        .distinct()
+    )
+    return result.scalars().all()
+
+
+async def update_record_domain_id_for_header_from(
+    db: AsyncSession, organization_id: UUID, header_from: str, domain_id: UUID | None
+) -> int:
+    result = await db.execute(
+        DmarcAggregateRecord.__table__.update()
+        .where(
+            DmarcAggregateRecord.organization_id == organization_id,
+            DmarcAggregateRecord.header_from == header_from,
+            DmarcAggregateRecord.domain_id.is_distinct_from(domain_id),
+        )
+        .values(domain_id=domain_id)
+    )
+    return result.rowcount
