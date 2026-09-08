@@ -17,6 +17,18 @@ from app.models.source_ip_identity import SourceIpIdentity
 from app.models.tls_rpt import TlsRptReport
 
 
+async def purge_forensic_raw_messages_older_than(db: AsyncSession, cutoff: datetime) -> int:
+    """Nulls out raw_message (and only that column — see the caller's own
+    docstring for why authentication_results is left alone) for rows older
+    than `cutoff`. Returns the number of rows affected."""
+    result = await db.execute(
+        DmarcForensicReport.__table__.update()
+        .where(DmarcForensicReport.raw_message.is_not(None), DmarcForensicReport.created_at < cutoff)
+        .values(raw_message=None)
+    )
+    return result.rowcount
+
+
 def _apply_report_filters(
     query,
     *,

@@ -1,6 +1,6 @@
 # backend/tests/repositories/test_dmarc_reports_ingestion.py
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.models.dmarc_aggregate import DmarcAggregateRecord, DmarcAggregateReport
 from app.models.dmarc_forensic import DmarcForensicReport
@@ -15,6 +15,7 @@ from app.repositories.dmarc_reports import (
     list_unmatched_aggregate_reports,
     list_unmatched_forensic_reports_for_org,
     list_unmatched_tls_rpt_reports_for_org,
+    purge_forensic_raw_messages_older_than,
     update_record_domain_id_for_header_from,
 )
 
@@ -171,3 +172,26 @@ async def test_distinct_header_froms_and_update_domain_id(api):
         updated = await update_record_domain_id_for_header_from(db, org.id, "mail.example.com", domain.id)
         await db.commit()
     assert updated == 1
+
+
+async def test_purge_forensic_raw_messages_older_than(api):
+    _client, owner_factory = api
+    org, _user = await seed_org_and_user(owner_factory)
+    now = datetime.now(timezone.utc)
+    old = now - timedelta(days=45)
+
+    async with owner_factory() as db:
+        db.add(DmarcForensicReport(
+            organization_id=org.id, arrival_date=old, reported_domain="example.com",
+            source_message_id="old-1", raw_message="secret contents", created_at=old,
+        ))
+        db.add(DmarcForensicReport(
+            organization_id=org.id, arrival_date=now, reported_domain="example.com",
+            source_message_id="new-1", raw_message="still fresh", created_at=now,
+        ))
+        await db.commit()
+
+    async with owner_factory() as db:
+        purged = await purge_forensic_raw_messages_older_than(db, now - timedelta(days=30))
+        await db.commit()
+    assert purged == 1
