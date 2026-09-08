@@ -8,11 +8,9 @@ service" computation, not three copies of it."""
 import uuid
 from datetime import datetime
 
-from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.dmarc_aggregate import DmarcAggregateRecord, DmarcAggregateReport
-from app.models.enums import AuthResult, Disposition
+from app.repositories.dmarc_reports import per_source_ip_volume_breakdown
 from app.services.source_identification.service_identifier import identify_many
 
 
@@ -75,32 +73,7 @@ async def service_breakdown(db: AsyncSession, domain_id: uuid.UUID, *, since: da
     mid-loop commit would drop RLS context for every later iteration).
     Callers must commit once, themselves, after all their own RLS-scoped
     work for the request is done."""
-    dmarc_pass = (DmarcAggregateRecord.dkim_result == AuthResult.pass_) | (
-        DmarcAggregateRecord.spf_result == AuthResult.pass_
-    )
-
-    def _sum_where(condition):
-        return func.sum(case((condition, DmarcAggregateRecord.count), else_=0))
-
-    query = (
-        select(
-            DmarcAggregateRecord.source_ip,
-            func.sum(DmarcAggregateRecord.count),
-            _sum_where(DmarcAggregateRecord.spf_result == AuthResult.pass_),
-            _sum_where(DmarcAggregateRecord.dkim_result == AuthResult.pass_),
-            _sum_where(dmarc_pass),
-            _sum_where(DmarcAggregateRecord.disposition == Disposition.none),
-            _sum_where(DmarcAggregateRecord.disposition == Disposition.quarantine),
-            _sum_where(DmarcAggregateRecord.disposition == Disposition.reject),
-        )
-        .where(DmarcAggregateRecord.domain_id == domain_id)
-        .group_by(DmarcAggregateRecord.source_ip)
-    )
-    if since is not None:
-        query = query.join(
-            DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id
-        ).where(DmarcAggregateReport.date_range_begin >= since)
-    result = await db.execute(query)
+    rows = await per_source_ip_volume_breakdown(db, domain_id, since=since)
     per_ip = [
         {
             "source_ip": str(ip),
@@ -112,7 +85,7 @@ async def service_breakdown(db: AsyncSession, domain_id: uuid.UUID, *, since: da
             "quarantined": int(quarantined),
             "rejected": int(rejected),
         }
-        for ip, volume, spf_pass, dkim_pass, dmarc_pass_count, accepted, quarantined, rejected in result.all()
+        for ip, volume, spf_pass, dkim_pass, dmarc_pass_count, accepted, quarantined, rejected in rows
     ]
     if not per_ip:
         return []

@@ -10,15 +10,17 @@ import dataclasses
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.dmarc_aggregate import DmarcAggregateRecord, DmarcAggregateReport
 from app.models.dns_check import DnsCheckResult
 from app.models.domain import Domain
-from app.models.enums import AuthResult, CheckType, DomainVerificationStatus, SenderReviewStatus
-from app.models.sender_review import SenderReview
-from app.models.source_ip_identity import SourceIpIdentity
+from app.models.enums import CheckType, DomainVerificationStatus
+from app.repositories.dmarc_reports import (
+    latest_published_policy_for_domain,
+    policy_p_by_day_since,
+    windowed_totals_excluding_blocked,
+)
+from app.repositories.dns_checks import list_dns_check_results_at_latest_run
 from app.services.rating.score import DomainRating, compute_rating
 
 READY_TO_ENFORCE_MIN_VOLUME = 50
@@ -35,67 +37,16 @@ async def _windowed_totals(db: AsyncSession, domain_id: uuid.UUID) -> tuple[int,
     excluding traffic from senders explicitly marked blocked (SenderReview)
     — confirmed spoofing/abuse a domain owner has already dealt with
     shouldn't keep dragging the score down forever. Pending/unreviewed
-    traffic still counts normally (only an explicit "blocked" excludes).
-
-    Windowed on DmarcAggregateReport.date_range_begin (the report's mail
-    period), not DmarcAggregateRecord.created_at (ingestion time) — same
-    join/filter idiom dmarc_trend/_apply_report_filters/policy_stability_days
-    already use.
-
-    The blocked-sender exclusion is a pure SQL join — source_ip (INET) on
-    both DmarcAggregateRecord and the global SourceIpIdentity cache, then
-    SourceIpIdentity.service_label against SenderReview.service_label — no
-    identify_many() round-trip and no commit needed, keeping this read-only
-    like the rest of this module. A source_ip with no cached identity yet
-    simply can't match a blocked service_label, so it's conservatively
-    still counted (correct default: only proven-blocked traffic drops out)."""
+    traffic still counts normally (only an explicit "blocked" excludes)."""
     since = datetime.now(timezone.utc) - timedelta(days=RATING_WINDOW_DAYS)
-    dmarc_pass = (DmarcAggregateRecord.dkim_result == AuthResult.pass_) | (
-        DmarcAggregateRecord.spf_result == AuthResult.pass_
-    )
-    blocked_source_ips = (
-        select(SourceIpIdentity.source_ip)
-        .join(SenderReview, SenderReview.service_label == SourceIpIdentity.service_label)
-        .where(SenderReview.domain_id == domain_id, SenderReview.status == SenderReviewStatus.blocked)
-    )
-    total_count, pass_count = (
-        await db.execute(
-            select(
-                func.coalesce(func.sum(DmarcAggregateRecord.count), 0),
-                func.coalesce(func.sum(case((dmarc_pass, DmarcAggregateRecord.count), else_=0)), 0),
-            )
-            .select_from(DmarcAggregateRecord)
-            .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
-            .where(
-                DmarcAggregateRecord.domain_id == domain_id,
-                DmarcAggregateReport.date_range_begin >= since,
-                DmarcAggregateRecord.source_ip.not_in(blocked_source_ips),
-            )
-        )
-    ).one()
-    return int(total_count), int(pass_count)
+    return await windowed_totals_excluding_blocked(db, domain_id, since)
 
 
 async def latest_findings_by_type(db: AsyncSession, domain_id: uuid.UUID) -> dict[CheckType, list[DnsCheckResult]]:
     """Every DnsCheckResult row from the domain's most recent recheck,
     grouped by check_type — the same "latest checked_at" fetch used
     verbatim in app/routers/dns_checks.py's list_latest_checks."""
-    latest_ts = (
-        select(func.max(DnsCheckResult.checked_at)).where(DnsCheckResult.domain_id == domain_id).scalar_subquery()
-    )
-    check_rows = (
-        (
-            await db.execute(
-                select(DnsCheckResult).where(DnsCheckResult.domain_id == domain_id, DnsCheckResult.checked_at == latest_ts)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    findings_by_type: dict[CheckType, list[DnsCheckResult]] = {}
-    for row in check_rows:
-        findings_by_type.setdefault(row.check_type, []).append(row)
-    return findings_by_type
+    return await list_dns_check_results_at_latest_run(db, domain_id)
 
 
 async def compute_domain_rating(
@@ -142,14 +93,7 @@ async def domain_policy_readiness(
     if domain.verification_status != DomainVerificationStatus.verified:
         return PolicyReadiness(False, False, None, None, None, 0)
 
-    latest_policy = (
-        await db.execute(
-            select(DmarcAggregateReport.policy_p)
-            .where(DmarcAggregateReport.domain_id == domain.id)
-            .order_by(DmarcAggregateReport.received_at.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
+    latest_policy = await latest_published_policy_for_domain(db, domain.id)
     next_rung = _NEXT_POLICY_RUNG.get((latest_policy or "").lower())
     if next_rung is None:
         return PolicyReadiness(False, False, latest_policy, None, None, 0)
@@ -175,15 +119,7 @@ async def policy_stability_days(db: AsyncSession, domain_id: uuid.UUID, max_days
     disagree on policy_p (e.g. a same-day DNS change) breaks the streak,
     same as a day at a genuinely different policy would."""
     since = datetime.now(timezone.utc) - timedelta(days=max_days)
-    day_col = func.date_trunc("day", DmarcAggregateReport.date_range_begin)
-    rows = (
-        await db.execute(
-            select(day_col, DmarcAggregateReport.policy_p)
-            .where(DmarcAggregateReport.domain_id == domain_id, DmarcAggregateReport.date_range_begin >= since)
-            .distinct()
-            .order_by(day_col.desc())
-        )
-    ).all()
+    rows = await policy_p_by_day_since(db, domain_id, since)
     if not rows:
         return 0
 

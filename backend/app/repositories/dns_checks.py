@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.dns_check import DnsCheckResult
+from app.models.enums import CheckType
 from app.models.tls_rpt import TlsRptReport
 
 
@@ -34,6 +35,50 @@ async def list_latest_check_results(db: AsyncSession, domain_id: UUID) -> Sequen
         select(DnsCheckResult)
         .where(DnsCheckResult.domain_id == domain_id, DnsCheckResult.checked_at == latest_ts)
         .order_by(DnsCheckResult.check_type, DnsCheckResult.subject.nulls_first())
+    )
+    return result.scalars().all()
+
+
+async def list_dns_check_results_at_latest_run(db: AsyncSession, domain_id: UUID) -> dict[CheckType, list[DnsCheckResult]]:
+    """Every DnsCheckResult row from the domain's most recent recheck,
+    grouped by check_type. Used by domain_rating.py's
+    latest_findings_by_type (in turn called from compute_domain_rating),
+    not by app/routers/domains.py directly.
+
+    Reuses list_latest_check_results for the actual query rather than
+    re-running the same max(checked_at) lookup, so there's exactly one
+    query for "every row from the domain's latest recheck" — this just
+    regroups its flat, ordered result into a dict."""
+    check_rows = await list_latest_check_results(db, domain_id)
+    findings_by_type: dict[CheckType, list[DnsCheckResult]] = {}
+    for row in check_rows:
+        findings_by_type.setdefault(row.check_type, []).append(row)
+    return findings_by_type
+
+
+async def latest_dns_check_results_of_type_for_domain(
+    db: AsyncSession, domain_id: UUID, check_type: CheckType
+) -> Sequence[DnsCheckResult]:
+    """Directly surfaces the existing finding for one check_type from the
+    last check run — used by action_queue/rules.py's spf_lookup_limit_risk.
+    Deliberately narrower than list_dns_check_results_at_latest_run (which
+    returns every check_type): that function's other caller
+    (domain_rating.py, and via it app/routers/domains.py) genuinely needs
+    every type at once, but this caller only ever wants one, so a separate
+    narrow query avoids fetching and discarding unrelated check types on
+    every action-queue evaluation (which runs per-domain, potentially in a
+    loop over every domain in an org)."""
+    latest_ts = (
+        select(func.max(DnsCheckResult.checked_at))
+        .where(DnsCheckResult.domain_id == domain_id, DnsCheckResult.check_type == check_type)
+        .scalar_subquery()
+    )
+    result = await db.execute(
+        select(DnsCheckResult).where(
+            DnsCheckResult.domain_id == domain_id,
+            DnsCheckResult.check_type == check_type,
+            DnsCheckResult.checked_at == latest_ts,
+        )
     )
     return result.scalars().all()
 
