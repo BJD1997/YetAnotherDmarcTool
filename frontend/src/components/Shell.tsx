@@ -1,11 +1,11 @@
 import { useState, type ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { LayoutDashboard, Globe, Users, Building2, LogOut, Menu, X, Settings } from "lucide-react";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { useCurrentOrganization } from "../hooks/useOrganization";
-import { queryKeys } from "../hooks/queryKeys";
+import { useHealth } from "../hooks/useOverviewResources";
 import ThemeToggle from "./ThemeToggle";
 
 export default function Shell({ children }: { children: ReactNode }) {
@@ -21,11 +21,7 @@ export default function Shell({ children }: { children: ReactNode }) {
   const canSeeAdmin = !!(org?.is_operator && user?.role === "org_admin");
 
   // Shown to every user, not just admins — /api/health needs no auth.
-  const { data: health } = useQuery({
-    queryKey: queryKeys.health,
-    queryFn: () => api.get<{ version: string }>("/health"),
-    staleTime: 5 * 60 * 1000,
-  });
+  const { data: health } = useHealth();
 
   async function handleLogout() {
     try {

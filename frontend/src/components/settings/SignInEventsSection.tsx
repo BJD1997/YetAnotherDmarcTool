@@ -1,22 +1,5 @@
 import { useState } from "react";
-import { useInfiniteQuery } from "@tanstack/react-query";
-import { api } from "../../api/client";
-
-interface SignInEvent {
-  id: string;
-  created_at: string;
-  result: "success" | "failure";
-  auth_method: "entra" | "local";
-  email: string | null;
-  failure_reason: string | null;
-  ip_address: string | null;
-  user_agent: string | null;
-}
-
-interface SignInEventsPage {
-  events: SignInEvent[];
-  has_more: boolean;
-}
+import { useSignInEvents } from "../../hooks/useSignInEvents";
 
 const LIMIT = 50;
 
@@ -29,19 +12,7 @@ export default function SignInEventsSection() {
   if (authMethodFilter) params.set("auth_method", authMethodFilter);
   const filterQS = params.toString();
 
-  const query = useInfiniteQuery({
-    queryKey: ["sign-in-events", filterQS],
-    queryFn: ({ pageParam }: { pageParam: string | undefined }) => {
-      const qs = new URLSearchParams(filterQS);
-      if (pageParam) qs.set("before_id", pageParam);
-      return api.get<SignInEventsPage>(`/sign-in-events?${qs.toString()}`);
-    },
-    initialPageParam: undefined as string | undefined,
-    getNextPageParam: (lastPage) => {
-      if (!lastPage.has_more) return undefined;
-      return lastPage.events[lastPage.events.length - 1]?.id;
-    },
-  });
+  const query = useSignInEvents(filterQS);
 
   const events = query.data?.pages.flatMap((page) => page.events) ?? [];
 

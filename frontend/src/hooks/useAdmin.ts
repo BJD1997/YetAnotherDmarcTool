@@ -1,4 +1,4 @@
-import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type UseQueryOptions } from "@tanstack/react-query";
 
 import { api } from "../api/client";
 import { queryKeys } from "./queryKeys";
@@ -41,6 +41,25 @@ export interface UpdateStatus {
   is_dev_build: boolean;
 }
 
+export interface AdminJobRun {
+  id: string;
+  job_type: string;
+  organization_id: string | null;
+  domain_id: string | null;
+  status: "success" | "failure";
+  started_at: string;
+  finished_at: string | null;
+  error_message: string | null;
+  stats: Record<string, unknown> | null;
+}
+
+export interface AdminJobRunsSummary {
+  last_failure: { job_type: string; organization_id: string | null; started_at: string; error_message: string | null } | null;
+  success_rate_pct_24h: number | null;
+  latest_mailbox_poll_at: string | null;
+  reports_processed_today: number;
+}
+
 export function useAdminOrganizations() {
   return useQuery({
     queryKey: queryKeys.admin.organizations,
@@ -56,4 +75,77 @@ export function useAdminUpdates(options: AdminUpdatesOptions = {}) {
     queryFn: () => api.get<UpdateStatus>("/admin/updates"),
     ...options,
   });
+}
+
+export function useAdminJobRunsSummary() {
+  return useQuery({ queryKey: queryKeys.admin.jobRunsSummary, queryFn: () => api.get<AdminJobRunsSummary>("/admin/job-runs/summary") });
+}
+
+export function useAdminJobRuns(filters: string) {
+  return useQuery({ queryKey: queryKeys.admin.jobRuns(filters), queryFn: () => api.get<AdminJobRun[]>(`/admin/job-runs?${filters}`) });
+}
+
+function useInvalidateAdminOrganizations() {
+  const queryClient = useQueryClient();
+  return () => queryClient.invalidateQueries({ queryKey: queryKeys.admin.organizations });
+}
+
+export function useCreateAdminOrganization(onSuccess?: () => void, onError?: (error: Error) => void) {
+  const invalidate = useInvalidateAdminOrganizations();
+  return useMutation({
+    mutationFn: (body: { name: string; entra_tenant_id: string | null }) => api.post<AdminOrganization>("/admin/organizations", body),
+    onSuccess: () => { invalidate(); onSuccess?.(); },
+    onError,
+  });
+}
+
+export function useUpdateAdminOrganization(orgId: string) {
+  const invalidate = useInvalidateAdminOrganizations();
+  return useMutation({
+    mutationFn: (body: Partial<Pick<AdminOrganization, "entra_tenant_id" | "status">>) => api.patch<AdminOrganization>(`/admin/organizations/${orgId}`, body),
+    onSuccess: invalidate,
+  });
+}
+
+export function useSetAdminMailboxConnection(orgId: string) {
+  const invalidate = useInvalidateAdminOrganizations();
+  return useMutation({
+    mutationFn: (body: { mailbox_address: string; consent_status?: string }) => api.post(`/admin/organizations/${orgId}/mailbox-connection`, body),
+    onSuccess: invalidate,
+  });
+}
+
+export function useCreateAdminUser(orgId: string, onSuccess?: (result: { setup_link: string }) => void, onError?: (error: Error) => void) {
+  return useMutation({
+    mutationFn: (email: string) => api.post<{ setup_link: string }>(`/admin/organizations/${orgId}/users`, { email }),
+    onSuccess,
+    onError,
+  });
+}
+
+export function useDeleteAdminOrganization(orgId: string) {
+  const invalidate = useInvalidateAdminOrganizations();
+  return useMutation({ mutationFn: () => api.delete(`/admin/organizations/${orgId}`), onSuccess: invalidate });
+}
+
+export function useChangeAdminPassword(onSuccess?: () => void, onError?: (error: Error) => void) {
+  return useMutation({
+    mutationFn: (body: { current_password: string; new_password: string }) => api.post("/admin/change-password", body),
+    onSuccess,
+    onError,
+  });
+}
+
+export function useAdminUpdateActions() {
+  const queryClient = useQueryClient();
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.admin.updates });
+  const setPrereleases = useMutation({
+    mutationFn: (include: boolean) => api.patch<UpdateStatus>("/admin/updates", { include_prereleases: include }),
+    onSuccess: async () => { await api.post("/admin/updates/check-now"); await invalidate(); },
+  });
+  return {
+    setPrereleases,
+    checkNow: async () => { await api.post("/admin/updates/check-now"); await invalidate(); },
+    triggerUpdate: () => api.post("/admin/updates/trigger"),
+  };
 }

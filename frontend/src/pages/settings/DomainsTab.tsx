@@ -1,10 +1,8 @@
 import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
-import { api, ApiError } from "../../api/client";
-import type { DetectedDomain, Domain } from "../../api/types";
+import { ApiError } from "../../api/client";
 import AddDomainForm from "../../components/settings/AddDomainForm";
-import { queryKeys } from "../../hooks/queryKeys";
+import { useAddDetectedDomain, useDetectedDomains, useDismissDetectedDomain } from "../../hooks/useDetectedDomains";
 
 export default function DomainsTab() {
   return (
@@ -18,35 +16,18 @@ export default function DomainsTab() {
 }
 
 function DetectedDomains() {
-  const queryClient = useQueryClient();
-  const { data: detected, isLoading } = useQuery({
-    queryKey: ["detected-domains"],
-    queryFn: () => api.get<DetectedDomain[]>("/dmarc/detected-domains"),
-  });
+  const { data: detected, isLoading } = useDetectedDomains();
   const [error, setError] = useState<string | null>(null);
 
-  const addDetected = useMutation({
-    mutationFn: (item: DetectedDomain) =>
-      api.post<Domain & { reattributed_reports: number; reattributed_records: number }>("/domains", {
-        name: item.name,
-        parent_domain_id: item.suggested_parent_id,
-      }),
-    onSuccess: () => {
-      setError(null);
-      queryClient.invalidateQueries({ queryKey: queryKeys.domains.all });
-      queryClient.invalidateQueries({ queryKey: queryKeys.detectedDomains });
-    },
-    onError: (err) => setError(err instanceof ApiError ? err.message : "failed to add domain"),
-  });
+  const addDetected = useAddDetectedDomain(
+    () => setError(null),
+    (err) => setError(err instanceof ApiError ? err.message : "failed to add domain"),
+  );
 
-  const dismissDetected = useMutation({
-    mutationFn: (item: DetectedDomain) => api.post<void>(`/dmarc/detected-domains/${encodeURIComponent(item.name)}/dismiss`),
-    onSuccess: () => {
-      setError(null);
-      queryClient.invalidateQueries({ queryKey: queryKeys.detectedDomains });
-    },
-    onError: (err) => setError(err instanceof ApiError ? err.message : "failed to dismiss"),
-  });
+  const dismissDetected = useDismissDetectedDomain(
+    () => setError(null),
+    (err) => setError(err instanceof ApiError ? err.message : "failed to dismiss"),
+  );
 
   if (isLoading || !detected || detected.length === 0) return null;
 

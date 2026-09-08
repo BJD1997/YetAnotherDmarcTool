@@ -1,18 +1,13 @@
 import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Mail, RefreshCw, ChevronDown, ChevronUp, History } from "lucide-react";
-import { api, ApiError } from "../../api/client";
-import type { MailboxConnectionStatus, MailboxJobRun } from "../../api/dmarc";
+import { ApiError } from "../../api/client";
 import { ReportFreshnessValue } from "../overview/widgets";
-import { queryKeys } from "../../hooks/queryKeys";
-import { useMailboxConnection } from "../../hooks/useMailboxConnection";
+import { useMailboxConnection, useMailboxJobRuns, useResyncMailbox, useSetMailboxConnection } from "../../hooks/useMailboxConnection";
 import { useCurrentOrganization } from "../../hooks/useOrganization";
 
 // Shared between Settings.tsx and the onboarding wizard — one implementation
 // of the mailbox-connect mutation/UI, not two.
 export default function MailboxConnectionSection({ canManage }: { canManage: boolean }) {
-  const queryClient = useQueryClient();
-
   const { data: org } = useCurrentOrganization();
 
   // pollingSince drives a short-lived refetchInterval right after a
@@ -39,23 +34,17 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
   const [showLinks, setShowLinks] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
 
-  const setConnection = useMutation({
-    mutationFn: () => api.put<MailboxConnectionStatus>("/mailbox-connection", { mailbox_address: mailbox }),
-    onSuccess: () => {
+  const setConnection = useSetMailboxConnection(
+    () => {
       setSaveError(null);
       setEditing(false);
       setMailbox("");
-      queryClient.invalidateQueries({ queryKey: queryKeys.mailboxConnection.current });
-      queryClient.invalidateQueries({ queryKey: queryKeys.onboarding.status });
       setPollingSince(Date.now());
     },
-    onError: (err) => setSaveError(err instanceof ApiError ? err.message : "failed to save mailbox"),
-  });
+    (err) => setSaveError(err instanceof ApiError ? err.message : "failed to save mailbox"),
+  );
 
-  const resync = useMutation({
-    mutationFn: () => api.post("/mailbox-connection/resync"),
-    onSuccess: () => setPollingSince(Date.now()),
-  });
+  const resync = useResyncMailbox(() => setPollingSince(Date.now()));
 
   const consentLinks = org?.entra_consent_urls;
   const consentGuidance = consentLinks && (
@@ -122,7 +111,7 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              setConnection.mutate();
+              setConnection.mutate(mailbox);
             }}
             className="field-row"
           >
@@ -152,7 +141,7 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            setConnection.mutate();
+            setConnection.mutate(mailbox);
           }}
           className="field-row"
         >
@@ -246,10 +235,7 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
 }
 
 function RecentSyncs() {
-  const { data, isLoading } = useQuery({
-    queryKey: ["mailbox-job-runs"],
-    queryFn: () => api.get<MailboxJobRun[]>("/mailbox-connection/job-runs?limit=15"),
-  });
+  const { data, isLoading } = useMailboxJobRuns();
 
   return (
     <div className="table-wrap" style={{ marginTop: "0.75rem" }}>

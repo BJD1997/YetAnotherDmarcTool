@@ -1,10 +1,9 @@
 import { useEffect, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
 import { X, Copy, RefreshCw, Check, Plus } from "lucide-react";
-import { api, ApiError } from "../../api/client";
-import type { TlsRptBuilderData } from "../../api/dnsChecks";
+import { ApiError } from "../../api/client";
 import { useCurrentOrganization } from "../../hooks/useOrganization";
 import { useClipboardFeedback } from "../../hooks/useClipboardFeedback";
+import { useRequestHostedReportAddress, useTlsRptPolicyBuilder } from "../../hooks/usePolicyBuilders";
 
 const RUA_STATUS_TEXT: Record<string, { text: string; role: "good" | "warning" | "critical" | "neutral" }> = {
   correct: { text: "Reports are reaching your configured mailbox", role: "good" },
@@ -29,10 +28,7 @@ function parseRuaUris(value: string | undefined): string[] {
 }
 
 export default function TlsRptPolicyBuilder({ domainId, domainName, onClose }: { domainId: string; domainName: string; onClose: () => void }) {
-  const { data, isLoading, refetch, isFetching } = useQuery({
-    queryKey: ["tls-rpt-builder", domainId],
-    queryFn: () => api.get<TlsRptBuilderData>(`/domains/${domainId}/dns/tls-rpt-builder`),
-  });
+  const { data, isLoading, refetch, isFetching } = useTlsRptPolicyBuilder(domainId);
   const { data: org } = useCurrentOrganization();
   const hostedMailboxAvailable = !org?.entra_tenant_id || org?.hosted_mailbox_opt_in;
 
@@ -42,14 +38,9 @@ export default function TlsRptPolicyBuilder({ domainId, domainName, onClose }: {
   const [hostedAddressError, setHostedAddressError] = useState<string | null>(null);
   const [authWarning, setAuthWarning] = useState<string | null>(null);
 
-  const requestHostedAddress = useMutation({
-    mutationFn: () =>
-      api.post<{
-        hosted_report_address: string;
-        authorization_record_status: "created" | "already_exists" | "unconfigured" | "error";
-        authorization_record_detail: string | null;
-      }>(`/domains/${domainId}/hosted-report-address`),
-    onSuccess: (result) => {
+  const requestHostedAddress = useRequestHostedReportAddress(
+    domainId,
+    (result) => {
       setHostedAddressError(null);
       setHostedAddress(result.hosted_report_address);
       const uri = `mailto:${result.hosted_report_address}`;
@@ -57,8 +48,8 @@ export default function TlsRptPolicyBuilder({ domainId, domainName, onClose }: {
       const needsAttention = result.authorization_record_status === "unconfigured" || result.authorization_record_status === "error";
       setAuthWarning(needsAttention ? result.authorization_record_detail : null);
     },
-    onError: (err) => setHostedAddressError(err instanceof ApiError ? err.message : "couldn't generate a hosted address"),
-  });
+    (err) => setHostedAddressError(err instanceof ApiError ? err.message : "couldn't generate a hosted address"),
+  );
 
   // Seed once, when data first loads: the org mailbox plus whatever else is
   // already published (mailto: or https:) that isn't that same mailbox.

@@ -1,20 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, ArrowRight, RefreshCw, CheckCircle2, KeyRound, Users, ShieldCheck } from "lucide-react";
-import { api, ApiError } from "../api/client";
-import type { Domain, VerifyDomainResponse } from "../api/types";
+import { ApiError } from "../api/client";
+import type { Domain } from "../api/types";
 import type { OnboardingStatus } from "../api/onboarding";
-import type { CheckResult } from "../api/dnsChecks";
 import MailboxConnectionSection from "../components/settings/MailboxConnectionSection";
 import AddDomainForm from "../components/settings/AddDomainForm";
 import PolicyBuilder from "../components/policy-builder/PolicyBuilder";
 import { MailboxHealthWidget } from "../components/overview/widgets";
-import { queryKeys } from "../hooks/queryKeys";
-import { useDomains } from "../hooks/useDomains";
+import { useDomains, useVerifyDomain } from "../hooks/useDomains";
 import { useMailboxConnection } from "../hooks/useMailboxConnection";
-import { useOnboardingStatus } from "../hooks/useOnboarding";
+import { useGenerateHostedReportAddress, useOnboardingStatus } from "../hooks/useOnboarding";
 import { useCurrentOrganization } from "../hooks/useOrganization";
+import { useRecheckDns } from "../hooks/useDnsChecks";
+import { useRuaCheck } from "../hooks/useDomainInsights";
 
 const STEP_LABELS = ["Welcome", "Mailbox", "Domain", "Verify", "DNS baseline", "Reporting", "Waiting room"];
 
@@ -213,11 +212,11 @@ function HostedAddressPreview({ domain }: { domain: Domain }) {
   const [error, setError] = useState<string | null>(null);
   const requestedFor = useRef<string | null>(null);
 
-  const generate = useMutation({
-    mutationFn: () => api.post<{ hosted_report_address: string }>(`/domains/${domain.id}/hosted-report-address`),
-    onSuccess: (result) => setAddress(result.hosted_report_address),
-    onError: (err) => setError(err instanceof ApiError ? err.message : "couldn't generate a hosted address"),
-  });
+  const generate = useGenerateHostedReportAddress(
+    domain.id,
+    setAddress,
+    (err) => setError(err instanceof ApiError ? err.message : "couldn't generate a hosted address"),
+  );
 
   useEffect(() => {
     if (!domain.hosted_report_address && requestedFor.current !== domain.id) {
@@ -248,15 +247,8 @@ function HostedAddressPreview({ domain }: { domain: Domain }) {
 }
 
 function VerifyStep({ domain, onBack, onNext }: { domain: Domain | undefined; onBack: () => void; onNext: () => void }) {
-  const queryClient = useQueryClient();
   const [showBuilder, setShowBuilder] = useState(false);
-  const verifyDomain = useMutation({
-    mutationFn: () => api.post<VerifyDomainResponse>(`/domains/${domain!.id}/verify`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.domains.all });
-      queryClient.invalidateQueries({ queryKey: queryKeys.onboarding.status });
-    },
-  });
+  const verifyDomain = useVerifyDomain(domain?.id ?? "");
 
   if (!domain) {
     return <p className="muted">No domain to verify yet — go back and add one first.</p>;
@@ -332,10 +324,7 @@ function VerifyStep({ domain, onBack, onNext }: { domain: Domain | undefined; on
 
 function BaselineStep({ domain, onBack, onNext }: { domain: Domain | undefined; onBack: () => void; onNext: () => void }) {
   const [ranOnce, setRanOnce] = useState(false);
-  const recheck = useMutation({
-    mutationFn: () => api.post<CheckResult[]>(`/domains/${domain!.id}/checks/recheck`),
-    onSuccess: () => setRanOnce(true),
-  });
+  const recheck = useRecheckDns(domain?.id ?? "", () => setRanOnce(true));
 
   if (!domain) {
     return <p className="muted">No verified domain yet — go back and verify one first.</p>;
@@ -402,11 +391,7 @@ function BaselineStep({ domain, onBack, onNext }: { domain: Domain | undefined; 
 
 function ReportingStep({ domain, onBack, onNext }: { domain: Domain | undefined; onBack: () => void; onNext: () => void }) {
   const [showBuilder, setShowBuilder] = useState(false);
-  const { data, isLoading } = useQuery({
-    queryKey: ["rua-check", domain?.id],
-    queryFn: () => api.get<{ status: string; org_mailbox_address: string | null }>(`/domains/${domain!.id}/dmarc/rua-check`),
-    enabled: !!domain,
-  });
+  const { data, isLoading } = useRuaCheck(domain?.id);
 
   if (!domain) {
     return <p className="muted">No verified domain yet — go back and verify one first.</p>;

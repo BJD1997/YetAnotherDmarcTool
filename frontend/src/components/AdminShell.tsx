@@ -1,12 +1,12 @@
 import { useState, type ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { Building2, Download, ListChecks, LogOut, Menu, X, ArrowLeft } from "lucide-react";
 import { api } from "../api/client";
 import { useAdminAuth } from "../auth/AdminAuthContext";
 import ThemeToggle from "./ThemeToggle";
 import { useAdminUpdates } from "../hooks/useAdmin";
-import { queryKeys } from "../hooks/queryKeys";
+import { useHealth } from "../hooks/useOverviewResources";
 
 export default function AdminShell({ children }: { children: ReactNode }) {
   const { admin } = useAdminAuth();
@@ -19,11 +19,7 @@ export default function AdminShell({ children }: { children: ReactNode }) {
   // Same public, unauthenticated /api/health source as the main Shell's
   // sidebar footer — shown here too since this is a different component,
   // not covered by that one.
-  const { data: health } = useQuery({
-    queryKey: queryKeys.health,
-    queryFn: () => api.get<{ version: string }>("/health"),
-    staleTime: 5 * 60 * 1000,
-  });
+  const { data: health } = useHealth();
 
   async function handleLogout() {
     // Only a "local" session has anything for /admin/logout to revoke — an

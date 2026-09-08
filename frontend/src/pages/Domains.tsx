@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Eye,
   FileText,
@@ -15,25 +14,21 @@ import {
   ChevronRight,
   Settings as SettingsIcon,
 } from "lucide-react";
-import { api, ApiError } from "../api/client";
-import type { Domain, VerifyDomainResponse } from "../api/types";
+import { ApiError } from "../api/client";
+import type { Domain } from "../api/types";
 import type { RankedDomain } from "../api/overview";
 import { noDataRecommendation } from "../api/overview";
 import { useAuth } from "../auth/AuthContext";
 import { ReportFreshnessValue } from "../components/overview/widgets";
 import { MAIL_PROFILE_LABELS, VerificationBadge } from "../components/domain/shared";
-import { useDomains } from "../hooks/useDomains";
-import { queryKeys } from "../hooks/queryKeys";
+import { useDeleteDomain, useDomains, useRankedDomains, useUpdateDomain, useVerifyDomain } from "../hooks/useDomains";
 
 export default function Domains() {
   const { user } = useAuth();
   const { data: domains, isLoading } = useDomains();
   // Same query key DomainsNeedingAttention already uses on Overview — React
   // Query dedupes the fetch if that page was visited this session.
-  const { data: ranked } = useQuery({
-    queryKey: ["domains-ranked"],
-    queryFn: () => api.get<RankedDomain[]>("/domains/ranked"),
-  });
+  const { data: ranked } = useRankedDomains();
   const rankedById = new Map((ranked ?? []).map((r) => [r.domain_id, r]));
 
   const apexDomains = (domains ?? []).filter((d) => !d.parent_domain_id);
@@ -149,37 +144,30 @@ function DomainRow({
   ranked: RankedDomain | undefined;
   indent: boolean;
 }) {
-  const queryClient = useQueryClient();
   const [showInstructions, setShowInstructions] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const verifyDomain = useMutation({
-    mutationFn: () => api.post<VerifyDomainResponse>(`/domains/${domain.id}/verify`),
-    onSuccess: (res) => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.domains.all });
-      if (!res.verified) setShowInstructions(true);
-    },
+  const verifyDomain = useVerifyDomain(domain.id, (result) => {
+    if (!result.verified) setShowInstructions(true);
   });
 
-  const deleteDomain = useMutation({
-    mutationFn: () => api.delete(`/domains/${domain.id}`),
-    onSuccess: () => {
+  const deleteDomain = useDeleteDomain(
+    domain.id,
+    () => {
       setActionError(null);
-      queryClient.invalidateQueries({ queryKey: queryKeys.domains.all });
     },
-    onError: (err) => setActionError(err instanceof ApiError ? err.message : "failed to remove domain"),
-  });
+    (err) => setActionError(err instanceof ApiError ? err.message : "failed to remove domain"),
+  );
 
-  const toggleActive = useMutation({
-    mutationFn: () => api.patch<Domain>(`/domains/${domain.id}`, { is_active: !domain.is_active }),
-    onSuccess: () => {
+  const toggleActive = useUpdateDomain(
+    domain.id,
+    () => {
       setActionError(null);
       setMenuOpen(false);
-      queryClient.invalidateQueries({ queryKey: queryKeys.domains.all });
     },
-    onError: (err) => setActionError(err instanceof ApiError ? err.message : "failed to update domain"),
-  });
+    (err) => setActionError(err instanceof ApiError ? err.message : "failed to update domain"),
+  );
 
   function handleRemove() {
     setMenuOpen(false);
@@ -301,7 +289,7 @@ function DomainRow({
                   <>
                     <div style={{ position: "fixed", inset: 0, zIndex: 19 }} onClick={() => setMenuOpen(false)} />
                     <div className="dropdown-menu">
-                      <button onClick={() => toggleActive.mutate()} disabled={toggleActive.isPending}>
+                      <button onClick={() => toggleActive.mutate({ is_active: !domain.is_active })} disabled={toggleActive.isPending}>
                         {domain.is_active ? <Archive size={14} /> : <ArchiveRestore size={14} />}
                         {domain.is_active ? "Archive" : "Unarchive"}
                       </button>

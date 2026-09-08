@@ -1,14 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { useOutletContext, useSearchParams } from "react-router-dom";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { api } from "../../api/client";
 import type { Domain } from "../../api/types";
 import type {
   DmarcDayGroup,
   DmarcDayRow,
   DmarcRecordDetail,
-  DmarcReportsByDay,
   DmarcReportsGroupedRow,
   DmarcReportsSummary,
   ReportsFilters,
@@ -16,6 +13,7 @@ import type {
 import { reportsFilterQuery } from "../../api/dmarc";
 import { DATE_RANGE_PRESETS } from "../../api/overview";
 import { Stat } from "../../components/domain/shared";
+import { useDmarcRecordDetail, useDmarcReportsByDay, useDmarcReportsSummary, useGroupedDmarcReports } from "../../hooks/useDmarcReports";
 
 function dispositionRole(disposition: string): "good" | "warning" | "critical" {
   if (disposition === "reject") return "critical";
@@ -83,27 +81,8 @@ export default function DomainReports() {
     setParams(next, { replace: true });
   }
 
-  const summaryQuery = useQuery({
-    queryKey: ["dmarc-reports-summary", domainId, filterQS],
-    queryFn: () => api.get<DmarcReportsSummary>(`/domains/${domainId}/dmarc/reports/summary${filterQS ? `?${filterQS}` : ""}`),
-  });
-
-  const daysQuery = useInfiniteQuery({
-    queryKey: ["dmarc-reports-by-day", domainId, filterQS],
-    queryFn: ({ pageParam }: { pageParam: string | undefined }) => {
-      const qs = new URLSearchParams(filterQS);
-      if (pageParam) qs.set("before_id", pageParam);
-      return api.get<DmarcReportsByDay>(`/domains/${domainId}/dmarc/reports/by-day?${qs.toString()}`);
-    },
-    initialPageParam: undefined as string | undefined,
-    getNextPageParam: (lastPage) => {
-      if (!lastPage.has_more) return undefined;
-      const lastDay = lastPage.days[lastPage.days.length - 1];
-      const lastRow = lastDay?.rows[lastDay.rows.length - 1];
-      return lastRow?.record_id;
-    },
-    enabled: grouping === "day",
-  });
+  const summaryQuery = useDmarcReportsSummary(domainId, filterQS);
+  const daysQuery = useDmarcReportsByDay(domainId, filterQS, grouping === "day");
 
   const days = useMemo<DmarcDayGroup[]>(() => {
     const byDate = new Map<string, DmarcDayGroup>();
@@ -129,18 +108,8 @@ export default function DomainReports() {
     return Array.from(byDate.values());
   }, [daysQuery.data]);
 
-  const groupedQuery = useQuery({
-    queryKey: ["dmarc-reports-grouped", domainId, grouping, filterQS],
-    queryFn: () =>
-      api.get<DmarcReportsGroupedRow[]>(`/domains/${domainId}/dmarc/reports/grouped?by=${grouping}${filterQS ? `&${filterQS}` : ""}`),
-    enabled: grouping !== "day",
-  });
-
-  const detailQuery = useQuery({
-    queryKey: ["dmarc-record-detail", domainId, expandedId],
-    queryFn: () => api.get<DmarcRecordDetail>(`/domains/${domainId}/dmarc/records/${expandedId}`),
-    enabled: expandedId !== null,
-  });
+  const groupedQuery = useGroupedDmarcReports(domainId, grouping, filterQS);
+  const detailQuery = useDmarcRecordDetail(domainId, expandedId);
 
   return (
     <section>

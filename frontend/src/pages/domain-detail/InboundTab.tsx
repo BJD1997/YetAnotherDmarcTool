@@ -1,18 +1,12 @@
 import { useOutletContext } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { api } from "../../api/client";
 import type { Domain } from "../../api/types";
-import type { InboundHostRow } from "../../api/dmarc";
 import InboundTable from "../../components/domain/InboundTable";
+import { useInboundHosts } from "../../hooks/useDomainInsights";
 
 export default function InboundTab() {
   const domain = useOutletContext<Domain>();
 
-  const { data: inboundHosts } = useQuery({
-    queryKey: ["dmarc-inbound", domain.id],
-    queryFn: () => api.get<InboundHostRow[]>(`/domains/${domain.id}/dmarc/inbound`),
-    enabled: domain.verification_status === "verified",
-  });
+  const { data: inboundHosts } = useInboundHosts(domain.id, domain.verification_status === "verified");
 
   if (domain.verification_status !== "verified") {
     return <p className="empty-state">Verify this domain to see inbound mail hosts.</p>;

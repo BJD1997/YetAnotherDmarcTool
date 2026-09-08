@@ -1,16 +1,11 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { api } from "../../api/client";
-import type { ActionItem } from "../../api/overview";
+import { useOverviewActionQueue } from "../../hooks/useOverviewResources";
 import { IssueRow } from "../shared/IssueRow";
 
 const VISIBLE_COUNT = 4;
 
 export default function ActionQueue({ domainId }: { domainId: string | null }) {
-  const { data, isLoading } = useQuery({
-    queryKey: ["action-queue", domainId],
-    queryFn: () => api.get<ActionItem[]>(`/action-queue${domainId ? `?domain_id=${domainId}` : ""}`),
-  });
+  const { data, isLoading } = useOverviewActionQueue(domainId);
 
   const [expanded, setExpanded] = useState(false);
   const items = data ?? [];

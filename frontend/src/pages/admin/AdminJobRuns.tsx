@@ -1,28 +1,7 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
-import { api } from "../../api/client";
 import { ReportFreshnessValue, RiskTile } from "../../components/overview/widgets";
-import { useAdminOrganizations } from "../../hooks/useAdmin";
-
-interface JobRun {
-  id: string;
-  job_type: string;
-  organization_id: string | null;
-  domain_id: string | null;
-  status: "success" | "failure";
-  started_at: string;
-  finished_at: string | null;
-  error_message: string | null;
-  stats: Record<string, unknown> | null;
-}
-
-interface JobRunsSummary {
-  last_failure: { job_type: string; organization_id: string | null; started_at: string; error_message: string | null } | null;
-  success_rate_pct_24h: number | null;
-  latest_mailbox_poll_at: string | null;
-  reports_processed_today: number;
-}
+import { useAdminJobRuns, useAdminJobRunsSummary, useAdminOrganizations } from "../../hooks/useAdmin";
 
 const JOB_TYPES = ["mailbox_poll", "dns_check"];
 const STATUSES = ["success", "failure"];
@@ -43,10 +22,7 @@ export default function AdminJobRuns() {
   const { data: orgs } = useAdminOrganizations();
   const orgNameById = new Map((orgs ?? []).map((o) => [o.id, o.name]));
 
-  const { data: summary } = useQuery({
-    queryKey: ["admin-job-runs-summary"],
-    queryFn: () => api.get<JobRunsSummary>("/admin/job-runs/summary"),
-  });
+  const { data: summary } = useAdminJobRunsSummary();
 
   const params = new URLSearchParams({ limit: String(limit) });
   if (orgFilter) params.set("organization_id", orgFilter);
@@ -54,10 +30,7 @@ export default function AdminJobRuns() {
   if (statusFilter) params.set("status", statusFilter);
   if (sinceFilter) params.set("since_days", sinceFilter);
 
-  const { data: runs, isLoading, isFetching, refetch } = useQuery({
-    queryKey: ["admin-job-runs", params.toString()],
-    queryFn: () => api.get<JobRun[]>(`/admin/job-runs?${params.toString()}`),
-  });
+  const { data: runs, isLoading, isFetching, refetch } = useAdminJobRuns(params.toString());
 
   return (
     <section>

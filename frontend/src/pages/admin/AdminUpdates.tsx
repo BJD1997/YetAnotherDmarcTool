@@ -1,36 +1,22 @@
 import { useEffect, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "../../api/client";
-import { queryKeys } from "../../hooks/queryKeys";
-import { useAdminUpdates, type UpdateStatus } from "../../hooks/useAdmin";
+import { useAdminUpdateActions, useAdminUpdates } from "../../hooks/useAdmin";
 
 type UpdatePhase = "idle" | "checking" | "updating" | "success" | "error";
 
 export default function AdminUpdates() {
-  const queryClient = useQueryClient();
   const [reviewed, setReviewed] = useState(false);
   const [phase, setPhase] = useState<UpdatePhase>("idle");
   const [error, setError] = useState<string | null>(null);
 
   const { data: status, isLoading } = useAdminUpdates();
-
-  const setPrereleases = useMutation({
-    mutationFn: (include: boolean) => api.patch<UpdateStatus>("/admin/updates", { include_prereleases: include }),
-    onSuccess: async () => {
-      // Flipping the toggle alone wouldn't change what "latest" means until
-      // the next scheduled check (up to 6h away) — re-check immediately so
-      // the page reflects the new channel right away.
-      await api.post("/admin/updates/check-now");
-      queryClient.invalidateQueries({ queryKey: queryKeys.admin.updates });
-    },
-  });
+  const { setPrereleases, checkNow: requestCheckNow, triggerUpdate } = useAdminUpdateActions();
 
   async function checkNow() {
     setPhase("checking");
     setError(null);
     try {
-      await api.post("/admin/updates/check-now");
-      await queryClient.invalidateQueries({ queryKey: queryKeys.admin.updates });
+      await requestCheckNow();
       setPhase("idle");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "check failed");
@@ -42,7 +28,7 @@ export default function AdminUpdates() {
     setPhase("updating");
     setError(null);
     try {
-      await api.post("/admin/updates/trigger");
+      await triggerUpdate();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "failed to trigger update");
       setPhase("error");

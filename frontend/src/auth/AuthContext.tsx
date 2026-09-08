@@ -1,8 +1,6 @@
 import { createContext, useContext, type ReactNode } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, ApiError } from "../api/client";
 import type { CurrentUser } from "../api/types";
-import { queryKeys } from "../hooks/queryKeys";
+import { useCurrentUser } from "../hooks/useAuthResources";
 
 interface AuthContextValue {
   user: CurrentUser | null;
@@ -13,19 +11,7 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const queryClient = useQueryClient();
-  const { data, isLoading } = useQuery({
-    queryKey: queryKeys.currentUser,
-    queryFn: async () => {
-      try {
-        return await api.get<CurrentUser>("/auth/me");
-      } catch (err) {
-        if (err instanceof ApiError && err.status === 401) return null;
-        throw err;
-      }
-    },
-    retry: false,
-  });
+  const { data, isLoading, refreshUser } = useCurrentUser();
 
   return (
     <AuthContext.Provider
@@ -40,7 +26,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // exact cause of a reported bug: local-auth sign-in bouncing back
         // to the login form once before landing on the dashboard the
         // second time.
-        refetch: () => queryClient.invalidateQueries({ queryKey: queryKeys.currentUser }),
+        refetch: refreshUser,
       }}
     >
       {children}

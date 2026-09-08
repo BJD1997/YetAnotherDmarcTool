@@ -1,4 +1,4 @@
-import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type UseQueryOptions } from "@tanstack/react-query";
 
 import { api } from "../api/client";
 import type { Organization } from "../api/types";
@@ -11,5 +11,18 @@ export function useCurrentOrganization(options: CurrentOrganizationOptions = {})
     queryKey: queryKeys.organization.current,
     queryFn: () => api.get<Organization>("/organizations/current"),
     ...options,
+  });
+}
+
+export function useUpdateOrganization(onSuccess?: () => void, onError?: (error: Error) => void) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Pick<Organization, "name"> & Partial<Pick<Organization, "spf_all_qualifier_mode" | "hosted_mailbox_opt_in">>) =>
+      api.patch<Organization>("/organizations/current", body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.organization.current });
+      onSuccess?.();
+    },
+    onError,
   });
 }

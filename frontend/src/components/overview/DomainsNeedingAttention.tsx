@@ -1,7 +1,6 @@
-import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { api } from "../../api/client";
 import type { RankedDomain } from "../../api/overview";
+import { useRankedDomains } from "../../hooks/useDomains";
 
 function gradeRole(item: RankedDomain): "good" | "warning" | "serious" | "critical" {
   if (item.score === null) return "critical";
@@ -12,10 +11,7 @@ function gradeRole(item: RankedDomain): "good" | "warning" | "serious" | "critic
 }
 
 export default function DomainsNeedingAttention() {
-  const { data, isLoading } = useQuery({
-    queryKey: ["domains-ranked"],
-    queryFn: () => api.get<RankedDomain[]>("/domains/ranked"),
-  });
+  const { data, isLoading } = useRankedDomains();
 
   const items = (data ?? []).filter((d) => d.not_verified || (d.score !== null && d.score < 90)).slice(0, 8);
 

@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { X, Copy, Check } from "lucide-react";
-import { api } from "../../api/client";
-import type { MtaStsBuilderData, MtaStsMode } from "../../api/dnsChecks";
+import type { MtaStsMode } from "../../api/dnsChecks";
 import { useClipboardFeedback } from "../../hooks/useClipboardFeedback";
+import { useMtaStsPolicyBuilder } from "../../hooks/usePolicyBuilders";
 
 // RFC 8461 §4.1: a leading "*." wildcard matches exactly one label, not
 // "one or more" — *.mx.microsoft covers foo.mx.microsoft but NOT
@@ -53,10 +52,7 @@ export default function MtaStsPolicyBuilder({
   domainName: string;
   onClose: () => void;
 }) {
-  const { data, isLoading } = useQuery({
-    queryKey: ["mta-sts-builder", domainId],
-    queryFn: () => api.get<MtaStsBuilderData>(`/domains/${domainId}/dns/mta-sts-builder`),
-  });
+  const { data, isLoading } = useMtaStsPolicyBuilder(domainId);
 
   const [mode, setMode] = useState<MtaStsMode>("testing");
   const [mxPatternsText, setMxPatternsText] = useState("");

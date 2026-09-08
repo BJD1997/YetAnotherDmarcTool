@@ -1,15 +1,13 @@
 import { useOutletContext, Link } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertOctagon, AlertTriangle, CheckCircle2, Info, ArrowRight } from "lucide-react";
-import { api } from "../../api/client";
-import type { Domain, DomainMailProfile } from "../../api/types";
-import type { DmarcSummary, DomainRating } from "../../api/dmarc";
+import type { Domain } from "../../api/types";
 import type { ActionItem } from "../../api/overview";
 import { MailProfileSelect, Stat } from "../../components/domain/shared";
 import DomainRatingCard from "../../components/domain/DomainRatingCard";
 import { IssueRow } from "../../components/shared/IssueRow";
 import { useAuth } from "../../auth/AuthContext";
-import { queryKeys } from "../../hooks/queryKeys";
+import { useUpdateDomain } from "../../hooks/useDomains";
+import { useActionQueue, useDmarcSummary, useDomainRating } from "../../hooks/useDomainInsights";
 
 const SEVERITY_ICON: Record<ActionItem["severity"], typeof AlertTriangle> = {
   critical: AlertOctagon,
@@ -23,32 +21,10 @@ export default function OverviewTab() {
   const domain = useOutletContext<Domain>();
   const { user } = useAuth();
   const canManage = user?.role === "org_admin";
-  const queryClient = useQueryClient();
-
-  const setMailProfile = useMutation({
-    mutationFn: (mail_profile: DomainMailProfile) => api.patch<Domain>(`/domains/${domain.id}`, { mail_profile }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.domains.detail(domain.id) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.domains.all });
-      queryClient.invalidateQueries({ queryKey: queryKeys.domains.ranked });
-      queryClient.invalidateQueries({ queryKey: queryKeys.actionQueue(domain.id) });
-    },
-  });
-
-  const { data: summary, isLoading: summaryLoading } = useQuery({
-    queryKey: ["dmarc-summary", domain.id],
-    queryFn: () => api.get<DmarcSummary>(`/domains/${domain.id}/dmarc/summary`),
-  });
-
-  const { data: rating } = useQuery({
-    queryKey: ["domain-rating", domain.id],
-    queryFn: () => api.get<DomainRating>(`/domains/${domain.id}/rating`),
-  });
-
-  const { data: fixes } = useQuery({
-    queryKey: ["action-queue", domain.id],
-    queryFn: () => api.get<ActionItem[]>(`/action-queue?domain_id=${domain.id}`),
-  });
+  const setMailProfile = useUpdateDomain(domain.id);
+  const { data: summary, isLoading: summaryLoading } = useDmarcSummary(domain.id);
+  const { data: rating } = useDomainRating(domain.id);
+  const { data: fixes } = useActionQueue(domain.id);
 
   const passRate =
     summary && summary.total_message_count > 0
@@ -67,7 +43,7 @@ export default function OverviewTab() {
           {canManage ? (
             <MailProfileSelect
               value={domain.mail_profile}
-              onChange={(value) => setMailProfile.mutate(value)}
+              onChange={(mail_profile) => setMailProfile.mutate({ mail_profile })}
               className="input"
             />
           ) : (
