@@ -34,6 +34,7 @@ small commits so either effort can proceed or be handed over separately.
 - `adb71e0` — canonical query keys and initial resource hooks (Chunk 2)
 - `a5475ab` — shell, overview, domains, and settings entry points (Chunk 3A)
 - `3fe62f6` — remaining shared-resource migrations and invalidations (Chunk 3B)
+- `4f8fa67` — page organization and shared clipboard interaction (Chunk 4)
 
 ### Chunk 0 — branch, inventory, and handoff log
 
@@ -129,12 +130,40 @@ The remaining migrations from this checkpoint were completed in Chunk 3B below.
 and Vite production build passed. A targeted sweep found no remaining raw keys
 or invalidations for the migrated shared resources.
 
-**Next:** Chunk 4—add characterization tests around the large screens, then
-split only their independent responsibilities and group the admin pages.
+**Next:** Chunk 4—organize the page boundary and extract only responsibilities
+that are genuinely shared.
 
 ### Chunk 4 — focused component and page organization
 
-**Status:** pending
+**Status:** complete
+
+- Grouped the four platform-administration routes under `pages/admin/` and the
+  two report routes under the existing `pages/domain-detail/` feature folder.
+  Routing paths and visible behaviour are unchanged; only source ownership and
+  imports moved.
+- Added `pages/README.md` with the durable organization rule: standalone routes
+  stay flat, related route families get a feature folder, and reusable UI goes
+  under `components/`.
+- Audited the previously identified large screens. `Onboarding`,
+  `DomainReports`, `DnsChecksTab`, `AdminOrganizations`, and `SenderInventory`
+  already divide their screen sections into named local components/functions.
+  Moving every local section to a separate file would increase navigation cost
+  without changing ownership, state boundaries, or testability, so no
+  line-count-only split was made.
+- Found one genuinely repeated interaction during that audit: seven components
+  independently implemented clipboard writes plus a two-second success timer.
+  Added the tested `useClipboardFeedback` hook and migrated every copy site,
+  including the MTA-STS builder's two independent copy buttons.
+- The shared hook also fixes two quiet lifecycle risks in the duplicated code:
+  it cancels the timer when its component unmounts and restarts the timer when
+  the user copies again.
+
+**Verification (Node 20 container):** 5 test files, 22 tests passed; TypeScript
+and Vite production build passed. A source sweep found no direct clipboard
+writes remaining outside the shared hook and its test.
+
+**Next:** Chunk 5—perform the final branch-wide review, run all appropriate
+frontend and repository checks, and finish the Claude handoff/rebase guidance.
 
 ### Chunk 5 — final verification and handoff
 
@@ -150,7 +179,8 @@ split only their independent responsibilities and group the admin pages.
 
 ## Known local-environment issue
 
-The existing frontend `package-lock.json`, `node_modules`, and TypeScript build
-cache were created by a container as user `nobody`, so normal host-side npm
-writes initially failed with `EACCES`. This is workspace ownership, not a source
-or build failure.
+The frontend `package-lock.json`, `node_modules`, and TypeScript build cache had
+been created by a container as user `nobody`, so normal host-side npm writes
+initially failed with `EACCES`. This was workspace ownership, not a source or
+build failure; the stale artifacts were safely recreated during Chunk 1. Keep
+using the repository's Node 20 container for reproducible final verification.
