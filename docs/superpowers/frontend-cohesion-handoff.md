@@ -221,8 +221,12 @@ present at the time but did not prove the frontend hook scope was complete.
   not resource fetching.
 - Expanded hook coverage for canonical parameterized keys and representative
   domain, DNS, and policy-builder resources.
+- Added page-level characterization tests for the Domains screen and the
+  domain Fixes screen, covering hook-provided loading and empty states. This
+  closes the approved testing requirement for both migrated hooks and key
+  pages; the earlier test net covered hooks and API behavior but no page.
 
-**Verification:** 5 frontend test files / 28 tests passed; TypeScript and Vite
+**Verification:** 7 frontend test files / 32 tests passed; TypeScript and Vite
 production build passed. Source-boundary sweeps found no `useQuery`,
 `useInfiniteQuery`, or `useMutation` calls in pages, components, or auth
 providers, and no ad-hoc query-key arrays inside resource hooks. The backend
