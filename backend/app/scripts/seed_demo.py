@@ -41,8 +41,6 @@ import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
-
 from app.config import settings
 from app.db.rls import set_platform_admin_context, set_org_context
 from app.db.session import async_session_factory
@@ -50,8 +48,12 @@ from app.models.dkim_selector import DkimSelector
 from app.models.domain import Domain
 from app.models.enums import AuthMethod, DomainVerificationStatus, SignInResult, SpfAllQualifierMode, UserRole, UserStatus
 from app.models.organization import Organization
-from app.models.sign_in_event import SignInEvent
 from app.models.user import User
+from app.repositories.domains import get_domain_by_org_and_name
+from app.repositories.organizations import get_org_by_demo_flag
+from app.repositories.selectors import known_selector_names
+from app.repositories.sign_in_events import count_sign_in_events_for_org
+from app.repositories.users import get_user_by_org_and_email
 from app.services.auth.password import hash_password
 from app.services.auth.sign_in_log import record_sign_in_event
 
@@ -73,8 +75,7 @@ async def main() -> None:
 
     async with async_session_factory() as db:
         await set_platform_admin_context(db, is_admin=True)
-        result = await db.execute(select(Organization).where(Organization.is_demo_read_only.is_(True)))
-        org = result.scalar_one_or_none()
+        org = await get_org_by_demo_flag(db)
 
         if org is None:
             org = Organization(name="Demo", is_demo_read_only=True)
@@ -116,37 +117,34 @@ async def main() -> None:
             logger.info("set spf_all_qualifier_mode=conditional for demo org")
 
         if settings.hosted_reports_mailbox_address and settings.hosted_reports_address_domain:
-            domain = (
-                await db.execute(select(Domain).where(Domain.organization_id == org.id, Domain.name == DEMO_DOMAIN))
-            ).scalar_one_or_none()
+            domain = await get_domain_by_org_and_name(db, org.id, DEMO_DOMAIN)
             if domain is not None and domain.hosted_report_address is None:
                 mailbox_local_part = settings.hosted_reports_mailbox_address.split("@", 1)[0]
                 domain.hosted_report_address = f"{mailbox_local_part}+{secrets.token_hex(6)}@{settings.hosted_reports_address_domain}"
                 await db.commit()
                 logger.info("generated hosted_report_address %s for demo domain", domain.hosted_report_address)
 
-        domain = (
-            await db.execute(select(Domain).where(Domain.organization_id == org.id, Domain.name == DEMO_DOMAIN))
-        ).scalar_one_or_none()
+        domain = await get_domain_by_org_and_name(db, org.id, DEMO_DOMAIN)
         if domain is not None:
-            existing_selectors = set(
-                (
-                    await db.execute(select(DkimSelector.selector).where(DkimSelector.domain_id == domain.id))
-                ).scalars()
-            )
+            existing_selectors = await known_selector_names(db, domain.id)
             for selector in DKIM_SELECTORS:
                 if selector not in existing_selectors:
                     db.add(DkimSelector(organization_id=org.id, domain_id=domain.id, selector=selector))
                     logger.info("registered DKIM selector %s for demo domain", selector)
             await db.commit()
 
-        existing_events = (
-            await db.execute(select(func.count()).select_from(SignInEvent).where(SignInEvent.organization_id == org.id))
-        ).scalar_one()
+        existing_events = await count_sign_in_events_for_org(db, org.id)
         if existing_events == 0:
-            demo_user = (
-                await db.execute(select(User).where(User.organization_id == org.id, User.email == settings.demo_login_email))
-            ).scalar_one()
+            demo_user = await get_user_by_org_and_email(db, org.id, settings.demo_login_email)
+            # get_user_by_org_and_email returns None on no match (unlike the
+            # original .scalar_one(), which raised) — this branch is only
+            # reached right after org/domain were just resolved and the demo
+            # user was created earlier in this run or a prior one, so a None
+            # here would indicate a genuine bug elsewhere, not an expected
+            # outcome. Assert to preserve the original crash-on-missing
+            # behavior instead of letting demo_user.id below raise a less
+            # obvious AttributeError.
+            assert demo_user is not None
             now = datetime.now(timezone.utc)
             for days_ago, result, reason in [
                 (6, SignInResult.success, None),
