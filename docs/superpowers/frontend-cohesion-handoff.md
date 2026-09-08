@@ -65,7 +65,18 @@ and Vite production build passed; npm audit reported 0 vulnerabilities.
 
 ### Chunk 2 — canonical query keys and shared resource hooks
 
-**Status:** pending
+**Status:** complete
+
+- Added canonical query-key builders for domains, organization, mailbox,
+  onboarding, users, admin organizations, and admin updates.
+- Added shared read hooks for domains, current organization, current mailbox
+  connection, and onboarding status—the four most widely repeated resources.
+- Added a reusable Query Client wrapper for hook tests.
+- Added hook tests proving canonical endpoints, successful result propagation,
+  and parameterized key structure.
+
+**Verification (Node 20 container):** 4 test files, 17 tests passed; TypeScript
+and Vite production build passed.
 
 ### Chunk 3 — page/component hook migrations
 

@@ -1,4 +1,4 @@
-import type { PropsWithChildren, ReactElement } from "react";
+import type { ComponentType, PropsWithChildren, ReactElement } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
@@ -10,6 +10,12 @@ export function makeTestQueryClient(): QueryClient {
       mutations: { retry: false },
     },
   });
+}
+
+export function makeQueryClientWrapper(queryClient = makeTestQueryClient()): ComponentType<PropsWithChildren> {
+  return function QueryClientWrapper({ children }: PropsWithChildren) {
+    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+  };
 }
 
 export function renderWithAppProviders(ui: ReactElement, { route = "/" } = {}) {
