@@ -1,7 +1,7 @@
 # Frontend cohesion refactor — progress and handoff
 
-**Branch:** `refactor/frontend-cohesion`  
-**Base:** `master` at `v0.1.4-rc5` (`69e7d6b`)  
+**Branch:** `refactor/frontend-cohesion`
+**Base:** `master` at `v0.1.4-rc5` (`69e7d6b`)
 **Started:** 2026-09-08
 
 ## Objective
