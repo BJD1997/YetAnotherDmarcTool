@@ -12,6 +12,7 @@ import MtaStsPolicyBuilder from "../../components/policy-builder/MtaStsPolicyBui
 import TlsRptPolicyBuilder from "../../components/policy-builder/TlsRptPolicyBuilder";
 import { queryKeys } from "../../hooks/queryKeys";
 import { useMailboxConnection } from "../../hooks/useMailboxConnection";
+import { useClipboardFeedback } from "../../hooks/useClipboardFeedback";
 
 const CHECK_LABELS: Record<CheckType, string> = {
   spf: "SPF",
@@ -364,7 +365,7 @@ function SuggestedRecord({
   finding: CheckResult;
   orgMailboxAddress: string | null;
 }) {
-  const [copied, setCopied] = useState(false);
+  const { copied, copy: copyToClipboard } = useClipboardFeedback();
   const isMissing = checkType === "mta_sts" ? finding.summary === "No MTA-STS record found" : finding.summary === "No TLS-RPT record found";
   if (!isMissing) return null;
 
@@ -375,10 +376,7 @@ function SuggestedRecord({
       : `v=TLSRPTv1; rua=mailto:${orgMailboxAddress ?? "your-reports-address@yourdomain"}`;
 
   function copy() {
-    navigator.clipboard.writeText(value).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+    void copyToClipboard(value);
   }
 
   return (

@@ -2,12 +2,12 @@ import { useEffect, useState } from "react";
 import { useOutletContext, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { api } from "../api/client";
-import type { Domain } from "../api/types";
-import type { TlsRptFilters, TlsRptReportRow, TlsRptSenderSummary, TlsRptSummary } from "../api/dmarc";
-import { TLS_RPT_RESULT_TYPES, tlsRptFilterQuery } from "../api/dmarc";
-import { DATE_RANGE_PRESETS } from "../api/overview";
-import { Stat } from "../components/domain/shared";
+import { api } from "../../api/client";
+import type { Domain } from "../../api/types";
+import type { TlsRptFilters, TlsRptReportRow, TlsRptSenderSummary, TlsRptSummary } from "../../api/dmarc";
+import { TLS_RPT_RESULT_TYPES, tlsRptFilterQuery } from "../../api/dmarc";
+import { DATE_RANGE_PRESETS } from "../../api/overview";
+import { Stat } from "../../components/domain/shared";
 
 const GROUPINGS = [
   { key: "day", label: "Day" },

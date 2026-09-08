@@ -4,6 +4,7 @@ import { X, Copy, RefreshCw, Check, Plus } from "lucide-react";
 import { api, ApiError } from "../../api/client";
 import type { DmarcPolicy, PolicyBuilderData } from "../../api/policyBuilder";
 import { useCurrentOrganization } from "../../hooks/useOrganization";
+import { useClipboardFeedback } from "../../hooks/useClipboardFeedback";
 
 const RUA_STATUS_TEXT: Record<string, { text: string; role: "good" | "warning" | "critical" | "neutral" }> = {
   correct: { text: "Reports are reaching your connected mailbox", role: "good" },
@@ -52,7 +53,7 @@ export default function PolicyBuilder({ domainId, domainName, onClose }: { domai
   const [advanced, setAdvanced] = useState(false);
   const [adkim, setAdkim] = useState<"r" | "s">("r");
   const [aspf, setAspf] = useState<"r" | "s">("r");
-  const [copied, setCopied] = useState(false);
+  const { copied, copy } = useClipboardFeedback();
   // Which rua= mailto addresses end up in the generated record — the org
   // mailbox plus whichever of the domain's currently-published addresses
   // the user hasn't unchecked. Without this, regenerating the record would
@@ -119,10 +120,7 @@ export default function PolicyBuilder({ domainId, domainName, onClose }: { domai
     : [];
 
   function copyRecord() {
-    navigator.clipboard.writeText(generated).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+    void copy(generated);
   }
 
   function useRecommendation() {

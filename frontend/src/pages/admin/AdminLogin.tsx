@@ -1,10 +1,10 @@
 import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, ApiError } from "../api/client";
-import type { LocalLoginResponse } from "../api/localAuth";
-import { useAdminAuth } from "../auth/AdminAuthContext";
-import EnrollOtpStep from "../components/auth/EnrollOtpStep";
-import RecoveryCodesStep from "../components/auth/RecoveryCodesStep";
+import { api, ApiError } from "../../api/client";
+import type { LocalLoginResponse } from "../../api/localAuth";
+import { useAdminAuth } from "../../auth/AdminAuthContext";
+import EnrollOtpStep from "../../components/auth/EnrollOtpStep";
+import RecoveryCodesStep from "../../components/auth/RecoveryCodesStep";
 
 type Phase = "password" | "otp" | "enroll" | "recovery";
 

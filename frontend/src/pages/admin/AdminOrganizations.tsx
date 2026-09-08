@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Plus, Trash2, UserPlus } from "lucide-react";
-import { api, ApiError } from "../api/client";
-import { useAdminAuth } from "../auth/AdminAuthContext";
-import { ReportFreshnessValue } from "../components/overview/widgets";
-import { queryKeys } from "../hooks/queryKeys";
-import { useAdminOrganizations, type AdminOrganization } from "../hooks/useAdmin";
+import { api, ApiError } from "../../api/client";
+import { useAdminAuth } from "../../auth/AdminAuthContext";
+import { ReportFreshnessValue } from "../../components/overview/widgets";
+import { queryKeys } from "../../hooks/queryKeys";
+import { useAdminOrganizations, type AdminOrganization } from "../../hooks/useAdmin";
+import { useClipboardFeedback } from "../../hooks/useClipboardFeedback";
 
 const STATUS_ROLE: Record<AdminOrganization["status"], "good" | "serious"> = {
   active: "good",
@@ -224,7 +225,7 @@ function CreateLocalUser({ orgId }: { orgId: string }) {
   const [email, setEmail] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [setupLink, setSetupLink] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const { copied, copy: copyToClipboard } = useClipboardFeedback();
 
   const createUser = useMutation({
     mutationFn: () => api.post<{ setup_link: string }>(`/admin/organizations/${orgId}/users`, { email }),
@@ -238,10 +239,7 @@ function CreateLocalUser({ orgId }: { orgId: string }) {
 
   function copy() {
     if (!setupLink) return;
-    navigator.clipboard.writeText(setupLink).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+    void copyToClipboard(setupLink);
   }
 
   return (

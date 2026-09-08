@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useOutletContext, useSearchParams } from "react-router-dom";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { api } from "../api/client";
-import type { Domain } from "../api/types";
+import { api } from "../../api/client";
+import type { Domain } from "../../api/types";
 import type {
   DmarcDayGroup,
   DmarcDayRow,
@@ -12,10 +12,10 @@ import type {
   DmarcReportsGroupedRow,
   DmarcReportsSummary,
   ReportsFilters,
-} from "../api/dmarc";
-import { reportsFilterQuery } from "../api/dmarc";
-import { DATE_RANGE_PRESETS } from "../api/overview";
-import { Stat } from "../components/domain/shared";
+} from "../../api/dmarc";
+import { reportsFilterQuery } from "../../api/dmarc";
+import { DATE_RANGE_PRESETS } from "../../api/overview";
+import { Stat } from "../../components/domain/shared";
 
 function dispositionRole(disposition: string): "good" | "warning" | "critical" {
   if (disposition === "reject") return "critical";

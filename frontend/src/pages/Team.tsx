@@ -8,16 +8,14 @@ import { useAuth } from "../auth/AuthContext";
 import { queryKeys } from "../hooks/queryKeys";
 import { useCurrentOrganization } from "../hooks/useOrganization";
 import { useUsers } from "../hooks/useUsers";
+import { useClipboardFeedback } from "../hooks/useClipboardFeedback";
 
 function ShareSignInLink() {
-  const [copied, setCopied] = useState(false);
+  const { copied, copy: copyToClipboard } = useClipboardFeedback();
   const signInUrl = `${window.location.origin}/login`;
 
   function copy() {
-    navigator.clipboard.writeText(signInUrl).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+    void copyToClipboard(signInUrl);
   }
 
   return (
@@ -47,7 +45,7 @@ function AddLocalTeammate() {
   const [email, setEmail] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [setupLink, setSetupLink] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const { copied, copy: copyToClipboard } = useClipboardFeedback();
 
   const createUser = useMutation({
     mutationFn: () => api.post<TeamMember & { setup_link: string }>("/users", { email }),
@@ -62,10 +60,7 @@ function AddLocalTeammate() {
 
   function copy() {
     if (!setupLink) return;
-    navigator.clipboard.writeText(setupLink).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+    void copyToClipboard(setupLink);
   }
 
   return (

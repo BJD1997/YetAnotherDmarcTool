@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, ApiError } from "../api/client";
-import { queryKeys } from "../hooks/queryKeys";
-import { useAdminUpdates, type UpdateStatus } from "../hooks/useAdmin";
+import { api, ApiError } from "../../api/client";
+import { queryKeys } from "../../hooks/queryKeys";
+import { useAdminUpdates, type UpdateStatus } from "../../hooks/useAdmin";
 
 type UpdatePhase = "idle" | "checking" | "updating" | "success" | "error";
 

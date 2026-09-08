@@ -4,6 +4,7 @@ import { X, Copy, RefreshCw, Check, Plus } from "lucide-react";
 import { api, ApiError } from "../../api/client";
 import type { TlsRptBuilderData } from "../../api/dnsChecks";
 import { useCurrentOrganization } from "../../hooks/useOrganization";
+import { useClipboardFeedback } from "../../hooks/useClipboardFeedback";
 
 const RUA_STATUS_TEXT: Record<string, { text: string; role: "good" | "warning" | "critical" | "neutral" }> = {
   correct: { text: "Reports are reaching your configured mailbox", role: "good" },
@@ -35,7 +36,7 @@ export default function TlsRptPolicyBuilder({ domainId, domainName, onClose }: {
   const { data: org } = useCurrentOrganization();
   const hostedMailboxAvailable = !org?.entra_tenant_id || org?.hosted_mailbox_opt_in;
 
-  const [copied, setCopied] = useState(false);
+  const { copied, copy } = useClipboardFeedback();
   const [selectedUris, setSelectedUris] = useState<string[]>([]);
   const [hostedAddress, setHostedAddress] = useState<string | null>(null);
   const [hostedAddressError, setHostedAddressError] = useState<string | null>(null);
@@ -90,10 +91,7 @@ export default function TlsRptPolicyBuilder({ domainId, domainName, onClose }: {
   const generated = `v=TLSRPTv1; rua=${selectedUris.join(",")}`;
 
   function copyRecord() {
-    navigator.clipboard.writeText(generated).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+    void copy(generated);
   }
 
   return (

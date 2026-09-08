@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
-import { api } from "../api/client";
-import { ReportFreshnessValue, RiskTile } from "../components/overview/widgets";
-import { useAdminOrganizations } from "../hooks/useAdmin";
+import { api } from "../../api/client";
+import { ReportFreshnessValue, RiskTile } from "../../components/overview/widgets";
+import { useAdminOrganizations } from "../../hooks/useAdmin";
 
 interface JobRun {
   id: string;
