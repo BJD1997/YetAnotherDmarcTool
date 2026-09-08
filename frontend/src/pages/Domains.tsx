@@ -22,13 +22,11 @@ import { noDataRecommendation } from "../api/overview";
 import { useAuth } from "../auth/AuthContext";
 import { ReportFreshnessValue } from "../components/overview/widgets";
 import { MAIL_PROFILE_LABELS, VerificationBadge } from "../components/domain/shared";
+import { useDomains } from "../hooks/useDomains";
 
 export default function Domains() {
   const { user } = useAuth();
-  const { data: domains, isLoading } = useQuery({
-    queryKey: ["domains"],
-    queryFn: () => api.get<Domain[]>("/domains"),
-  });
+  const { data: domains, isLoading } = useDomains();
   // Same query key DomainsNeedingAttention already uses on Overview — React
   // Query dedupes the fetch if that page was visited this session.
   const { data: ranked } = useQuery({

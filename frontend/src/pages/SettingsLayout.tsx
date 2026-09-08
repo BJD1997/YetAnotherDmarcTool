@@ -1,16 +1,11 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { api } from "../api/client";
-import type { Organization } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
+import { useCurrentOrganization } from "../hooks/useOrganization";
 
 export default function SettingsLayout() {
   const { user } = useAuth();
   const canManage = user?.role === "org_admin";
-  const { data: org } = useQuery({
-    queryKey: ["organization", "current"],
-    queryFn: () => api.get<Organization>("/organizations/current"),
-  });
+  const { data: org } = useCurrentOrganization();
 
   // Domains/sign-in activity mutate org-wide state and are admin-only,
   // same bar the flat Settings page used to apply per-section — hidden

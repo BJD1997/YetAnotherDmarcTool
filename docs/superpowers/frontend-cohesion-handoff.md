@@ -80,7 +80,24 @@ and Vite production build passed.
 
 ### Chunk 3 — page/component hook migrations
 
-**Status:** pending
+**Status:** in progress
+
+#### Chunk 3A — application shell and overview/domain entry points
+
+- Migrated `Shell`, `SettingsLayout`, `Overview`, `Domains`, `CommandBar`, and
+  `MailboxHealthWidget` from repeated inline queries to the shared resource
+  hooks.
+- Extended organization/mailbox hooks with a deliberately narrow options
+  surface (`enabled`, `retry`, `refetchInterval`) needed to preserve existing
+  caller behaviour; arbitrary query policy remains owned by the hooks.
+- Left unrelated, single-purpose queries in place for later resource-specific
+  hooks rather than mixing migrations in this commit.
+
+**Verification (Node 20 container):** 4 test files, 17 tests passed; TypeScript
+and Vite production build passed.
+
+**Next:** migrate Onboarding, settings components, policy builders, Team, and
+domain-detail consumers; replace raw invalidation arrays with `queryKeys`.
 
 ### Chunk 4 — focused component and page organization
 

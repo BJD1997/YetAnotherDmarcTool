@@ -1,10 +1,8 @@
 import { Link } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
 import { Download, Settings as SettingsIcon } from "lucide-react";
-import { api } from "../../api/client";
 import type { Domain } from "../../api/types";
-import type { MailboxConnectionStatus } from "../../api/dmarc";
 import { DATE_RANGE_PRESETS } from "../../api/overview";
+import { useMailboxConnection } from "../../hooks/useMailboxConnection";
 import { MailboxHealthWidget } from "./widgets";
 
 export default function CommandBar({
@@ -22,11 +20,7 @@ export default function CommandBar({
   onDaysChange: (days: number) => void;
   onExport: () => void;
 }) {
-  const { data: connection, isLoading: mailboxLoading } = useQuery({
-    queryKey: ["mailbox-connection"],
-    queryFn: () => api.get<MailboxConnectionStatus>("/mailbox-connection"),
-    retry: false,
-  });
+  const { data: connection, isLoading: mailboxLoading } = useMailboxConnection();
 
   return (
     <div

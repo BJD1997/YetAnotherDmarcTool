@@ -1,8 +1,6 @@
 import type { ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { api } from "../../api/client";
 import type { MailboxConnectionStatus } from "../../api/dmarc";
-import type { Organization } from "../../api/types";
+import { useCurrentOrganization } from "../../hooks/useOrganization";
 
 const POLICY_RUNGS = ["none", "quarantine", "reject"];
 // Strictest first for the distribution pills — matches how you'd scan "how
@@ -57,10 +55,7 @@ export function MailboxHealthWidget({
   // Onboarding) — react-query dedupes this into the existing fetch rather
   // than adding a new request, so every call site of this widget gets
   // hosted-mailbox awareness for free without threading org through props.
-  const { data: org } = useQuery({
-    queryKey: ["organization", "current"],
-    queryFn: () => api.get<Organization>("/organizations/current"),
-  });
+  const { data: org } = useCurrentOrganization();
 
   // Distinct from "not configured": the query hasn't resolved yet, so
   // `connection` being undefined doesn't yet mean anything — showing "not
