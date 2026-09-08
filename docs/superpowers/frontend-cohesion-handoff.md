@@ -36,6 +36,14 @@ small commits so either effort can proceed or be handed over separately.
 - `3fe62f6` — remaining shared-resource migrations and invalidations (Chunk 3B)
 - `4f8fa67` — page organization and shared clipboard interaction (Chunk 4)
 - `8606db1` — ignore generated Vitest configuration artifacts (final audit)
+- `6120527` — complete the frontend resource-hook boundary (scope correction)
+
+The numbering includes Chunk 0 (inventory) and Chunk 5 (the first verification
+pass). It was therefore not a reliable count of implementation batches. After
+the first handoff, the branch was reopened because the implementation had not
+yet satisfied the approved design's explicit requirement that every page use
+resource hooks instead of inline React Query operations. Chunk 6 records that
+correction; it is required work, not optional follow-up.
 
 ### Chunk 0 — branch, inventory, and handoff log
 
@@ -119,11 +127,9 @@ The remaining migrations from this checkpoint were completed in Chunk 3B below.
   polling and mailbox post-save polling exactly as they behaved before.
 - Replaced raw invalidation arrays for shared resources with `queryKeys`, so a
   future key change cannot leave mutations refreshing a different cache entry.
-- Deliberately left feature-local, parameterized queries (individual report
-  views, charts, filters, and policy-builder payloads) beside their only current
-  consumer. Wrapping those one-for-one would add files without centralizing
-  shared policy; they can move when a second consumer exists or during the
-  focused component splits in Chunk 4.
+- At this checkpoint, feature-local parameterized queries were still beside
+  their consumers. That was later identified as inconsistent with section 4 of
+  the approved design and completed in Chunk 6.
 - Extended resource-hook tests to cover users, admin organizations, admin
   updates, and parameterized domain detail.
 
@@ -166,9 +172,9 @@ writes remaining outside the shared hook and its test.
 **Next:** Chunk 5—perform the final branch-wide review, run all appropriate
 frontend and repository checks, and finish the Claude handoff/rebase guidance.
 
-### Chunk 5 — final verification and handoff
+### Chunk 5 — initial verification and handoff
 
-**Status:** complete
+**Status:** superseded by Chunk 6
 
 - Reviewed the complete `master...refactor/frontend-cohesion` diff for scope,
   route/import moves, query-key usage, generated files, and whitespace errors.
@@ -186,14 +192,48 @@ frontend and repository checks, and finish the Claude handoff/rebase guidance.
   installs from the committed frontend lockfile, builds the SPA, installs the
   backend runtime, and copies the built SPA into the final Python image.
 
-**Final verification:** 5 frontend test files / 22 tests passed; TypeScript and
+**Verification at this checkpoint:** 5 frontend test files / 22 tests passed; TypeScript and
 Vite production build passed; 144 backend tests passed locally with 172
 environment-gated skips; full production container build passed; npm reported
-0 vulnerabilities; final diff and worktree checks passed.
+0 vulnerabilities; diff and worktree checks passed. This verified the code
+present at the time but did not prove the frontend hook scope was complete.
+
+### Chunk 6 — approved-scope reconciliation and full hook boundary
+
+**Status:** complete
+
+- Re-read the implementation against section 4 of the approved cohesion design
+  after the user questioned the deferred-work wording.
+- Confirmed the earlier handoff was wrong to treat single-consumer queries as
+  optional: the approved design explicitly requires all page components to use
+  hooks instead of inline React Query calls.
+- Added resource hooks and canonical keys for DMARC/TLS reports, domain
+  insights, DNS checks and DKIM selectors, detected domains, overview metrics,
+  sender inventory, policy builders, sign-in events, admin job runs/actions,
+  user mutations, organization mutations, mailbox actions/history, and current
+  user/admin resources.
+- Migrated every page-level query, infinite query, mutation, and cache
+  invalidation into the resource-hook layer.
+- Applied the same boundary to reusable data-aware components and auth
+  providers. The only direct React Query use outside `hooks/`, tests, and
+  application bootstrap is `useQueryClient()` in the two shells for clearing
+  the complete cache during logout; that is application lifecycle behavior,
+  not resource fetching.
+- Expanded hook coverage for canonical parameterized keys and representative
+  domain, DNS, and policy-builder resources.
+
+**Verification:** 5 frontend test files / 28 tests passed; TypeScript and Vite
+production build passed. Source-boundary sweeps found no `useQuery`,
+`useInfiniteQuery`, or `useMutation` calls in pages, components, or auth
+providers, and no ad-hoc query-key arrays inside resource hooks. The backend
+regression run again passed all 144 locally runnable tests (172 CI-environment
+integration tests skipped), and the corrected complete production Docker image
+built successfully.
 
 ## Final outcome
 
-The frontend cohesion work is complete on this branch. Shared server-resource
+The frontend cohesion work, including the formerly incomplete hook migration,
+is complete on this branch. Shared server-resource
 policy now has one home in the hooks/query-key layer, repeated consumers use
 that layer, the frontend has a CI regression net, related routes have clear
 source ownership, and repeated clipboard lifecycle code has one tested owner.
@@ -249,7 +289,7 @@ locations, and its own queue/replica/Azure verification completed.
 
 1. Read this file and `docs/superpowers/specs/2026-09-05-cohesion-refactor-design.md`.
 2. Check `git status` and the latest commits on `refactor/frontend-cohesion`.
-3. All planned chunks are complete; begin with branch review/merge and then the
+3. All approved frontend scope is complete; begin with branch review/merge and then the
    beta rebase checklist above. Do not add unrelated scale-out changes to this
    completed frontend branch.
 4. If review requires a correction, record its commit and fresh verification
