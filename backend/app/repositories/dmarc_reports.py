@@ -193,9 +193,6 @@ async def dmarc_disposition_breakdown(db: AsyncSession, domain_id: UUID) -> dict
     return {disposition.value: count for disposition, count in rows.all()}
 
 
-RATING_WINDOW_DAYS = 90
-
-
 async def windowed_totals_excluding_blocked(db: AsyncSession, domain_id: UUID, since: datetime) -> tuple[int, int]:
     """(total_count, dmarc_pass_count) over the window starting at `since`,
     excluding traffic from senders explicitly marked blocked (SenderReview)

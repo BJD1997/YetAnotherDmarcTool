@@ -39,6 +39,7 @@ async def _add_report_and_record(
     date_range_begin: datetime | None = None,
     dkim_result: AuthResult = AuthResult.pass_,
     spf_result: AuthResult = AuthResult.pass_,
+    disposition: Disposition = Disposition.none,
     policy_p: str | None = None,
 ) -> None:
     now = datetime.now(timezone.utc)
@@ -63,7 +64,7 @@ async def _add_report_and_record(
             domain_id=domain.id,
             source_ip=source_ip,
             count=count,
-            disposition=Disposition.none,
+            disposition=disposition,
             dkim_result=dkim_result,
             spf_result=spf_result,
             header_from=domain.name,
@@ -87,6 +88,40 @@ async def test_per_source_ip_volume_breakdown_groups_by_ip(api):
     by_ip = {str(r[0]): r for r in rows}
     assert by_ip["203.0.113.10"][1] == 5
     assert by_ip["198.51.100.20"][1] == 3
+
+
+async def test_per_source_ip_volume_breakdown_returns_correct_value_in_every_column(api):
+    """per_source_ip_volume_breakdown returns an 8-column row
+    (source_ip, volume, spf_pass, dkim_pass, dmarc_pass_count, accepted,
+    quarantined, rejected) that dmarc_analytics.py's service_breakdown
+    destructures positionally — a column reordering bug there would pass
+    silently unless every position is pinned down here. One record with
+    spf pass / dkim fail / disposition=quarantine exercises all three
+    independent axes (auth alignment is OR'd for dmarc_pass_count, so spf
+    and dkim must disagree to prove the OR is wired to the right pair of
+    columns; disposition=quarantine, rather than the default 'none', proves
+    the three disposition buckets land in their own distinct positions)."""
+    _client, owner_factory = api
+    org, _user = await seed_org_and_user(owner_factory)
+    domain = await _add_domain(owner_factory, org)
+    await _add_report_and_record(
+        owner_factory, org, domain, source_ip="192.0.2.40", count=7,
+        spf_result=AuthResult.pass_, dkim_result=AuthResult.fail, disposition=Disposition.quarantine,
+    )
+
+    async with owner_factory() as db:
+        rows = await per_source_ip_volume_breakdown(db, domain.id)
+
+    assert len(rows) == 1
+    source_ip, volume, spf_pass, dkim_pass, dmarc_pass_count, accepted, quarantined, rejected = rows[0]
+    assert str(source_ip) == "192.0.2.40"
+    assert volume == 7
+    assert spf_pass == 7
+    assert dkim_pass == 0
+    assert dmarc_pass_count == 7  # OR: spf passed, so this record counts as a dmarc pass
+    assert accepted == 0
+    assert quarantined == 7
+    assert rejected == 0
 
 
 async def test_per_source_ip_volume_breakdown_since_filter_excludes_old_traffic(api):
@@ -126,8 +161,14 @@ async def test_windowed_totals_excluding_blocked_excludes_blocked_sender_traffic
         dkim_result=AuthResult.fail, spf_result=AuthResult.fail,
     )
     # Blocked source: a large passing volume that must be excluded entirely.
+    # 192.0.2.30 (TEST-NET-1) deliberately, not 198.51.100.x: this test
+    # writes a real service_label into the global, non-RLS-scoped
+    # source_ip_identities cache below, and 198.51.100.20 is hardcoded
+    # elsewhere in the suite (tests/routers/test_dmarc_reports.py) for an
+    # unrelated purpose — reusing it here would leak "Blocked ESP" onto
+    # that IP for the lifetime of the test session.
     await _add_report_and_record(
-        owner_factory, org, domain, source_ip="198.51.100.20", count=100,
+        owner_factory, org, domain, source_ip="192.0.2.30", count=100,
         dkim_result=AuthResult.pass_, spf_result=AuthResult.pass_,
     )
 
@@ -137,7 +178,7 @@ async def test_windowed_totals_excluding_blocked_excludes_blocked_sender_traffic
         # calls may already have a row for this IP — upsert like identify_many
         # itself does, rather than a plain insert that could collide.
         stmt = pg_insert(SourceIpIdentity).values(
-            source_ip="198.51.100.20",
+            source_ip="192.0.2.30",
             service_label="Blocked ESP",
             match_method=SourceMatchMethod.ip_fallback,
             resolved_at=datetime.now(timezone.utc),

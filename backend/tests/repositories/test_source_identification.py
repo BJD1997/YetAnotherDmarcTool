@@ -1,7 +1,6 @@
 from datetime import datetime, timezone
 
 from app.models.enums import SourceMatchMethod
-from app.models.source_ip_identity import SourceIpIdentity
 from app.repositories.source_identification import get_cached_identities, upsert_resolved_identities
 
 

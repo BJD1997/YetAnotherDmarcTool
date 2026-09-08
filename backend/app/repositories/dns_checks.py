@@ -41,20 +41,15 @@ async def list_latest_check_results(db: AsyncSession, domain_id: UUID) -> Sequen
 
 async def list_dns_check_results_at_latest_run(db: AsyncSession, domain_id: UUID) -> dict[CheckType, list[DnsCheckResult]]:
     """Every DnsCheckResult row from the domain's most recent recheck,
-    grouped by check_type. Used by domain_rating.py's compute_domain_rating
-    (via latest_findings_by_type) and app/routers/domains.py directly."""
-    latest_ts = (
-        select(func.max(DnsCheckResult.checked_at)).where(DnsCheckResult.domain_id == domain_id).scalar_subquery()
-    )
-    check_rows = (
-        (
-            await db.execute(
-                select(DnsCheckResult).where(DnsCheckResult.domain_id == domain_id, DnsCheckResult.checked_at == latest_ts)
-            )
-        )
-        .scalars()
-        .all()
-    )
+    grouped by check_type. Used by domain_rating.py's
+    latest_findings_by_type (in turn called from compute_domain_rating),
+    not by app/routers/domains.py directly.
+
+    Reuses list_latest_check_results for the actual query rather than
+    re-running the same max(checked_at) lookup, so there's exactly one
+    query for "every row from the domain's latest recheck" — this just
+    regroups its flat, ordered result into a dict."""
+    check_rows = await list_latest_check_results(db, domain_id)
     findings_by_type: dict[CheckType, list[DnsCheckResult]] = {}
     for row in check_rows:
         findings_by_type.setdefault(row.check_type, []).append(row)
