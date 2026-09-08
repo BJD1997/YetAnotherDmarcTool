@@ -6,11 +6,10 @@ these env vars can be left set across restarts without recreating anything)."""
 import asyncio
 import logging
 
-from sqlalchemy import func, select
-
 from app.config import settings
 from app.db.session import async_session_factory
 from app.models.platform_admin import PlatformAdmin
+from app.repositories.platform_admin import count_platform_admins
 from app.services.auth.password import hash_password
 
 logging.basicConfig(level=logging.INFO)
@@ -19,8 +18,7 @@ logger = logging.getLogger("bootstrap_platform_admin")
 
 async def main() -> None:
     async with async_session_factory() as db:
-        result = await db.execute(select(func.count()).select_from(PlatformAdmin))
-        existing_count = result.scalar_one()
+        existing_count = await count_platform_admins(db)
         if existing_count > 0:
             logger.info("platform_admins already has %d row(s); skipping bootstrap", existing_count)
             return
