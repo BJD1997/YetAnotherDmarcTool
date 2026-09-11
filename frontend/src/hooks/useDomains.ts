@@ -48,6 +48,7 @@ export function useDeleteDomain(domainId: string, onSuccess?: () => void, onErro
     mutationFn: () => api.delete(`/domains/${domainId}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.domains.all });
+      queryClient.invalidateQueries({ queryKey: queryKeys.domains.ranked });
       onSuccess?.();
     },
     onError,
