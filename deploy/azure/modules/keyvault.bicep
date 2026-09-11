@@ -62,7 +62,17 @@ resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = {
     publicNetworkAccess: 'Disabled'
     networkAcls: {
       defaultAction: 'Deny'
-      bypass: 'None'
+      // AzureServices, not None: this same template declares the
+      // Microsoft.KeyVault/vaults/secrets resources below, and it's Resource
+      // Manager's own backend — not the deploying user's network path — that
+      // makes the write calls to create them. With bypass: 'None' those
+      // calls are firewalled off along with everything else and the
+      // deployment fails creating its own secrets. AzureServices exempts
+      // only Azure's trusted control-plane services (ARM included); arbitrary
+      // internet/public traffic is still denied by publicNetworkAccess:
+      // 'Disabled' and defaultAction: 'Deny' above — this is not a relaxation
+      // of the vault's network lockdown.
+      bypass: 'AzureServices'
     }
   }
 }
