@@ -119,6 +119,7 @@ async def rls_sessions(migrated_db):
     async with owner_factory() as owner:
         # Clean slate — cascades to every org-scoped table.
         await owner.execute(text("TRUNCATE organizations CASCADE"))
+        await owner.execute(text("DELETE FROM rate_limit_hits"))
         await owner.commit()
         async with app_factory() as app:
             yield owner, app
@@ -142,6 +143,7 @@ async def app_sessionmaker(migrated_db):
     engine = create_async_engine(_app_url(), poolclass=NullPool)
     async with engine.begin() as conn:
         await conn.execute(text("DELETE FROM background_jobs"))
+        await conn.execute(text("DELETE FROM rate_limit_hits"))
     yield async_sessionmaker(engine, expire_on_commit=False)
     await engine.dispose()
 
@@ -183,6 +185,7 @@ async def api(migrated_db):
 
     async with owner_factory() as owner:
         await owner.execute(text("TRUNCATE organizations CASCADE"))
+        await owner.execute(text("DELETE FROM rate_limit_hits"))
         await owner.commit()
 
     async def _override_get_db():
