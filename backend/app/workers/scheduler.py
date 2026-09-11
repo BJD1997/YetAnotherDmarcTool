@@ -194,11 +194,47 @@ async def main() -> None:
 
     loop.add_signal_handler(signal.SIGTERM, _handle_sigterm)
 
+    # Race stop_event against the tasks themselves finishing, rather than only
+    # awaiting stop_event: before this task, an unhandled exception in any task
+    # (e.g. `_heartbeat_loop`) propagated out of `asyncio.gather(*tasks)`, crashed
+    # the process, and let the orchestrator's restart policy recycle it. Awaiting
+    # stop_event alone would silently swallow that — stop_event only fires on
+    # SIGTERM, so a dead task would just leave the process running as a zombie
+    # (leader.release() never called, no more work claimed) until the health
+    # endpoint eventually goes stale. Wrapping stop_event.wait() in its own task
+    # and racing it against `tasks` restores the old crash-and-restart behavior
+    # for a genuine task failure while keeping the new clean-shutdown path for
+    # SIGTERM.
+    stop_task = asyncio.create_task(stop_event.wait())
     try:
-        await stop_event.wait()
+        done, _pending = await asyncio.wait([stop_task, *tasks], return_when=asyncio.FIRST_COMPLETED)
+
+        # Whichever of stop_task/tasks didn't finish first still needs cancelling
+        # and awaiting — both on the SIGTERM path (stop_task done, every real
+        # task still pending) and on the "a task died" path (one real task done,
+        # stop_task still pending) — before `finally` below releases leadership.
+        if not stop_task.done():
+            stop_task.cancel()
         for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(stop_task, *tasks, return_exceptions=True)
+
+        # If something other than the SIGTERM stop_task finished first, it's a
+        # real task that exited on its own — either it raised (a genuine bug) or
+        # it returned normally (unexpected: every one of these loops runs
+        # `while True`/`while not stop_event.is_set()`, so returning without
+        # stop_event being set shouldn't happen). Either way, propagate so the
+        # process crashes and the orchestrator restarts it, matching what
+        # `asyncio.gather(*tasks)` used to do before this task's SIGTERM handling
+        # was added.
+        for task in done:
+            if task is stop_task or task.cancelled():
+                continue
+            exc = task.exception()
+            if exc is not None:
+                raise exc
+            raise RuntimeError("a worker task exited unexpectedly without stop_event being set")
     finally:
         await leader.release()
 
