@@ -55,11 +55,23 @@ All four subnets in every tier fit comfortably inside that tier's VNet with room
 
 Exact option-label wording is an implementation-plan detail; the control type (radio group, not dropdown) and the "name plus inline description, not name alone" requirement are locked in here.
 
-### 2. Key Vault: private endpoint (supersedes the old public-endpoint-plus-RBAC design)
+### 2. Postgres High Availability — an independent add-on, not tied to any tier
+
+A `postgresHighAvailability` checkbox (`Microsoft.Common.CheckBox`), independent of the `deploymentSize` radio group, controls Postgres Flexible Server's built-in HA. This is deliberately an orthogonal axis, not a fifth tier or a property locked to `large` — availability posture and compute size are different decisions, and coupling them would remove a real, legitimate choice in both directions (a `test` deployer validating failover; a `large` deployer with their own DR strategy skipping it).
+
+**What it actually does, technically:** unchecked → `highAvailability.mode: 'Disabled'` (the old design's only option, and this design's default everywhere). Checked → `highAvailability.mode: 'ZoneRedundant'`, `standbyAvailabilityZone` left unset for Azure to auto-select — Azure then manages a synchronously-replicated standby in a different Availability Zone with automatic failover (typically RPO=0, RTO under ~120s). The app's `DATABASE_URL`/FQDN never changes across a failover, so **no `api`/`worker` code changes are needed** — this is purely a Postgres-module Bicep property. The cheaper `SameZone` mode (protects against node failure, not a zone outage, and works in non-AZ regions) stays available as a manual override via the parameters file/CLI, not exposed as a second wizard control — keeps the Portal UI to one checkbox rather than a tri-state control.
+
+**Description text shown next to the checkbox** (exact wording is an implementation-plan detail, substance locked in here): explains that this adds a synchronously-replicated standby in a second Availability Zone with automatic failover, and states plainly that it **roughly doubles Postgres compute cost** — a visible cost callout, not a silent checkbox.
+
+**Availability-zone region support:** rather than building wizard logic to pre-detect whether the selected region supports Availability Zones (real added complexity — `Microsoft.Solutions.ArmApiControl` region-capability lookups), an incompatible region/HA combination surfaces as Azure's own deployment-time validation error, documented as a known constraint in `deploy/azure/README.md`.
+
+**Interaction with `deploymentSize`:** the checkbox is hidden entirely when `test` is selected — pairing a throwaway trial deployment with a cost roughly double its own baseline doesn't make sense, so the option simply isn't offered there rather than being offered-then-discouraged. Available and unchecked by default for `small`/`medium`/`large`. No other tier-driven parameter needs to change as a direct consequence of toggling it — Postgres HA duplicates whatever SKU/storage the selected tier already specifies; it doesn't require a bigger SKU or affect `api`/`worker` replica counts, backup retention, or Log Analytics retention. If the implementation plan finds a concrete reason a specific pre-fill coupling is actually needed, it can add one — none was identified during design.
+
+### 3. Key Vault: private endpoint (supersedes the old public-endpoint-plus-RBAC design)
 
 A new, non-delegated `keyvault-pe` subnet (private endpoints and service delegation are mutually exclusive on one subnet) hosts a private endpoint for Key Vault, plus a `privatelink.vaultcore.azure.net` private DNS zone and VNet link — mirroring the pattern the network module already uses for Postgres's `privatelink.postgres.database.azure.com` zone. RBAC-based access control (scoped to the apps' user-assigned managed identity) stays as the authorization model; only the network reachability path changes, from "public endpoint, gated by RBAC" to "VNet-private, gated by RBAC."
 
-### 3. Everything else the old design got right, ported with light adaptation
+### 4. Everything else the old design got right, ported with light adaptation
 
 - **VNet + Postgres module structure**: delegated subnets, private DNS zone dependency ordering (the postgres module takes the network module's zone-link output as a parameter specifically so Bicep sequences the zone-VNet link before the server that needs it) — this pattern carries forward unchanged, just re-parametrized by tier.
 - **Container Apps environment + Log Analytics**: unchanged structurally; retention days becomes tier-driven.
@@ -69,10 +81,10 @@ A new, non-delegated `keyvault-pe` subnet (private endpoints and service delegat
 - **`migrate` ACA Job + deploymentScript**: structurally unchanged (creates the `dmarc_app` role, runs Alembic, bootstraps the platform admin, gates the apps starting until it succeeds).
 - **New env vars from sub-project 1 — explicit per-variable decisions, not a blanket carry-forward**: `LEADER_DATABASE_URL` and `DATABASE_READ_URL` are deliberately left unset (no connection pooler or read replica in this design — both default sensibly to the primary connection). `WORKER_CONCURRENCY`/`WORKER_QUEUE_POLL_INTERVAL_SECONDS`/`WORKER_JOB_STALE_SECONDS` stay at their code defaults unless the implementation plan finds a concrete reason a given tier needs different values (e.g., `Large`'s higher `workerMaxReplicas` interacting with the default queue-poll interval) — not wired speculatively.
 
-### 4. New work the old design didn't have
+### 5. New work the old design didn't have
 
 - **`backend/app/scripts/ensure_app_role.py` needs recreating**, not copying — it doesn't exist on the current tree (confirmed by direct check during brainstorming). Managed Postgres Flexible Server has no `docker-entrypoint-initdb.d` equivalent, so the `dmarc_app` role creation the self-hosted path handles via `db/init/01-create-app-role.sh` needs an equivalent one-shot script the `migrate` Job runs first. The implementation plan derives this from `db/init/01-create-app-role.sh`'s current actual SQL (idempotent role creation + password set + `GRANT CONNECT`), not from the old branch's version of the script.
-- **`createUiDefinition.json`'s deployment-size picker** is new UI surface, not present in any form in the old design (which had no SKU/sizing exposure in the Portal wizard at all — those parameters existed in the ARM template but were CLI-only).
+- **`createUiDefinition.json`'s deployment-size picker and HA checkbox** are both new UI surface, not present in any form in the old design (which had no SKU/sizing/HA exposure in the Portal wizard at all — the old ARM template didn't even have `highAvailability` as a parameter, and its sizing-relevant parameters existed but were CLI-only).
 - **Graceful shutdown on SIGTERM** (`app/workers/scheduler.py`): install a `signal.SIGTERM` handler that cancels the running task set so the existing `finally: await leader.release()` actually executes on a normal `docker stop`/ACA revision swap, instead of only on an unhandled crash. This was explicitly parked during sub-project 1's final review and routed here; it's now in scope. Ideally also marks any in-flight job back to `pending` on cancellation rather than leaving it for the stale-job reaper (bounded by `WORKER_JOB_STALE_SECONDS`) to find it later.
 
 ## Testing
@@ -92,9 +104,10 @@ Continues on `v0.1.5-beta` (already has sub-project 1's work merged). This spec'
 - **Bicep API version drift.** This design carries forward the old branch's already-pinned API versions (`Microsoft.App/containerApps@2024-03-01`, `Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01`, etc.) rather than attempting to verify newer ones exist — this environment has no live way to check current Azure API versions. Mitigated by: these were deliberately pinned, reasonably recent versions when chosen, and Azure API versions are backward-compatible within a resource type's stable channel; a stale-but-valid version is a "works, not on the newest features" risk, not a broken-deployment risk.
 - **Never live-deployed.** Both the old design and this port are validated only at compile-time/dry-run within this plan's own execution. The first real deploy remains the true test, same risk the old design carried and disclosed honestly.
 - **Sizing-tier numbers are a first approximation**, not load-tested. They're reasoned defaults (Postgres SKU escalation, ACA replica ceilings, VNet right-sizing per Microsoft's own subnet guidance for the `aca` tier), reviewed and approved during brainstorming, but real usage patterns may reveal a tier's default is meaningfully off in either direction. Low cost if wrong — they're parameters, not structural decisions, and stay user-overridable.
+- **Zone-Redundant HA in a non-AZ region fails at deployment time, not at wizard-selection time.** Deliberately accepted (section 2) rather than building region-capability-aware wizard logic — Azure's own validation error is the failure mode, documented as a known constraint rather than engineered around.
 
 ## Out of scope (tracked elsewhere)
 
-- Multi-region / high-availability Postgres (`highAvailability.mode` stays `Disabled`, matching the old design — not revisited here).
+- Multi-region deployment. Same-region zone-redundant HA is now in scope (section 2) — multi-region (a second deployment in a different Azure region, cross-region replication/failover) is a materially larger undertaking and stays out of scope here.
 - IMAP / Google Workspace ingestion (product roadmap Phase 3).
 - Any application-code change to the worker/queue/rate-limiter (sub-project 1's completed scope).
