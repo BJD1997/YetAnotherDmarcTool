@@ -6,19 +6,16 @@ from sqlalchemy import text
 from app.repositories.jobs import claim_one_job, complete_job, enqueue_job, fail_job, reclaim_stalled_jobs
 
 
-@pytest.fixture(autouse=True)
-async def _clean_background_jobs(api):
-    """background_jobs is not cascaded from organizations (it's worker-scoped,
-    not org-scoped), so truncate it explicitly before each test."""
-    _client, owner_factory = api
+async def _truncate_background_jobs(owner_factory):
+    """Helper to truncate background_jobs table."""
     async with owner_factory() as db:
         await db.execute(text("TRUNCATE background_jobs CASCADE"))
         await db.commit()
-    yield
 
 
 async def test_enqueue_and_claim_one_job(api):
     _client, owner_factory = api
+    await _truncate_background_jobs(owner_factory)
     async with owner_factory() as db:
         await enqueue_job(db, "noop", {"x": 1})
         await db.commit()
@@ -34,12 +31,14 @@ async def test_enqueue_and_claim_one_job(api):
 
 async def test_claim_one_job_returns_none_when_empty(api):
     _client, owner_factory = api
+    await _truncate_background_jobs(owner_factory)
     async with owner_factory() as db:
         assert await claim_one_job(db, "w1") is None
 
 
 async def test_dedupe_key_blocks_duplicate_active_jobs(api):
     _client, owner_factory = api
+    await _truncate_background_jobs(owner_factory)
     async with owner_factory() as db:
         key = f"sweep:{uuid.uuid4()}"
         await enqueue_job(db, "sweep", dedupe_key=key)
@@ -54,6 +53,7 @@ async def test_dedupe_key_blocks_duplicate_active_jobs(api):
 
 async def test_complete_job_marks_done(api):
     _client, owner_factory = api
+    await _truncate_background_jobs(owner_factory)
     async with owner_factory() as db:
         await enqueue_job(db, "noop")
         await db.commit()
@@ -66,6 +66,7 @@ async def test_complete_job_marks_done(api):
 
 async def test_fail_job_retries_then_parks_as_failed(api):
     _client, owner_factory = api
+    await _truncate_background_jobs(owner_factory)
     async with owner_factory() as db:
         await enqueue_job(db, "noop", max_attempts=1)
         await db.commit()
@@ -79,6 +80,7 @@ async def test_fail_job_retries_then_parks_as_failed(api):
 
 async def test_reclaim_stalled_jobs_returns_running_to_pending(api):
     _client, owner_factory = api
+    await _truncate_background_jobs(owner_factory)
     async with owner_factory() as db:
         await enqueue_job(db, "noop")
         await db.commit()
