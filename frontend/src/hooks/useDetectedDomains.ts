@@ -14,6 +14,7 @@ export function useAddDetectedDomain(onSuccess?: () => void, onError?: (error: E
     mutationFn: (item: DetectedDomain) => api.post<Domain & { reattributed_reports: number; reattributed_records: number }>("/domains", { name: item.name, parent_domain_id: item.suggested_parent_id }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.domains.all });
+      queryClient.invalidateQueries({ queryKey: queryKeys.domains.ranked });
       queryClient.invalidateQueries({ queryKey: queryKeys.detectedDomains });
       onSuccess?.();
     },

@@ -36,6 +36,7 @@ export function useVerifyDomain(domainId: string, onSuccess?: (result: VerifyDom
     mutationFn: () => api.post<VerifyDomainResponse>(`/domains/${domainId}/verify`),
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.domains.all });
+      queryClient.invalidateQueries({ queryKey: queryKeys.domains.ranked });
       queryClient.invalidateQueries({ queryKey: queryKeys.onboarding.status });
       onSuccess?.(result);
     },
@@ -83,6 +84,7 @@ export function useCreateDomain(onSuccess?: (domain: Domain & { reattributed_rep
       api.post<Domain & { reattributed_reports: number; reattributed_records: number }>("/domains", body),
     onSuccess: (domain) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.domains.all });
+      queryClient.invalidateQueries({ queryKey: queryKeys.domains.ranked });
       queryClient.invalidateQueries({ queryKey: queryKeys.onboarding.status });
       onSuccess?.(domain);
     },
