@@ -27,8 +27,7 @@ from app.config import settings
 from app.db.rls import set_platform_admin_context
 from app.db.session import async_session_factory
 from app.repositories.mailbox_connections import list_orgs_with_granted_mailbox_connections
-# TODO(Task 6): uncomment once app.services.auth.rate_limit.prune_rate_limit_hits exists
-# from app.services.auth.rate_limit import prune_rate_limit_hits
+from app.services.auth.rate_limit import prune_rate_limit_hits
 from app.services.dns_checks.domain_verification import run_domain_verification_sweep
 from app.services.dns_checks.scheduled_recheck import DNS_CHECK_SWEEP_TICK_SECONDS, run_dns_check_sweep
 from app.services.jobs import queue
@@ -60,8 +59,7 @@ _SINGLETON_INTERVALS = {
     "hosted_reports_poll": HOSTED_REPORTS_POLL_INTERVAL_SECONDS,
     "retention_purge": RETENTION_PURGE_INTERVAL_SECONDS,
     "update_check": UPDATE_CHECK_INTERVAL_SECONDS,
-    # TODO(Task 6): uncomment once app.services.auth.rate_limit.prune_rate_limit_hits exists
-    # "rate_limit_prune": RATE_LIMIT_PRUNE_INTERVAL_SECONDS,
+    "rate_limit_prune": RATE_LIMIT_PRUNE_INTERVAL_SECONDS,
 }
 
 
@@ -85,8 +83,7 @@ def _register_handlers() -> None:
     queue.register_handler("hosted_reports_poll", _ignoring_payload(poll_hosted_reports_mailbox))
     queue.register_handler("retention_purge", _ignoring_payload(run_retention_purge))
     queue.register_handler("update_check", _ignoring_payload(run_update_check))
-    # TODO(Task 6): uncomment once app.services.auth.rate_limit.prune_rate_limit_hits exists
-    # queue.register_handler("rate_limit_prune", _ignoring_payload(prune_rate_limit_hits))
+    queue.register_handler("rate_limit_prune", _ignoring_payload(prune_rate_limit_hits))
 
 
 # --- leader: enqueue recurring work on a cadence ---

@@ -175,8 +175,8 @@ async def api(migrated_db):
     without this reset the 11th test in a session hitting any rate-limited
     auth endpoint from the same simulated client IP gets a spurious 429.
     """
-    login_limiter._hits.clear()
-    otp_limiter._hits.clear()
+    login_limiter._memory._hits.clear()
+    otp_limiter._memory._hits.clear()
 
     owner_engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
     app_engine = create_async_engine(_app_url(), poolclass=NullPool)

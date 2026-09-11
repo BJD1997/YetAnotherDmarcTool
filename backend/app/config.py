@@ -146,6 +146,11 @@ class Settings(BaseSettings):
     worker_job_stale_seconds: int = 1800
     worker_health_port: int = 8080
 
+    # Auth rate-limiter backend: "memory" (per-process, correct for a single api
+    # container — the default) or "postgres" (shared across replicas). See
+    # app/services/auth/rate_limit.py. Switch to "postgres" when running >1 api replica.
+    rate_limit_backend: str = "memory"
+
     @property
     def entra_sso_redirect_uri(self) -> str:
         return f"{self.public_base_url}/api/auth/callback"
