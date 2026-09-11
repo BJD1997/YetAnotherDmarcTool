@@ -140,3 +140,18 @@ async def reclaim_stalled_jobs(db: AsyncSession, stale_seconds: int) -> int:
         {"secs": stale_seconds},
     )
     return result.rowcount or 0
+
+
+async def prune_finished_jobs(db: AsyncSession, max_age_seconds: int) -> int:
+    """Delete 'done' and 'failed' jobs older than max_age_seconds (by
+    updated_at, the last time this row changed status) — run periodically
+    by the `background_jobs_prune` background job. Keeps the table from
+    growing unbounded; nothing else reads a job once it's done or failed."""
+    result = await db.execute(
+        text(
+            "DELETE FROM background_jobs "
+            "WHERE status IN ('done', 'failed') AND updated_at < now() - make_interval(secs => :secs)"
+        ),
+        {"secs": max_age_seconds},
+    )
+    return result.rowcount or 0

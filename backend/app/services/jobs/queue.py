@@ -8,7 +8,15 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 
 from app.db.session import async_session_factory
-from app.repositories.jobs import ClaimedJob, claim_one_job, complete_job, enqueue_job, fail_job, reclaim_stalled_jobs
+from app.repositories.jobs import (
+    ClaimedJob,
+    claim_one_job,
+    complete_job,
+    enqueue_job,
+    fail_job,
+    prune_finished_jobs as _prune_finished_jobs_query,
+    reclaim_stalled_jobs,
+)
 
 logger = logging.getLogger("worker.queue")
 
@@ -55,6 +63,14 @@ async def reclaim_stalled(db, stale_seconds: int) -> int:
     n = await reclaim_stalled_jobs(db, stale_seconds)
     await db.commit()
     return n
+
+
+async def prune_finished_jobs(max_age_seconds: int = 604800) -> None:
+    """Delete done/failed jobs older than max_age_seconds (default 7 days) —
+    run periodically by the `background_jobs_prune` background job."""
+    async with async_session_factory() as db:
+        await _prune_finished_jobs_query(db, max_age_seconds)
+        await db.commit()
 
 
 async def process_next(worker_id: str) -> bool:

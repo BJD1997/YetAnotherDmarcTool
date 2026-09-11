@@ -32,6 +32,7 @@ from app.services.dns_checks.domain_verification import run_domain_verification_
 from app.services.dns_checks.scheduled_recheck import DNS_CHECK_SWEEP_TICK_SECONDS, run_dns_check_sweep
 from app.services.jobs import queue
 from app.services.jobs.leader import LeaderLock
+from app.services.jobs.queue import prune_finished_jobs
 from app.services.retention.forensic_purge import run_retention_purge
 from app.services.update_check import run_update_check
 from app.workers.health import heartbeat, start_health_server
@@ -47,6 +48,7 @@ HOSTED_REPORTS_POLL_INTERVAL_SECONDS = 600
 RETENTION_PURGE_INTERVAL_SECONDS = 24 * 3600
 UPDATE_CHECK_INTERVAL_SECONDS = 6 * 3600
 RATE_LIMIT_PRUNE_INTERVAL_SECONDS = 3600
+BACKGROUND_JOBS_PRUNE_INTERVAL_SECONDS = 24 * 3600
 REAP_INTERVAL_SECONDS = 60
 LEADER_TICK_SECONDS = 15
 HEARTBEAT_INTERVAL_SECONDS = 5
@@ -60,6 +62,7 @@ _SINGLETON_INTERVALS = {
     "retention_purge": RETENTION_PURGE_INTERVAL_SECONDS,
     "update_check": UPDATE_CHECK_INTERVAL_SECONDS,
     "rate_limit_prune": RATE_LIMIT_PRUNE_INTERVAL_SECONDS,
+    "background_jobs_prune": BACKGROUND_JOBS_PRUNE_INTERVAL_SECONDS,
 }
 
 
@@ -84,6 +87,7 @@ def _register_handlers() -> None:
     queue.register_handler("retention_purge", _ignoring_payload(run_retention_purge))
     queue.register_handler("update_check", _ignoring_payload(run_update_check))
     queue.register_handler("rate_limit_prune", _ignoring_payload(prune_rate_limit_hits))
+    queue.register_handler("background_jobs_prune", _ignoring_payload(prune_finished_jobs))
 
 
 # --- leader: enqueue recurring work on a cadence ---

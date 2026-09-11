@@ -61,6 +61,11 @@ class LeaderLock:
             raise
         if acquired:
             self._conn = conn
+            # Advisory lock acquisition takes effect immediately server-side,
+            # independent of transaction commit — but commit anyway so this
+            # connection isn't sitting idle-in-transaction for the leader's
+            # whole lifetime.
+            await conn.commit()
             logger.info("acquired scheduler leadership (advisory lock %s)", self._lock_key)
             return True
         await conn.close()
@@ -79,6 +84,9 @@ class LeaderLock:
         if self._conn is not None:
             try:
                 await self._conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": self._lock_key})
+                # Same reasoning as try_acquire(): commit so the connection
+                # isn't left idle-in-transaction before we close it.
+                await self._conn.commit()
             except Exception:
                 pass
         await self._drop_connection()

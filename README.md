@@ -303,10 +303,12 @@ scale horizontally without a message broker — just Postgres:
   immediately stays on the primary. **Known limitation:** three of these
   endpoints (report by-day/summary/grouped) can write to a small sender-identity
   cache on a cache miss; against a genuinely read-only replica that write fails.
-  Don't point `DATABASE_READ_URL` at a true read-only replica until this is
-  addressed — a same-cluster hot-standby you don't expect to write to at all is
-  fine today, but a connection Postgres itself rejects writes on is not yet safe
-  for this setting.
+  Don't point `DATABASE_READ_URL` at a genuinely read-only replica (a real
+  streaming/hot standby, e.g. a managed Postgres read replica) until this is
+  addressed — Postgres itself rejects that write on such a connection. What
+  IS safe today: pointing it at a second connection to the *same primary*
+  (e.g. for connection-count headroom via a second pooled route), since that
+  connection accepts writes.
 - **RLS binds a per-connection role, not a per-request identity.** Tenant
   isolation is enforced by `SET LOCAL` GUCs inside each request's transaction
   (see [Multi-tenancy](#multi-tenancy)); every app connection is the same
