@@ -127,3 +127,13 @@ class SenderReviewStatus(str, enum.Enum):
     # decommissioned host or an ESP you've stopped using) — kept for history
     # but hidden from the active inventory view. See the sender-inventory UI.
     archived = "archived"
+
+
+class BackgroundJobStatus(str, enum.Enum):
+    """Lifecycle of a row in the worker work-queue (background_jobs). See
+    app/services/jobs/queue.py."""
+
+    pending = "pending"
+    running = "running"
+    done = "done"
+    failed = "failed"
