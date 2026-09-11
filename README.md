@@ -85,9 +85,9 @@ server-side regardless of what the UI lets you click.
                  └──────────▲─┘   │ validating)│    through this, not the
                             │     └────────────┘    host's own resolver
                  ┌──────────┴─┐
-                 │   worker   │  APScheduler: mailbox polling, DNS check
-                 │            │  sweep, domain verification sweep, retention
-                 └────────────┘  purge — all cron-style, no message queue
+                 │   worker   │  N replicas, off a Postgres work queue: mailbox
+                 │            │  polling, DNS check sweep, domain verification
+                 └────────────┘  sweep, retention purge — no message queue
 ```
 
 `api` and `worker` are the same Docker image (`backend/Dockerfile`) run with
