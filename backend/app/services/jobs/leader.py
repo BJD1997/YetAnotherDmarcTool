@@ -46,6 +46,12 @@ class LeaderLock:
         if self._conn is not None:
             try:
                 await self._conn.execute(text("SELECT 1"))
+                # Same reasoning as the acquire/release commits below: this
+                # SELECT implicitly opens a transaction, so commit it right
+                # back — otherwise every keepalive tick re-opens an
+                # uncommitted transaction and the connection sits
+                # idle-in-transaction for the leader's whole tenure anyway.
+                await self._conn.commit()
                 return True
             except Exception:
                 logger.warning("leader connection lost — relinquishing leadership")
