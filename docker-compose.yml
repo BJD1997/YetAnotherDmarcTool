@@ -100,6 +100,12 @@ services:
     networks:
       - internal
 
+  # Runs background jobs off a Postgres work queue (app/workers/scheduler.py).
+  # Safe to scale horizontally — `docker compose up -d --scale worker=3` — jobs
+  # are claimed with FOR UPDATE SKIP LOCKED so replicas never double-process, and
+  # exactly one replica auto-elects itself leader (Postgres advisory lock) to run
+  # the schedule. If you also scale the `api`, set RATE_LIMIT_BACKEND=postgres in
+  # .env so the auth rate limit stays correct across replicas.
   worker:
     build:
       context: .
@@ -119,6 +125,14 @@ services:
         condition: service_started
     networks:
       - internal
+    # Liveness: the worker's health server (app/workers/health.py) reports 503 if
+    # the event loop stalls, so a wedged (not just crashed) replica is restarted.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=5)"]
+      interval: 30s
+      timeout: 6s
+      retries: 3
+      start_period: 20s
 
   # Powers the "Update now" button in the admin console (see
   # app/services/updater_client.py, app/routers/admin_updates.py) — the

@@ -136,6 +136,16 @@ class Settings(BaseSettings):
     leader_lock_key: int = 0x59414454
     leader_database_url: str | None = None
 
+    # Worker (app/workers/scheduler.py): every replica runs this many concurrent
+    # queue-consumer loops; the queue is polled this often when idle. The leader
+    # reclaims jobs stuck "running" longer than worker_job_stale_seconds (a crashed
+    # worker) — must exceed the longest expected job runtime. worker_health_port
+    # serves the liveness endpoint (app/workers/health.py).
+    worker_concurrency: int = 4
+    worker_queue_poll_interval_seconds: float = 5.0
+    worker_job_stale_seconds: int = 1800
+    worker_health_port: int = 8080
+
     @property
     def entra_sso_redirect_uri(self) -> str:
         return f"{self.public_base_url}/api/auth/callback"
