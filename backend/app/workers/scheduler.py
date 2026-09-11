@@ -19,6 +19,7 @@ delivery (a job re-run after its worker died) is safe.
 import asyncio
 import logging
 import os
+import signal
 import socket
 import time
 import uuid
@@ -132,15 +133,27 @@ async def _leadership_loop(leader: LeaderLock) -> None:
 
 # --- every replica: consume the queue ---
 
-async def _consumer_loop(worker_id: str) -> None:
-    while True:
+async def _consumer_loop(worker_id: str, stop_event: asyncio.Event) -> None:
+    while not stop_event.is_set():
         try:
             did_work = await queue.process_next(worker_id)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.exception("consumer loop error")
             did_work = False
         if not did_work:
-            await asyncio.sleep(settings.worker_queue_poll_interval_seconds)
+            # wait_for/TimeoutError (rather than a plain sleep) lets stop_event
+            # interrupt the idle-sleep immediately on SIGTERM instead of waiting
+            # out the full poll interval. A job already claimed and mid-handler
+            # when SIGTERM arrives still runs to completion (or is caught by
+            # CancelledError at its next await point and re-raised) — the same
+            # "let in-flight work finish" trade-off docker stop's own default
+            # grace period already assumes.
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=settings.worker_queue_poll_interval_seconds)
+            except asyncio.TimeoutError:
+                pass
 
 
 async def _heartbeat_loop(leader: LeaderLock) -> None:
@@ -164,14 +177,28 @@ async def main() -> None:
         settings.worker_queue_poll_interval_seconds,
         LEADER_TICK_SECONDS,
     )
+    stop_event = asyncio.Event()
+
     tasks = [
         asyncio.create_task(_heartbeat_loop(leader)),
         asyncio.create_task(_leadership_loop(leader)),
     ]
     for _ in range(settings.worker_concurrency):
-        tasks.append(asyncio.create_task(_consumer_loop(worker_id)))
+        tasks.append(asyncio.create_task(_consumer_loop(worker_id, stop_event)))
+
+    loop = asyncio.get_running_loop()
+
+    def _handle_sigterm() -> None:
+        logger.info("SIGTERM received — cancelling worker tasks for a clean shutdown")
+        stop_event.set()
+
+    loop.add_signal_handler(signal.SIGTERM, _handle_sigterm)
+
     try:
-        await asyncio.gather(*tasks)
+        await stop_event.wait()
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
     finally:
         await leader.release()
 
