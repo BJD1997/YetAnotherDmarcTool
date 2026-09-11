@@ -115,7 +115,6 @@ image-build time and FastAPI serves the static output directly (`app/main.py`).
 | `parsedmarc` | Apache-2.0 | Parses DMARC aggregate/forensic and TLS-RPT report XML/JSON — used as a library only, not its CLI or Elasticsearch output writers |
 | `dnspython` | ISC | Low-level DNS primitives the checkers are built on |
 | `httpx` | BSD-3-Clause | HTTP client — Graph API calls, MTA-STS policy file fetches |
-| `apscheduler` | MIT | In-process cron-style scheduling for the `worker` service |
 | `python-multipart` | Apache-2.0 | Pulled in by FastAPI for optional form-data parsing; not used directly anywhere in this app |
 | `pytest`, `pytest-asyncio` | MIT, Apache-2.0 | Test suite (`backend/requirements-dev.txt`, dev-only — not part of the deployed runtime) |
 
@@ -267,40 +266,59 @@ adjusted, not treated as final.
 
 ## Production considerations
 
-This is built to run well at the scale it was designed for — one operator, one
-box, a modest number of domains — and it deliberately trades horizontal
-scalability for operational simplicity. The limits are worth knowing before you
-point it at a large fleet:
+A single `api` + single `worker` on one well-specced VM is plenty for one
+operator or a handful of orgs, and is the default. When you need more, both tiers
+scale horizontally without a message broker — just Postgres:
 
-- **The `worker` is a single in-process scheduler**, not a distributed queue.
-  All background work — DNS checks, mailbox polling, report ingestion, retention
-  purge — runs as cron-style jobs inside one [APScheduler](backend/app/workers/scheduler.py)
-  process (no Celery/Redis; see [tech stack](#infrastructure)). Running a second
-  `worker` replica would double-run every job, so **don't** — scale the box up,
-  not out. A single very large aggregate report (a busy domain's daily XML with
-  tens of thousands of `<record>` rows) is parsed and written serially; that's
-  fine for one operator's domains but is the first thing that would strain under,
-  say, an MSP ingesting for hundreds of high-volume domains at once.
-- **Rate limiting is per-process and in-memory** ([rate_limit.py](backend/app/services/auth/rate_limit.py)).
-  Correct for the single-`api`-container deployment here; if you ever run
-  multiple `api` replicas behind a load balancer, each counts requests
-  independently and the effective limit multiplies — move the limiter to a
-  shared store (Redis/Postgres) first, or keep the edge rate-limit (e.g.
-  Cloudflare) as the real ceiling.
+- **Scaling the `worker`.** Background work runs off a Postgres work queue
+  (`background_jobs`): the leader enqueues due jobs, and any number of workers
+  claim them with `SELECT … FOR UPDATE SKIP LOCKED`, so they never
+  double-process. Run more with `docker compose up -d --scale worker=3` — heavy
+  report ingestion then parallelizes across replicas. Exactly one replica
+  auto-elects itself **leader** (a Postgres advisory lock) to run the schedule;
+  if it dies another takes over automatically. Each worker also serves a liveness
+  endpoint (`:8080/health`) that reports unhealthy if its loop stalls, so an
+  orchestrator recycles a wedged — not just crashed — replica.
+- **Scaling the `api`.** It's stateless (sessions live in Postgres), so it scales
+  out freely — with one caveat: the auth rate limiter defaults to in-memory
+  per-process. Running multiple `api` replicas? Set **`RATE_LIMIT_BACKEND=postgres`**
+  so the limit is shared and correct across them ([rate_limit.py](backend/app/services/auth/rate_limit.py));
+  it's dependency-free (reuses Postgres) and the auth-endpoint volume is tiny.
+- **No Redis, no Celery — on purpose.** Reusing the datastore you already run and
+  have hardened (RLS, encryption-at-rest, backups) keeps the attack surface and
+  the ops burden down versus adding a broker. It comfortably handles this
+  workload's cadence; the queue is an internal abstraction that could move to a
+  broker later if a genuinely high-throughput need appeared.
+- **Connection pooling (PgBouncer).** Point `DATABASE_URL` at a PgBouncer
+  instance instead of Postgres directly once replica count makes raw connection
+  count matter — no other app changes needed in the general case (RLS's
+  `SET LOCAL` context-setting is transaction-scoped, already compatible with
+  transaction-mode pooling). The one exception: set `LEADER_DATABASE_URL` to a
+  **direct, unpooled** Postgres connection string, since the leader's advisory
+  lock is session-scoped and would misbehave under transaction pooling.
+- **Read replicas for report/analytics queries.** Set `DATABASE_READ_URL` to a
+  read-only replica connection string to offload the report/trend/posture
+  dashboard endpoints there — unset by default, so this is entirely opt-in.
+  Anything where you'd expect to see your own just-made write reflected
+  immediately stays on the primary. **Known limitation:** three of these
+  endpoints (report by-day/summary/grouped) can write to a small sender-identity
+  cache on a cache miss; against a genuinely read-only replica that write fails.
+  Don't point `DATABASE_READ_URL` at a true read-only replica until this is
+  addressed — a same-cluster hot-standby you don't expect to write to at all is
+  fine today, but a connection Postgres itself rejects writes on is not yet safe
+  for this setting.
 - **RLS binds a per-connection role, not a per-request identity.** Tenant
   isolation is enforced by `SET LOCAL` GUCs inside each request's transaction
-  (see [Multi-tenancy](#multi-tenancy)); this is robust, but it means every app
-  connection is the same `dmarc_app` role and isolation correctness depends on
-  the app always setting org context — which is why the [RLS test suite](#tests)
-  exists to keep that guarantee honest.
-- **One Postgres, one resolver.** No read replicas, no connection pooler beyond
-  SQLAlchemy's; the DNSSEC-validating `resolver` is a single Unbound instance.
-  Comfortable for a self-hoster; size the host accordingly if you grow.
-
-Rough rule of thumb: this is happy self-hosting for one org or a handful, on a
-single well-specced VM. Past that — many tenants, very high report volume — the
-right move is a message queue and multiple workers, which is a deliberate
-non-goal here (see the [roadmap](#roadmap)).
+  (see [Multi-tenancy](#multi-tenancy)); every app connection is the same
+  `dmarc_app` role, so correctness depends on the app always setting org context —
+  which is why the [RLS test suite](#tests) exists to keep that guarantee honest.
+- **Still single by default: Postgres and the resolver.** One Postgres (use a
+  managed, backed-up instance in production, or add a read replica per above)
+  and one DNSSEC-validating Unbound `resolver`. Size the host, or use a managed
+  database, as you grow. Postgres sharding (Citus/Hyperscale) is a deliberately
+  deferred future option, not built here — the RLS-by-organization_id data
+  model already gives it a natural shard key if a single primary's vertical
+  ceiling is ever genuinely the bottleneck.
 
 ## Getting started
 
