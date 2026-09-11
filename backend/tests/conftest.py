@@ -42,7 +42,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.config import settings
-from app.db.session import get_db
+from app.db.session import get_db, get_read_db
 from app.main import app
 from app.models.enums import AuthMethod, OrganizationStatus, UserRole, UserStatus
 from app.models.organization import Organization
@@ -198,7 +198,20 @@ async def api(migrated_db):
     # since app.middleware.demo_read_only and app.workers.jobs.mailbox_poll_job both
     # imported it directly. mailbox_poll_job also imports `engine` directly (for its
     # advisory-lock connection), so that needs patching here too.
+    #
+    # get_read_db is overridden the same way, to the same app_factory: FastAPI's
+    # dependency_overrides is keyed by the exact callable, so overriding get_db alone
+    # would leave the report/analytics endpoints on Depends(get_read_db) untouched by
+    # it. In every test environment DATABASE_READ_URL is unset, so get_read_db falls
+    # back to the primary connection just like get_db does — this override just makes
+    # that fallback go through the same dmarc_app-role, test-DB session as everything
+    # else here, rather than the real get_read_db()'s module-level _read_session_factory,
+    # which was bound to the pre-override primary sessionmaker at import time and
+    # wouldn't see this monkeypatch (it isn't the app.db.session module attribute
+    # session_module.async_session_factory being reassigned below, it's a separate name
+    # already pointing at the old object).
     app.dependency_overrides[get_db] = _override_get_db
+    app.dependency_overrides[get_read_db] = _override_get_db
     original_session_factory = session_module.async_session_factory
     original_demo_read_only_factory = demo_read_only_module.async_session_factory
     original_mailbox_poll_job_factory = mailbox_poll_job_module.async_session_factory
@@ -213,6 +226,7 @@ async def api(migrated_db):
         yield client, owner_factory
 
     app.dependency_overrides.pop(get_db, None)
+    app.dependency_overrides.pop(get_read_db, None)
     session_module.async_session_factory = original_session_factory
     demo_read_only_module.async_session_factory = original_demo_read_only_factory
     mailbox_poll_job_module.async_session_factory = original_mailbox_poll_job_factory

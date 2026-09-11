@@ -151,6 +151,14 @@ class Settings(BaseSettings):
     # app/services/auth/rate_limit.py. Switch to "postgres" when running >1 api replica.
     rate_limit_backend: str = "memory"
 
+    # Optional read-replica connection for report/analytics queries (see
+    # app/db/session.py's get_read_db). Unset by default — every read goes to
+    # the primary, exactly as today. Set to a read-only Postgres connection
+    # string (e.g. a managed streaming replica) to offload latency-tolerant
+    # dashboard/report reads there. Never used for anything a user might
+    # expect to see their own just-made write reflected in.
+    database_read_url: str | None = None
+
     @property
     def entra_sso_redirect_uri(self) -> str:
         return f"{self.public_base_url}/api/auth/callback"
