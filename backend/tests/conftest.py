@@ -126,6 +126,26 @@ async def rls_sessions(migrated_db):
     await owner_engine.dispose()
 
 
+@pytest.fixture
+def app_db_url(migrated_db) -> str:
+    """The dmarc_app (non-owner) async URL — used by tests that build their own
+    engine(s), e.g. leader-election contention."""
+    return _app_url()
+
+
+@pytest_asyncio.fixture
+async def app_sessionmaker(migrated_db):
+    """A sessionmaker on the non-owner dmarc_app role (the role the worker runs
+    as), with the worker/infra tables emptied first. Lets a test open several
+    concurrent sessions — e.g. to prove FOR UPDATE SKIP LOCKED never
+    double-claims a job."""
+    engine = create_async_engine(_app_url(), poolclass=NullPool)
+    async with engine.begin() as conn:
+        await conn.execute(text("DELETE FROM background_jobs"))
+    yield async_sessionmaker(engine, expire_on_commit=False)
+    await engine.dispose()
+
+
 CSRF_HEADERS = {"X-Requested-With": "yetanotherdmarctool"}
 
 

@@ -126,6 +126,16 @@ class Settings(BaseSettings):
     updater_url: str | None = None
     updater_shared_secret: str | None = None
 
+    # Worker (app/workers/scheduler.py): the Postgres advisory-lock key the
+    # leader is elected on. leader_database_url is the connection the leader's
+    # advisory lock is held on — defaults to database_url, but if PgBouncer (or
+    # any transaction-mode pooler) sits in front of database_url, set this to a
+    # DIRECT (unpooled) Postgres connection string instead: pg_advisory_lock is
+    # session-scoped, and transaction pooling would silently return the
+    # connection to the pool between statements, breaking leadership.
+    leader_lock_key: int = 0x59414454
+    leader_database_url: str | None = None
+
     @property
     def entra_sso_redirect_uri(self) -> str:
         return f"{self.public_base_url}/api/auth/callback"
