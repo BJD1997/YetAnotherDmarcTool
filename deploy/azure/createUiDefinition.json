@@ -114,9 +114,10 @@
             "name": "deploymentSize",
             "type": "Microsoft.Common.OptionsGroup",
             "label": "Deployment size",
-            "defaultValue": "Small — a few users",
+            "defaultValue": "Small — a few users: up to 2 api/worker replicas, Burstable B2s Postgres. The default.",
             "toolTip": "Pre-fills network, Postgres, and replica-count sizing. Every value stays individually overridable below.",
             "constraints": {
+              "required": true,
               "allowedValues": [
                 {
                   "label": "Test — smallest footprint: single api/worker replica, Burstable B1ms Postgres. For trying it out, not real traffic.",
