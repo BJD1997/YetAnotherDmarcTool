@@ -1,0 +1,1581 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.47.16.16243",
+      "templateHash": "14861346194525218424"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Azure region for all resources."
+      }
+    },
+    "namePrefix": {
+      "type": "string",
+      "defaultValue": "yadt",
+      "minLength": 2,
+      "maxLength": 12,
+      "metadata": {
+        "description": "Short prefix for resource names (letters/numbers)."
+      }
+    },
+    "imageTag": {
+      "type": "string",
+      "defaultValue": "latest",
+      "metadata": {
+        "description": "Container image tag to deploy (the released version, or \"latest\")."
+      }
+    },
+    "deploymentSize": {
+      "type": "string",
+      "defaultValue": "small",
+      "allowedValues": [
+        "test",
+        "small",
+        "medium",
+        "large"
+      ],
+      "metadata": {
+        "description": "Deployment size — pre-fills network, Postgres, and replica-count sizing. Always individually overridable below."
+      }
+    },
+    "postgresHighAvailability": {
+      "type": "string",
+      "defaultValue": "Disabled",
+      "allowedValues": [
+        "Disabled",
+        "ZoneRedundant"
+      ],
+      "metadata": {
+        "description": "Postgres high availability — independent of deploymentSize. Roughly doubles Postgres compute cost when enabled."
+      }
+    },
+    "administratorLogin": {
+      "type": "string",
+      "defaultValue": "dmarcadmin",
+      "metadata": {
+        "description": "Postgres administrator login."
+      }
+    },
+    "administratorPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Postgres administrator password."
+      }
+    },
+    "dmarcAppDbPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Password for the non-owner dmarc_app runtime role (created by the migrate job)."
+      }
+    },
+    "fernetKey": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Fernet key for encrypting TOTP secrets/credentials at rest. Generate: openssl rand -base64 32 | tr \"+/\" \"-_\""
+      }
+    },
+    "platformAdminBootstrapEmail": {
+      "type": "string",
+      "defaultValue": ""
+    },
+    "platformAdminBootstrapPassword": {
+      "type": "securestring",
+      "defaultValue": ""
+    },
+    "entraSsoClientId": {
+      "type": "string",
+      "defaultValue": ""
+    },
+    "entraSsoClientSecret": {
+      "type": "securestring",
+      "defaultValue": ""
+    },
+    "entraSsoAuthority": {
+      "type": "string",
+      "defaultValue": "https://login.microsoftonline.com/organizations"
+    },
+    "entraMailClientId": {
+      "type": "string",
+      "defaultValue": ""
+    },
+    "entraMailClientSecret": {
+      "type": "securestring",
+      "defaultValue": ""
+    },
+    "publicBaseUrlOverride": {
+      "type": "string",
+      "defaultValue": ""
+    },
+    "postgresSkuNameOverride": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Override the tier-derived Postgres SKU name. Empty = use deploymentSize default."
+      }
+    },
+    "postgresSkuTierOverride": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Override the tier-derived Postgres SKU tier. Empty = use deploymentSize default."
+      }
+    },
+    "postgresStorageGBOverride": {
+      "type": "int",
+      "defaultValue": 0,
+      "metadata": {
+        "description": "Override the tier-derived Postgres storage (GB). 0 = use deploymentSize default."
+      }
+    },
+    "apiMaxReplicasOverride": {
+      "type": "int",
+      "defaultValue": 0,
+      "metadata": {
+        "description": "Override the tier-derived api max replicas. 0 = use deploymentSize default."
+      }
+    },
+    "workerMaxReplicasOverride": {
+      "type": "int",
+      "defaultValue": 0,
+      "metadata": {
+        "description": "Override the tier-derived worker max replicas. 0 = use deploymentSize default."
+      }
+    }
+  },
+  "variables": {
+    "sizingTiers": {
+      "test": {
+        "vnetAddressPrefix": "10.20.0.0/25",
+        "acaSubnetPrefix": "10.20.0.32/27",
+        "pgSubnetPrefix": "10.20.0.64/28",
+        "keyVaultSubnetPrefix": "10.20.0.16/29",
+        "postgresSkuName": "Standard_B1ms",
+        "postgresSkuTier": "Burstable",
+        "postgresStorageGB": 32,
+        "apiMinReplicas": 1,
+        "apiMaxReplicas": 1,
+        "workerMaxReplicas": 1,
+        "logRetentionDays": 30
+      },
+      "small": {
+        "vnetAddressPrefix": "10.20.0.0/24",
+        "acaSubnetPrefix": "10.20.0.0/26",
+        "pgSubnetPrefix": "10.20.0.128/28",
+        "keyVaultSubnetPrefix": "10.20.0.144/28",
+        "postgresSkuName": "Standard_B2s",
+        "postgresSkuTier": "Burstable",
+        "postgresStorageGB": 32,
+        "apiMinReplicas": 1,
+        "apiMaxReplicas": 2,
+        "workerMaxReplicas": 2,
+        "logRetentionDays": 30
+      },
+      "medium": {
+        "vnetAddressPrefix": "10.20.0.0/23",
+        "acaSubnetPrefix": "10.20.0.0/25",
+        "pgSubnetPrefix": "10.20.1.128/28",
+        "keyVaultSubnetPrefix": "10.20.1.144/28",
+        "postgresSkuName": "Standard_D2ds_v4",
+        "postgresSkuTier": "GeneralPurpose",
+        "postgresStorageGB": 64,
+        "apiMinReplicas": 1,
+        "apiMaxReplicas": 3,
+        "workerMaxReplicas": 3,
+        "logRetentionDays": 60
+      },
+      "large": {
+        "vnetAddressPrefix": "10.20.0.0/22",
+        "acaSubnetPrefix": "10.20.0.0/23",
+        "pgSubnetPrefix": "10.20.2.0/27",
+        "keyVaultSubnetPrefix": "10.20.2.32/28",
+        "postgresSkuName": "Standard_D4ds_v4",
+        "postgresSkuTier": "GeneralPurpose",
+        "postgresStorageGB": 128,
+        "apiMinReplicas": 2,
+        "apiMaxReplicas": 5,
+        "workerMaxReplicas": 5,
+        "logRetentionDays": 90
+      }
+    },
+    "tier": "[variables('sizingTiers')[parameters('deploymentSize')]]",
+    "resolvedPostgresSkuName": "[if(empty(parameters('postgresSkuNameOverride')), variables('tier').postgresSkuName, parameters('postgresSkuNameOverride'))]",
+    "resolvedPostgresSkuTier": "[if(empty(parameters('postgresSkuTierOverride')), variables('tier').postgresSkuTier, parameters('postgresSkuTierOverride'))]",
+    "resolvedPostgresStorageGB": "[if(equals(parameters('postgresStorageGBOverride'), 0), variables('tier').postgresStorageGB, parameters('postgresStorageGBOverride'))]",
+    "resolvedApiMaxReplicas": "[if(equals(parameters('apiMaxReplicasOverride'), 0), variables('tier').apiMaxReplicas, parameters('apiMaxReplicasOverride'))]",
+    "resolvedWorkerMaxReplicas": "[if(equals(parameters('workerMaxReplicasOverride'), 0), variables('tier').workerMaxReplicas, parameters('workerMaxReplicasOverride'))]",
+    "namePrefixLower": "[toLower(parameters('namePrefix'))]",
+    "suffix": "[uniqueString(resourceGroup().id)]",
+    "keyVaultName": "[take(format('{0}kv{1}', variables('namePrefixLower'), variables('suffix')), 24)]",
+    "pgServerName": "[format('{0}-pg-{1}', variables('namePrefixLower'), variables('suffix'))]",
+    "appImage": "[format('ghcr.io/bjd1997/yetanotherdmarctool:{0}', parameters('imageTag'))]",
+    "resolverImage": "[format('ghcr.io/bjd1997/yetanotherdmarctool-resolver:{0}', parameters('imageTag'))]",
+    "deployBootstrapSecret": "[not(empty(parameters('platformAdminBootstrapPassword')))]",
+    "deployEntraSsoSecret": "[and(not(empty(parameters('entraSsoClientId'))), not(empty(parameters('entraSsoClientSecret'))))]",
+    "deployEntraMailSecret": "[and(not(empty(parameters('entraMailClientId'))), not(empty(parameters('entraMailClientSecret'))))]",
+    "contributorRoleId": "b24988ac-6180-42a0-ab88-20f7382dd24c"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+      "apiVersion": "2023-01-31",
+      "name": "[format('{0}-deploy-id', variables('namePrefixLower'))]",
+      "location": "[parameters('location')]"
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(resourceGroup().id, resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-deploy-id', variables('namePrefixLower'))), variables('contributorRoleId'))]",
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('contributorRoleId'))]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-deploy-id', variables('namePrefixLower'))), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-deploy-id', variables('namePrefixLower')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deploymentScripts",
+      "apiVersion": "2023-08-01",
+      "name": "[format('{0}-run-migrate', variables('namePrefixLower'))]",
+      "location": "[parameters('location')]",
+      "kind": "AzureCLI",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-deploy-id', variables('namePrefixLower'))))]": {}
+        }
+      },
+      "properties": {
+        "azCliVersion": "2.62.0",
+        "retentionInterval": "PT1H",
+        "timeout": "PT45M",
+        "cleanupPreference": "OnSuccess",
+        "environmentVariables": [
+          {
+            "name": "RG",
+            "value": "[resourceGroup().name]"
+          },
+          {
+            "name": "JOB",
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'environment'), '2025-04-01').outputs.migrateJobName.value]"
+          }
+        ],
+        "scriptContent": "      set -e\n      # `az containerapp` ships as a CLI extension, not a core command group;\n      # this image may not have it pre-installed. Adding it explicitly avoids\n      # relying on az's dynamic-install prompt in this non-interactive script.\n      az extension add --name containerapp --upgrade -y 2>/dev/null || true\n      echo \"waiting for RBAC propagation before starting the migrate job...\"\n      sleep 45\n      echo \"starting migrate job $JOB in $RG\"\n      az containerapp job start -n \"$JOB\" -g \"$RG\" -o none\n      for i in $(seq 1 80); do\n        statuses=$(az containerapp job execution list -n \"$JOB\" -g \"$RG\" --query \"[].properties.status\" -o tsv 2>/dev/null || echo \"\")\n        echo \"poll $i: [$statuses]\"\n        if echo \"$statuses\" | grep -q \"Succeeded\"; then echo \"migrate succeeded\"; exit 0; fi\n        if echo \"$statuses\" | grep -q \"Failed\"; then echo \"migrate job failed\"; exit 1; fi\n        sleep 15\n      done\n      echo \"timed out waiting for migrate job\"; exit 1\n    "
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Authorization/roleAssignments', guid(resourceGroup().id, resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-deploy-id', variables('namePrefixLower'))), variables('contributorRoleId')))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-deploy-id', variables('namePrefixLower')))]",
+        "[resourceId('Microsoft.Resources/deployments', 'environment')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "network",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "namePrefix": {
+            "value": "[variables('namePrefixLower')]"
+          },
+          "vnetAddressPrefix": {
+            "value": "[variables('tier').vnetAddressPrefix]"
+          },
+          "acaSubnetPrefix": {
+            "value": "[variables('tier').acaSubnetPrefix]"
+          },
+          "pgSubnetPrefix": {
+            "value": "[variables('tier').pgSubnetPrefix]"
+          },
+          "keyVaultSubnetPrefix": {
+            "value": "[variables('tier').keyVaultSubnetPrefix]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "14234562939404125973"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region for all resources."
+              }
+            },
+            "namePrefix": {
+              "type": "string",
+              "metadata": {
+                "description": "Base name used to derive resource names."
+              }
+            },
+            "vnetAddressPrefix": {
+              "type": "string",
+              "metadata": {
+                "description": "VNet address space, sized by the caller per deployment tier."
+              }
+            },
+            "acaSubnetPrefix": {
+              "type": "string",
+              "metadata": {
+                "description": "Subnet delegated to the Container Apps environment."
+              }
+            },
+            "pgSubnetPrefix": {
+              "type": "string",
+              "metadata": {
+                "description": "Subnet delegated to the Postgres Flexible Server."
+              }
+            },
+            "keyVaultSubnetPrefix": {
+              "type": "string",
+              "metadata": {
+                "description": "Non-delegated subnet for the Key Vault private endpoint."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Network/virtualNetworks",
+              "apiVersion": "2023-11-01",
+              "name": "[format('{0}-vnet', parameters('namePrefix'))]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "addressSpace": {
+                  "addressPrefixes": [
+                    "[parameters('vnetAddressPrefix')]"
+                  ]
+                },
+                "subnets": [
+                  {
+                    "name": "aca",
+                    "properties": {
+                      "addressPrefix": "[parameters('acaSubnetPrefix')]",
+                      "delegations": [
+                        {
+                          "name": "aca-delegation",
+                          "properties": {
+                            "serviceName": "Microsoft.App/environments"
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "name": "postgres",
+                    "properties": {
+                      "addressPrefix": "[parameters('pgSubnetPrefix')]",
+                      "delegations": [
+                        {
+                          "name": "pg-delegation",
+                          "properties": {
+                            "serviceName": "Microsoft.DBforPostgreSQL/flexibleServers"
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "name": "keyvault-pe",
+                    "properties": {
+                      "addressPrefix": "[parameters('keyVaultSubnetPrefix')]",
+                      "privateEndpointNetworkPolicies": "Disabled"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "type": "Microsoft.Network/privateDnsZones",
+              "apiVersion": "2020-06-01",
+              "name": "privatelink.postgres.database.azure.com",
+              "location": "global"
+            },
+            {
+              "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+              "apiVersion": "2020-06-01",
+              "name": "[format('{0}/{1}', 'privatelink.postgres.database.azure.com', format('{0}-pg-link', parameters('namePrefix')))]",
+              "location": "global",
+              "properties": {
+                "registrationEnabled": false,
+                "virtualNetwork": {
+                  "id": "[resourceId('Microsoft.Network/virtualNetworks', format('{0}-vnet', parameters('namePrefix')))]"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.postgres.database.azure.com')]",
+                "[resourceId('Microsoft.Network/virtualNetworks', format('{0}-vnet', parameters('namePrefix')))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Network/privateDnsZones",
+              "apiVersion": "2020-06-01",
+              "name": "privatelink.vaultcore.azure.net",
+              "location": "global"
+            },
+            {
+              "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+              "apiVersion": "2020-06-01",
+              "name": "[format('{0}/{1}', 'privatelink.vaultcore.azure.net', format('{0}-kv-link', parameters('namePrefix')))]",
+              "location": "global",
+              "properties": {
+                "registrationEnabled": false,
+                "virtualNetwork": {
+                  "id": "[resourceId('Microsoft.Network/virtualNetworks', format('{0}-vnet', parameters('namePrefix')))]"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.vaultcore.azure.net')]",
+                "[resourceId('Microsoft.Network/virtualNetworks', format('{0}-vnet', parameters('namePrefix')))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "acaSubnetId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Network/virtualNetworks', format('{0}-vnet', parameters('namePrefix'))), '2023-11-01').subnets[0].id]"
+            },
+            "pgSubnetId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Network/virtualNetworks', format('{0}-vnet', parameters('namePrefix'))), '2023-11-01').subnets[1].id]"
+            },
+            "keyVaultSubnetId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Network/virtualNetworks', format('{0}-vnet', parameters('namePrefix'))), '2023-11-01').subnets[2].id]"
+            },
+            "pgPrivateDnsZoneId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.postgres.database.azure.com')]"
+            },
+            "pgDnsVnetLinkId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Network/privateDnsZones/virtualNetworkLinks', 'privatelink.postgres.database.azure.com', format('{0}-pg-link', parameters('namePrefix')))]"
+            },
+            "kvPrivateDnsZoneId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.vaultcore.azure.net')]"
+            },
+            "kvDnsVnetLinkId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Network/privateDnsZones/virtualNetworkLinks', 'privatelink.vaultcore.azure.net', format('{0}-kv-link', parameters('namePrefix')))]"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "postgres",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "serverName": {
+            "value": "[variables('pgServerName')]"
+          },
+          "administratorLogin": {
+            "value": "[parameters('administratorLogin')]"
+          },
+          "administratorPassword": {
+            "value": "[parameters('administratorPassword')]"
+          },
+          "delegatedSubnetId": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'network'), '2025-04-01').outputs.pgSubnetId.value]"
+          },
+          "privateDnsZoneId": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'network'), '2025-04-01').outputs.pgPrivateDnsZoneId.value]"
+          },
+          "skuName": {
+            "value": "[variables('resolvedPostgresSkuName')]"
+          },
+          "skuTier": {
+            "value": "[variables('resolvedPostgresSkuTier')]"
+          },
+          "storageSizeGB": {
+            "value": "[variables('resolvedPostgresStorageGB')]"
+          },
+          "highAvailabilityMode": {
+            "value": "[parameters('postgresHighAvailability')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "9894519063388591936"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region."
+              }
+            },
+            "serverName": {
+              "type": "string"
+            },
+            "databaseName": {
+              "type": "string",
+              "defaultValue": "dmarc"
+            },
+            "administratorLogin": {
+              "type": "string"
+            },
+            "administratorPassword": {
+              "type": "securestring"
+            },
+            "delegatedSubnetId": {
+              "type": "string",
+              "metadata": {
+                "description": "Subnet delegated to Microsoft.DBforPostgreSQL/flexibleServers."
+              }
+            },
+            "privateDnsZoneId": {
+              "type": "string",
+              "metadata": {
+                "description": "Private DNS zone (privatelink.postgres.database.azure.com) resource id."
+              }
+            },
+            "version": {
+              "type": "string",
+              "defaultValue": "16"
+            },
+            "skuName": {
+              "type": "string",
+              "metadata": {
+                "description": "Tier-resolved by the caller (main.bicep) from deploymentSize."
+              }
+            },
+            "skuTier": {
+              "type": "string"
+            },
+            "storageSizeGB": {
+              "type": "int"
+            },
+            "backupRetentionDays": {
+              "type": "int",
+              "defaultValue": 7
+            },
+            "highAvailabilityMode": {
+              "type": "string",
+              "defaultValue": "Disabled",
+              "allowedValues": [
+                "Disabled",
+                "ZoneRedundant"
+              ],
+              "metadata": {
+                "description": "Disabled (default) or ZoneRedundant — independent of deploymentSize, see the design spec."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.DBforPostgreSQL/flexibleServers",
+              "apiVersion": "2024-08-01",
+              "name": "[parameters('serverName')]",
+              "location": "[parameters('location')]",
+              "sku": {
+                "name": "[parameters('skuName')]",
+                "tier": "[parameters('skuTier')]"
+              },
+              "properties": {
+                "version": "[parameters('version')]",
+                "administratorLogin": "[parameters('administratorLogin')]",
+                "administratorLoginPassword": "[parameters('administratorPassword')]",
+                "storage": {
+                  "storageSizeGB": "[parameters('storageSizeGB')]"
+                },
+                "network": {
+                  "delegatedSubnetResourceId": "[parameters('delegatedSubnetId')]",
+                  "privateDnsZoneArmResourceId": "[parameters('privateDnsZoneId')]"
+                },
+                "highAvailability": {
+                  "mode": "[parameters('highAvailabilityMode')]"
+                },
+                "backup": {
+                  "backupRetentionDays": "[parameters('backupRetentionDays')]",
+                  "geoRedundantBackup": "Disabled"
+                }
+              }
+            },
+            {
+              "type": "Microsoft.DBforPostgreSQL/flexibleServers/databases",
+              "apiVersion": "2024-08-01",
+              "name": "[format('{0}/{1}', parameters('serverName'), parameters('databaseName'))]",
+              "properties": {
+                "charset": "UTF8",
+                "collation": "en_US.utf8"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', parameters('serverName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "serverFqdn": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', parameters('serverName')), '2024-08-01').fullyQualifiedDomainName]"
+            },
+            "serverName": {
+              "type": "string",
+              "value": "[parameters('serverName')]"
+            },
+            "databaseName": {
+              "type": "string",
+              "value": "[parameters('databaseName')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'network')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "keyvault",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "keyVaultName": {
+            "value": "[variables('keyVaultName')]"
+          },
+          "identityName": {
+            "value": "[format('{0}-id', variables('namePrefixLower'))]"
+          },
+          "keyVaultSubnetId": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'network'), '2025-04-01').outputs.keyVaultSubnetId.value]"
+          },
+          "kvPrivateDnsZoneId": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'network'), '2025-04-01').outputs.kvPrivateDnsZoneId.value]"
+          },
+          "pgFqdn": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'postgres'), '2025-04-01').outputs.serverFqdn.value]"
+          },
+          "databaseName": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'postgres'), '2025-04-01').outputs.databaseName.value]"
+          },
+          "administratorLogin": {
+            "value": "[parameters('administratorLogin')]"
+          },
+          "administratorPassword": {
+            "value": "[parameters('administratorPassword')]"
+          },
+          "dmarcAppDbPassword": {
+            "value": "[parameters('dmarcAppDbPassword')]"
+          },
+          "fernetKey": {
+            "value": "[parameters('fernetKey')]"
+          },
+          "platformAdminBootstrapPassword": {
+            "value": "[parameters('platformAdminBootstrapPassword')]"
+          },
+          "entraMailClientSecret": {
+            "value": "[parameters('entraMailClientSecret')]"
+          },
+          "entraSsoClientSecret": {
+            "value": "[parameters('entraSsoClientSecret')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "12422931055963705425"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region."
+              }
+            },
+            "keyVaultName": {
+              "type": "string"
+            },
+            "identityName": {
+              "type": "string"
+            },
+            "tenantId": {
+              "type": "string",
+              "defaultValue": "[subscription().tenantId]"
+            },
+            "keyVaultSubnetId": {
+              "type": "string",
+              "metadata": {
+                "description": "Non-delegated subnet for the private endpoint."
+              }
+            },
+            "kvPrivateDnsZoneId": {
+              "type": "string",
+              "metadata": {
+                "description": "privatelink.vaultcore.azure.net private DNS zone resource id."
+              }
+            },
+            "pgFqdn": {
+              "type": "string"
+            },
+            "databaseName": {
+              "type": "string"
+            },
+            "administratorLogin": {
+              "type": "string"
+            },
+            "administratorPassword": {
+              "type": "securestring"
+            },
+            "dmarcAppDbPassword": {
+              "type": "securestring"
+            },
+            "fernetKey": {
+              "type": "securestring"
+            },
+            "platformAdminBootstrapPassword": {
+              "type": "securestring",
+              "defaultValue": ""
+            },
+            "entraMailClientSecret": {
+              "type": "securestring",
+              "defaultValue": ""
+            },
+            "entraSsoClientSecret": {
+              "type": "securestring",
+              "defaultValue": ""
+            }
+          },
+          "variables": {
+            "kvSecretsUserRoleId": "4633458b-17de-408a-b874-0445c86b69e6"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+              "apiVersion": "2023-01-31",
+              "name": "[parameters('identityName')]",
+              "location": "[parameters('location')]"
+            },
+            {
+              "type": "Microsoft.KeyVault/vaults",
+              "apiVersion": "2023-07-01",
+              "name": "[parameters('keyVaultName')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "tenantId": "[parameters('tenantId')]",
+                "sku": {
+                  "family": "A",
+                  "name": "standard"
+                },
+                "enableRbacAuthorization": true,
+                "enableSoftDelete": true,
+                "softDeleteRetentionInDays": 7,
+                "publicNetworkAccess": "Disabled",
+                "networkAcls": {
+                  "defaultAction": "Deny",
+                  "bypass": "AzureServices"
+                }
+              }
+            },
+            {
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2023-11-01",
+              "name": "[format('{0}-pe', parameters('keyVaultName'))]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "subnet": {
+                  "id": "[parameters('keyVaultSubnetId')]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "[format('{0}-pls', parameters('keyVaultName'))]",
+                    "properties": {
+                      "privateLinkServiceId": "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]",
+                      "groupIds": [
+                        "vault"
+                      ]
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2023-11-01",
+              "name": "[format('{0}/{1}', format('{0}-pe', parameters('keyVaultName')), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "vaultcore",
+                    "properties": {
+                      "privateDnsZoneId": "[parameters('kvPrivateDnsZoneId')]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-pe', parameters('keyVaultName')))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]",
+              "name": "[guid(resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName')), variables('kvSecretsUserRoleId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('kvSecretsUserRoleId'))]",
+                "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName')), '2023-01-31').principalId]",
+                "principalType": "ServicePrincipal"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName'))]",
+                "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2023-07-01",
+              "name": "[format('{0}/{1}', parameters('keyVaultName'), 'app-database-url')]",
+              "properties": {
+                "value": "[format('postgresql+asyncpg://dmarc_app:{0}@{1}:5432/{2}', parameters('dmarcAppDbPassword'), parameters('pgFqdn'), parameters('databaseName'))]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2023-07-01",
+              "name": "[format('{0}/{1}', parameters('keyVaultName'), 'migrate-database-url')]",
+              "properties": {
+                "value": "[format('postgresql+asyncpg://{0}:{1}@{2}:5432/{3}', parameters('administratorLogin'), parameters('administratorPassword'), parameters('pgFqdn'), parameters('databaseName'))]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2023-07-01",
+              "name": "[format('{0}/{1}', parameters('keyVaultName'), 'dmarc-app-db-password')]",
+              "properties": {
+                "value": "[parameters('dmarcAppDbPassword')]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2023-07-01",
+              "name": "[format('{0}/{1}', parameters('keyVaultName'), 'fernet-key')]",
+              "properties": {
+                "value": "[parameters('fernetKey')]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2023-07-01",
+              "name": "[format('{0}/{1}', parameters('keyVaultName'), 'keda-pg-connection')]",
+              "properties": {
+                "value": "[format('host={0} port=5432 dbname={1} user=dmarc_app password={2} sslmode=require', parameters('pgFqdn'), parameters('databaseName'), parameters('dmarcAppDbPassword'))]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]"
+              ]
+            },
+            {
+              "condition": "[not(empty(parameters('platformAdminBootstrapPassword')))]",
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2023-07-01",
+              "name": "[format('{0}/{1}', parameters('keyVaultName'), 'platform-admin-bootstrap-password')]",
+              "properties": {
+                "value": "[parameters('platformAdminBootstrapPassword')]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]"
+              ]
+            },
+            {
+              "condition": "[not(empty(parameters('entraMailClientSecret')))]",
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2023-07-01",
+              "name": "[format('{0}/{1}', parameters('keyVaultName'), 'entra-mail-client-secret')]",
+              "properties": {
+                "value": "[parameters('entraMailClientSecret')]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]"
+              ]
+            },
+            {
+              "condition": "[not(empty(parameters('entraSsoClientSecret')))]",
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2023-07-01",
+              "name": "[format('{0}/{1}', parameters('keyVaultName'), 'entra-sso-client-secret')]",
+              "properties": {
+                "value": "[parameters('entraSsoClientSecret')]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "identityId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName'))]"
+            },
+            "identityClientId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName')), '2023-01-31').clientId]"
+            },
+            "identityPrincipalId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName')), '2023-01-31').principalId]"
+            },
+            "vaultUri": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName')), '2023-07-01').vaultUri]"
+            },
+            "roleAssignmentId": {
+              "type": "string",
+              "value": "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName')), variables('kvSecretsUserRoleId')))]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'network')]",
+        "[resourceId('Microsoft.Resources/deployments', 'postgres')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "environment",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "namePrefix": {
+            "value": "[variables('namePrefixLower')]"
+          },
+          "acaSubnetId": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'network'), '2025-04-01').outputs.acaSubnetId.value]"
+          },
+          "identityId": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'keyvault'), '2025-04-01').outputs.identityId.value]"
+          },
+          "vaultUri": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'keyvault'), '2025-04-01').outputs.vaultUri.value]"
+          },
+          "appImage": {
+            "value": "[variables('appImage')]"
+          },
+          "platformAdminBootstrapEmail": {
+            "value": "[parameters('platformAdminBootstrapEmail')]"
+          },
+          "deployBootstrapSecret": {
+            "value": "[variables('deployBootstrapSecret')]"
+          },
+          "logRetentionDays": {
+            "value": "[variables('tier').logRetentionDays]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "13633566004178771048"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region."
+              }
+            },
+            "namePrefix": {
+              "type": "string"
+            },
+            "acaSubnetId": {
+              "type": "string",
+              "metadata": {
+                "description": "Subnet delegated to Microsoft.App/environments."
+              }
+            },
+            "identityId": {
+              "type": "string",
+              "metadata": {
+                "description": "User-assigned identity id (reads Key Vault)."
+              }
+            },
+            "vaultUri": {
+              "type": "string",
+              "metadata": {
+                "description": "Key Vault base URI, e.g. https://<name>.vault.azure.net/"
+              }
+            },
+            "appImage": {
+              "type": "string"
+            },
+            "platformAdminBootstrapEmail": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "deployBootstrapSecret": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "Whether a platform-admin bootstrap password secret was created in Key Vault."
+              }
+            },
+            "logRetentionDays": {
+              "type": "int",
+              "metadata": {
+                "description": "Tier-resolved by the caller (main.bicep) from deploymentSize."
+              }
+            }
+          },
+          "variables": {
+            "migrateSecrets": "[concat(createArray(createObject('name', 'migrate-database-url', 'keyVaultUrl', format('{0}secrets/migrate-database-url', parameters('vaultUri')), 'identity', parameters('identityId')), createObject('name', 'dmarc-app-db-password', 'keyVaultUrl', format('{0}secrets/dmarc-app-db-password', parameters('vaultUri')), 'identity', parameters('identityId')), createObject('name', 'fernet-key', 'keyVaultUrl', format('{0}secrets/fernet-key', parameters('vaultUri')), 'identity', parameters('identityId'))), if(parameters('deployBootstrapSecret'), createArray(createObject('name', 'platform-admin-bootstrap-password', 'keyVaultUrl', format('{0}secrets/platform-admin-bootstrap-password', parameters('vaultUri')), 'identity', parameters('identityId'))), createArray()))]",
+            "migrateEnv": "[concat(createArray(createObject('name', 'DATABASE_URL', 'secretRef', 'migrate-database-url'), createObject('name', 'DMARC_APP_DB_PASSWORD', 'secretRef', 'dmarc-app-db-password'), createObject('name', 'FERNET_KEY', 'secretRef', 'fernet-key'), createObject('name', 'UPDATE_CHECK_ENABLED', 'value', 'false'), createObject('name', 'PLATFORM_ADMIN_BOOTSTRAP_EMAIL', 'value', parameters('platformAdminBootstrapEmail'))), if(parameters('deployBootstrapSecret'), createArray(createObject('name', 'PLATFORM_ADMIN_BOOTSTRAP_PASSWORD', 'secretRef', 'platform-admin-bootstrap-password')), createArray()))]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.OperationalInsights/workspaces",
+              "apiVersion": "2023-09-01",
+              "name": "[format('{0}-logs', parameters('namePrefix'))]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "sku": {
+                  "name": "PerGB2018"
+                },
+                "retentionInDays": "[parameters('logRetentionDays')]"
+              }
+            },
+            {
+              "type": "Microsoft.App/managedEnvironments",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}-env', parameters('namePrefix'))]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "appLogsConfiguration": {
+                  "destination": "log-analytics",
+                  "logAnalyticsConfiguration": {
+                    "customerId": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-logs', parameters('namePrefix'))), '2023-09-01').customerId]",
+                    "sharedKey": "[listKeys(resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-logs', parameters('namePrefix'))), '2023-09-01').primarySharedKey]"
+                  }
+                },
+                "vnetConfiguration": {
+                  "infrastructureSubnetId": "[parameters('acaSubnetId')]",
+                  "internal": false
+                },
+                "workloadProfiles": [
+                  {
+                    "name": "Consumption",
+                    "workloadProfileType": "Consumption"
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-logs', parameters('namePrefix')))]"
+              ]
+            },
+            {
+              "type": "Microsoft.App/jobs",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}-migrate', parameters('namePrefix'))]",
+              "location": "[parameters('location')]",
+              "identity": {
+                "type": "UserAssigned",
+                "userAssignedIdentities": {
+                  "[format('{0}', parameters('identityId'))]": {}
+                }
+              },
+              "properties": {
+                "environmentId": "[resourceId('Microsoft.App/managedEnvironments', format('{0}-env', parameters('namePrefix')))]",
+                "workloadProfileName": "Consumption",
+                "configuration": {
+                  "triggerType": "Manual",
+                  "replicaTimeout": 1800,
+                  "replicaRetryLimit": 1,
+                  "manualTriggerConfig": {
+                    "parallelism": 1,
+                    "replicaCompletionCount": 1
+                  },
+                  "secrets": "[variables('migrateSecrets')]"
+                },
+                "template": {
+                  "containers": [
+                    {
+                      "name": "migrate",
+                      "image": "[parameters('appImage')]",
+                      "command": [
+                        "sh",
+                        "-c",
+                        "python -m app.scripts.ensure_app_role && alembic upgrade head && python -m app.scripts.bootstrap_platform_admin"
+                      ],
+                      "resources": {
+                        "cpu": "[json('0.5')]",
+                        "memory": "1Gi"
+                      },
+                      "env": "[variables('migrateEnv')]"
+                    }
+                  ]
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.App/managedEnvironments', format('{0}-env', parameters('namePrefix')))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "environmentId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.App/managedEnvironments', format('{0}-env', parameters('namePrefix')))]"
+            },
+            "defaultDomain": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.App/managedEnvironments', format('{0}-env', parameters('namePrefix'))), '2024-03-01').defaultDomain]"
+            },
+            "migrateJobName": {
+              "type": "string",
+              "value": "[format('{0}-migrate', parameters('namePrefix'))]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'keyvault')]",
+        "[resourceId('Microsoft.Resources/deployments', 'network')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "apps",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "namePrefix": {
+            "value": "[variables('namePrefixLower')]"
+          },
+          "environmentId": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'environment'), '2025-04-01').outputs.environmentId.value]"
+          },
+          "envDefaultDomain": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'environment'), '2025-04-01').outputs.defaultDomain.value]"
+          },
+          "identityId": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'keyvault'), '2025-04-01').outputs.identityId.value]"
+          },
+          "vaultUri": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'keyvault'), '2025-04-01').outputs.vaultUri.value]"
+          },
+          "appImage": {
+            "value": "[variables('appImage')]"
+          },
+          "resolverImage": {
+            "value": "[variables('resolverImage')]"
+          },
+          "imageTag": {
+            "value": "[parameters('imageTag')]"
+          },
+          "publicBaseUrlOverride": {
+            "value": "[parameters('publicBaseUrlOverride')]"
+          },
+          "apiMinReplicas": {
+            "value": "[variables('tier').apiMinReplicas]"
+          },
+          "apiMaxReplicas": {
+            "value": "[variables('resolvedApiMaxReplicas')]"
+          },
+          "workerMinReplicas": {
+            "value": 1
+          },
+          "workerMaxReplicas": {
+            "value": "[variables('resolvedWorkerMaxReplicas')]"
+          },
+          "entraSsoClientId": {
+            "value": "[parameters('entraSsoClientId')]"
+          },
+          "entraSsoAuthority": {
+            "value": "[parameters('entraSsoAuthority')]"
+          },
+          "deployEntraSsoSecret": {
+            "value": "[variables('deployEntraSsoSecret')]"
+          },
+          "entraMailClientId": {
+            "value": "[parameters('entraMailClientId')]"
+          },
+          "deployEntraMailSecret": {
+            "value": "[variables('deployEntraMailSecret')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "7511873636507274096"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region."
+              }
+            },
+            "namePrefix": {
+              "type": "string"
+            },
+            "environmentId": {
+              "type": "string"
+            },
+            "envDefaultDomain": {
+              "type": "string",
+              "metadata": {
+                "description": "Managed environment default domain (to compute the api FQDN without a self-reference)."
+              }
+            },
+            "identityId": {
+              "type": "string"
+            },
+            "vaultUri": {
+              "type": "string"
+            },
+            "appImage": {
+              "type": "string"
+            },
+            "resolverImage": {
+              "type": "string"
+            },
+            "imageTag": {
+              "type": "string"
+            },
+            "publicBaseUrlOverride": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Override the api public URL (e.g. a custom domain). Empty = use the ACA FQDN."
+              }
+            },
+            "apiMinReplicas": {
+              "type": "int",
+              "metadata": {
+                "description": "Tier-resolved by the caller (main.bicep) from deploymentSize."
+              }
+            },
+            "apiMaxReplicas": {
+              "type": "int"
+            },
+            "workerMinReplicas": {
+              "type": "int"
+            },
+            "workerMaxReplicas": {
+              "type": "int"
+            },
+            "workerQueueTarget": {
+              "type": "string",
+              "defaultValue": "5",
+              "metadata": {
+                "description": "Target pending-job count per worker replica for the KEDA Postgres scaler."
+              }
+            },
+            "apiConcurrentRequests": {
+              "type": "string",
+              "defaultValue": "50"
+            },
+            "entraSsoClientId": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "entraSsoAuthority": {
+              "type": "string",
+              "defaultValue": "https://login.microsoftonline.com/organizations"
+            },
+            "deployEntraSsoSecret": {
+              "type": "bool",
+              "defaultValue": false
+            },
+            "entraMailClientId": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "deployEntraMailSecret": {
+              "type": "bool",
+              "defaultValue": false
+            }
+          },
+          "variables": {
+            "apiFqdn": "[format('{0}-api.{1}', parameters('namePrefix'), parameters('envDefaultDomain'))]",
+            "publicBaseUrl": "[if(empty(parameters('publicBaseUrlOverride')), format('https://{0}', variables('apiFqdn')), parameters('publicBaseUrlOverride'))]",
+            "resolverContainer": {
+              "name": "resolver",
+              "image": "[parameters('resolverImage')]",
+              "resources": {
+                "cpu": "[json('0.25')]",
+                "memory": "0.5Gi"
+              }
+            },
+            "apiSecrets": "[concat(createArray(createObject('name', 'app-database-url', 'keyVaultUrl', format('{0}secrets/app-database-url', parameters('vaultUri')), 'identity', parameters('identityId')), createObject('name', 'fernet-key', 'keyVaultUrl', format('{0}secrets/fernet-key', parameters('vaultUri')), 'identity', parameters('identityId'))), if(parameters('deployEntraSsoSecret'), createArray(createObject('name', 'entra-sso-client-secret', 'keyVaultUrl', format('{0}secrets/entra-sso-client-secret', parameters('vaultUri')), 'identity', parameters('identityId'))), createArray()))]",
+            "apiEnv": "[concat(createArray(createObject('name', 'DATABASE_URL', 'secretRef', 'app-database-url'), createObject('name', 'FERNET_KEY', 'secretRef', 'fernet-key'), createObject('name', 'PUBLIC_BASE_URL', 'value', variables('publicBaseUrl')), createObject('name', 'DNS_RESOLVER_HOST', 'value', '127.0.0.1'), createObject('name', 'RATE_LIMIT_BACKEND', 'value', 'postgres'), createObject('name', 'APP_VERSION', 'value', parameters('imageTag'))), if(parameters('deployEntraSsoSecret'), createArray(createObject('name', 'ENTRA_SSO_CLIENT_ID', 'value', parameters('entraSsoClientId')), createObject('name', 'ENTRA_SSO_CLIENT_SECRET', 'secretRef', 'entra-sso-client-secret'), createObject('name', 'ENTRA_SSO_AUTHORITY', 'value', parameters('entraSsoAuthority'))), createArray()))]",
+            "workerSecrets": "[concat(createArray(createObject('name', 'app-database-url', 'keyVaultUrl', format('{0}secrets/app-database-url', parameters('vaultUri')), 'identity', parameters('identityId')), createObject('name', 'fernet-key', 'keyVaultUrl', format('{0}secrets/fernet-key', parameters('vaultUri')), 'identity', parameters('identityId')), createObject('name', 'keda-pg-connection', 'keyVaultUrl', format('{0}secrets/keda-pg-connection', parameters('vaultUri')), 'identity', parameters('identityId'))), if(parameters('deployEntraMailSecret'), createArray(createObject('name', 'entra-mail-client-secret', 'keyVaultUrl', format('{0}secrets/entra-mail-client-secret', parameters('vaultUri')), 'identity', parameters('identityId'))), createArray()))]",
+            "workerEnv": "[concat(createArray(createObject('name', 'DATABASE_URL', 'secretRef', 'app-database-url'), createObject('name', 'FERNET_KEY', 'secretRef', 'fernet-key'), createObject('name', 'DNS_RESOLVER_HOST', 'value', '127.0.0.1'), createObject('name', 'RATE_LIMIT_BACKEND', 'value', 'postgres'), createObject('name', 'APP_VERSION', 'value', parameters('imageTag'))), if(parameters('deployEntraMailSecret'), createArray(createObject('name', 'ENTRA_MAIL_CLIENT_ID', 'value', parameters('entraMailClientId')), createObject('name', 'ENTRA_MAIL_CLIENT_SECRET', 'secretRef', 'entra-mail-client-secret')), createArray()))]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.App/containerApps",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}-api', parameters('namePrefix'))]",
+              "location": "[parameters('location')]",
+              "identity": {
+                "type": "UserAssigned",
+                "userAssignedIdentities": {
+                  "[format('{0}', parameters('identityId'))]": {}
+                }
+              },
+              "properties": {
+                "environmentId": "[parameters('environmentId')]",
+                "workloadProfileName": "Consumption",
+                "configuration": {
+                  "activeRevisionsMode": "Single",
+                  "ingress": {
+                    "external": true,
+                    "targetPort": 8000,
+                    "transport": "auto",
+                    "allowInsecure": false,
+                    "traffic": [
+                      {
+                        "latestRevision": true,
+                        "weight": 100
+                      }
+                    ]
+                  },
+                  "secrets": "[variables('apiSecrets')]"
+                },
+                "template": {
+                  "containers": [
+                    {
+                      "name": "api",
+                      "image": "[parameters('appImage')]",
+                      "resources": {
+                        "cpu": "[json('0.5')]",
+                        "memory": "1Gi"
+                      },
+                      "env": "[variables('apiEnv')]",
+                      "probes": [
+                        {
+                          "type": "Liveness",
+                          "httpGet": {
+                            "path": "/api/health",
+                            "port": 8000
+                          },
+                          "initialDelaySeconds": 10,
+                          "periodSeconds": 30
+                        }
+                      ]
+                    },
+                    "[variables('resolverContainer')]"
+                  ],
+                  "scale": {
+                    "minReplicas": "[parameters('apiMinReplicas')]",
+                    "maxReplicas": "[parameters('apiMaxReplicas')]",
+                    "rules": [
+                      {
+                        "name": "http-concurrency",
+                        "http": {
+                          "metadata": {
+                            "concurrentRequests": "[parameters('apiConcurrentRequests')]"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "type": "Microsoft.App/containerApps",
+              "apiVersion": "2024-03-01",
+              "name": "[format('{0}-worker', parameters('namePrefix'))]",
+              "location": "[parameters('location')]",
+              "identity": {
+                "type": "UserAssigned",
+                "userAssignedIdentities": {
+                  "[format('{0}', parameters('identityId'))]": {}
+                }
+              },
+              "properties": {
+                "environmentId": "[parameters('environmentId')]",
+                "workloadProfileName": "Consumption",
+                "configuration": {
+                  "activeRevisionsMode": "Single",
+                  "secrets": "[variables('workerSecrets')]"
+                },
+                "template": {
+                  "containers": [
+                    {
+                      "name": "worker",
+                      "image": "[parameters('appImage')]",
+                      "command": [
+                        "python",
+                        "-m",
+                        "app.workers.scheduler"
+                      ],
+                      "resources": {
+                        "cpu": "[json('0.5')]",
+                        "memory": "1Gi"
+                      },
+                      "env": "[variables('workerEnv')]",
+                      "probes": [
+                        {
+                          "type": "Liveness",
+                          "httpGet": {
+                            "path": "/health",
+                            "port": 8080
+                          },
+                          "initialDelaySeconds": 15,
+                          "periodSeconds": 30
+                        },
+                        {
+                          "type": "Startup",
+                          "httpGet": {
+                            "path": "/health",
+                            "port": 8080
+                          },
+                          "initialDelaySeconds": 5,
+                          "periodSeconds": 5,
+                          "failureThreshold": 30
+                        }
+                      ]
+                    },
+                    "[variables('resolverContainer')]"
+                  ],
+                  "scale": {
+                    "minReplicas": "[parameters('workerMinReplicas')]",
+                    "maxReplicas": "[parameters('workerMaxReplicas')]",
+                    "rules": [
+                      {
+                        "name": "pg-queue-depth",
+                        "custom": {
+                          "type": "postgresql",
+                          "metadata": {
+                            "query": "SELECT count(*) FROM background_jobs WHERE status = 'pending' AND run_after <= now()",
+                            "targetQueryValue": "[parameters('workerQueueTarget')]"
+                          },
+                          "auth": [
+                            {
+                              "secretRef": "keda-pg-connection",
+                              "triggerParameter": "connection"
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "outputs": {
+            "apiFqdn": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.App/containerApps', format('{0}-api', parameters('namePrefix'))), '2024-03-01').configuration.ingress.fqdn]"
+            },
+            "apiUrl": {
+              "type": "string",
+              "value": "[format('https://{0}', reference(resourceId('Microsoft.App/containerApps', format('{0}-api', parameters('namePrefix'))), '2024-03-01').configuration.ingress.fqdn)]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'environment')]",
+        "[resourceId('Microsoft.Resources/deployments', 'keyvault')]",
+        "[resourceId('Microsoft.Resources/deploymentScripts', format('{0}-run-migrate', variables('namePrefixLower')))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "apiUrl": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'apps'), '2025-04-01').outputs.apiUrl.value]"
+    },
+    "apiFqdn": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'apps'), '2025-04-01').outputs.apiFqdn.value]"
+    },
+    "keyVaultName": {
+      "type": "string",
+      "value": "[variables('keyVaultName')]"
+    },
+    "postgresServerName": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'postgres'), '2025-04-01').outputs.serverName.value]"
+    }
+  }
+}

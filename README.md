@@ -451,10 +451,13 @@ a private Key Vault, and Container Apps that scale the api on HTTP concurrency a
 the worker on the background-job queue depth, with a sizing-tier system (test/small/
 medium/large) that pre-fills network, Postgres, and replica-count sizing:
 
-> **Not yet functional:** the compiled `azuredeploy.json` the button needs hasn't
-> been generated in this environment (no Azure CLI available), so clicking it will
-> fail to resolve a template today. The **manual `az deployment group create`**
-> path works right now, since it deploys straight from the Bicep source — see
+> **Not yet live-deployment-tested.** `azuredeploy.json` is compiled from the Bicep
+> source with the standalone Bicep CLI (`bicep build`, 0 errors/warnings/lint findings)
+> and its parameters are verified against `createUiDefinition.json`'s wizard outputs —
+> but no environment used to build this has held real Azure credentials, so the button
+> itself has never actually been clicked against a live subscription. The **manual
+> `az deployment group create`** path (below) is the one to reach for first if
+> something doesn't resolve as expected — see
 > [`deploy/azure/README.md`](deploy/azure/README.md#manual-deploy-instead-of-the-button).
 > The button also points at the `v0.1.5-beta` branch rather than `master` for now,
 > since this work hasn't promoted to `master`/a stable tag yet; both of these will
@@ -466,7 +469,9 @@ The button opens a parameter form in the Azure Portal (admin credentials, a Fern
 key, optional Entra). It provisions everything and runs the database migration
 automatically. Full details, prerequisites, the manual `az deployment` path, and
 custom-domain setup are in [`deploy/azure/README.md`](deploy/azure/README.md). The
-Bicep templates there are the source of truth; `azuredeploy.json` is compiled from them.
+Bicep templates there are the source of truth; `azuredeploy.json` is compiled from them
+(regenerate after any Bicep change with `bicep build main.bicep --outfile azuredeploy.json`
+from `deploy/azure/`, and commit the result — this isn't yet automated in CI).
 
 ## Configuration
 

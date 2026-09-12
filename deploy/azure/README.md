@@ -7,23 +7,26 @@ that pre-fills network, Postgres, and replica-count sizing. Bicep is the source 
 truth (`main.bicep` + `modules/`); `azuredeploy.json` is the compiled ARM the Portal
 button uses.
 
-> **The button below is not yet functional.** `azuredeploy.json` (the compiled ARM
-> template the Portal loads) hasn't been generated yet — this environment has neither
-> the Azure CLI nor the Bicep CLI available to run the compile step. Clicking the
-> button today will fail to resolve a template.
+> **Compiled, not yet live-deployment-tested.** `azuredeploy.json` (the compiled ARM
+> template the Portal loads) is generated from `main.bicep` with the standalone Bicep
+> CLI (`bicep build`) — 0 errors, 0 warnings, 0 lint findings, and its parameter list
+> cross-checked against every `createUiDefinition.json` wizard output. What it hasn't
+> had is a real deployment against a live Azure subscription — no environment used to
+> build this held Azure credentials, so treat the first click as the actual
+> end-to-end test. If something doesn't resolve as expected, fall back to the
+> **[manual deploy](#manual-deploy-instead-of-the-button)** path below, or run
+> `az deployment group what-if` first to preview.
 >
-> **Use the [manual deploy](#manual-deploy-instead-of-the-button) path below instead** —
-> it deploys straight from the Bicep source and needs no compiled JSON at all, so it
-> works right now.
->
-> To make the button work: someone with the Azure CLI installed needs to run, from
-> the repo root:
+> **Keeping `azuredeploy.json` in sync:** it is not regenerated automatically. After
+> any change to `main.bicep` or a module, regenerate and commit it, from `deploy/azure/`:
 > ```bash
-> cd deploy/azure && az bicep build --file main.bicep --outfile azuredeploy.json
+> az bicep build --file main.bicep --outfile azuredeploy.json
+> # or, without the Azure CLI, the standalone Bicep CLI works identically:
+> # bicep build main.bicep --outfile azuredeploy.json
 > ```
-> and commit the resulting `azuredeploy.json`. A good follow-up (out of scope for this
-> change) would be to automate that compile step in CI, so the committed artifact can
-> never drift out of sync with `main.bicep` — it isn't wired up yet.
+> A good follow-up (out of scope for this change) would be to automate that compile
+> step in CI so the committed artifact can never drift out of sync with `main.bicep` —
+> it isn't wired up yet.
 
 [![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FBJD1997%2FYetAnotherDmarcTool%2Fv0.1.5-beta%2Fdeploy%2Fazure%2Fazuredeploy.json/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2FBJD1997%2FYetAnotherDmarcTool%2Fv0.1.5-beta%2Fdeploy%2Fazure%2FcreateUiDefinition.json)
 
@@ -117,8 +120,9 @@ az deployment group create   -g <rg> -f deploy/azure/main.bicep -p @my.parameter
 If the in-deployment migrate step ever doesn't run, trigger it yourself:
 `az containerapp job start -n <namePrefix>-migrate -g <rg>`.
 
-This path works today regardless of the `azuredeploy.json` gap above — it deploys
-directly from `main.bicep`, no compiled ARM template needed.
+This path deploys directly from `main.bicep`, no compiled ARM template needed — it's
+also the recommended way to test a deployment for the first time, since `what-if`
+gives you a preview before anything is created.
 
 ## Notes & trade-offs
 - **Sizing tiers are a starting point, not a ceiling.** `deploymentSize` picks
