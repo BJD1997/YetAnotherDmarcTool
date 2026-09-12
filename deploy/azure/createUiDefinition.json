@@ -1,0 +1,276 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/0.1.2-preview/CreateUIDefinition.MultiVm.json#",
+  "handler": "Microsoft.Azure.CreateUIDef",
+  "version": "0.1.2-preview",
+  "parameters": {
+    "config": {
+      "isWizard": false,
+      "basics": {
+        "description": "Deploys YetAnotherDmarcTool on Azure Container Apps with a private (VNet-integrated) PostgreSQL Flexible Server and Key Vault. The api and worker each run a DNSSEC resolver sidecar; the worker autoscales on the background-job queue depth. A migrate job initializes the database during deployment. Pick a deployment size on the Sizing step to pre-fill network, Postgres, and replica-count sizing — every value stays individually overridable via CLI/parameters file.",
+        "resourceGroup": {
+          "allowExisting": true
+        }
+      }
+    },
+    "basics": [
+      {
+        "name": "namePrefix",
+        "type": "Microsoft.Common.TextBox",
+        "label": "Resource name prefix",
+        "defaultValue": "yadt",
+        "toolTip": "Short prefix for resource names (a lowercase letter followed by 1-11 letters/digits).",
+        "constraints": {
+          "required": true,
+          "regex": "^[a-z][a-z0-9]{1,11}$",
+          "validationMessage": "2-12 chars, lowercase letter first, then letters/digits."
+        }
+      },
+      {
+        "name": "imageTag",
+        "type": "Microsoft.Common.TextBox",
+        "label": "Image tag",
+        "defaultValue": "latest",
+        "toolTip": "Container image tag to deploy, e.g. a release like v0.1.4 or 'latest'.",
+        "constraints": {
+          "required": true
+        }
+      }
+    ],
+    "steps": [
+      {
+        "name": "secrets",
+        "label": "Database & secrets",
+        "elements": [
+          {
+            "name": "administratorLogin",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Postgres admin login",
+            "defaultValue": "dmarcadmin",
+            "toolTip": "Administrator login for the PostgreSQL Flexible Server.",
+            "constraints": {
+              "required": true,
+              "regex": "^[a-z][a-z0-9_]{2,62}$",
+              "validationMessage": "Lowercase letter first, then letters/digits/underscore."
+            }
+          },
+          {
+            "name": "administratorPassword",
+            "type": "Microsoft.Common.PasswordBox",
+            "label": {
+              "password": "Postgres admin password",
+              "confirmPassword": "Confirm password"
+            },
+            "toolTip": "At least 12 characters.",
+            "constraints": {
+              "required": true,
+              "regex": "^.{12,}$",
+              "validationMessage": "At least 12 characters."
+            },
+            "options": {
+              "hideConfirmation": false
+            }
+          },
+          {
+            "name": "dmarcAppDbPassword",
+            "type": "Microsoft.Common.PasswordBox",
+            "label": {
+              "password": "App (dmarc_app) DB password",
+              "confirmPassword": "Confirm password"
+            },
+            "toolTip": "Password for the non-owner runtime role the app connects as. At least 12 characters.",
+            "constraints": {
+              "required": true,
+              "regex": "^.{12,}$",
+              "validationMessage": "At least 12 characters."
+            },
+            "options": {
+              "hideConfirmation": false
+            }
+          },
+          {
+            "name": "fernetKey",
+            "type": "Microsoft.Common.PasswordBox",
+            "label": {
+              "password": "Fernet key",
+              "confirmPassword": "Confirm key"
+            },
+            "toolTip": "Encrypts TOTP secrets/credentials at rest. Generate with: openssl rand -base64 32 | tr '+/' '-_'",
+            "constraints": {
+              "required": true,
+              "regex": "^[A-Za-z0-9_-]{43,44}$",
+              "validationMessage": "A url-safe base64 32-byte key (43-44 chars). Generate: openssl rand -base64 32 | tr '+/' '-_'"
+            },
+            "options": {
+              "hideConfirmation": true
+            }
+          }
+        ]
+      },
+      {
+        "name": "sizing",
+        "label": "Sizing & domain",
+        "elements": [
+          {
+            "name": "deploymentSize",
+            "type": "Microsoft.Common.OptionsGroup",
+            "label": "Deployment size",
+            "defaultValue": "Small — a few users",
+            "toolTip": "Pre-fills network, Postgres, and replica-count sizing. Every value stays individually overridable below.",
+            "constraints": {
+              "allowedValues": [
+                {
+                  "label": "Test — smallest footprint: single api/worker replica, Burstable B1ms Postgres. For trying it out, not real traffic.",
+                  "value": "test"
+                },
+                {
+                  "label": "Small — a few users: up to 2 api/worker replicas, Burstable B2s Postgres. The default.",
+                  "value": "small"
+                },
+                {
+                  "label": "Medium — a small team/MSP: up to 3 api/worker replicas, General Purpose D2ds_v4 Postgres.",
+                  "value": "medium"
+                },
+                {
+                  "label": "Large — heavier load: 2-5 api replicas, up to 5 worker replicas, General Purpose D4ds_v4 Postgres.",
+                  "value": "large"
+                }
+              ]
+            },
+            "visible": true
+          },
+          {
+            "name": "postgresHighAvailability",
+            "type": "Microsoft.Common.CheckBox",
+            "label": "Enable Postgres high availability (zone-redundant)",
+            "toolTip": "Adds a synchronously-replicated standby in a second Availability Zone with automatic failover. Roughly doubles Postgres compute cost. Requires a region with Availability Zone support.",
+            "visible": "[not(equals(steps('sizing').deploymentSize, 'test'))]"
+          },
+          {
+            "name": "publicBaseUrlOverride",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Custom base URL (optional)",
+            "defaultValue": "",
+            "toolTip": "e.g. https://dmarc.example.com. Leave blank to use the default Container Apps URL; bind the custom domain + managed certificate after deployment.",
+            "constraints": {
+              "required": false,
+              "regex": "^$|^https://.+$",
+              "validationMessage": "Must start with https://, or leave blank."
+            }
+          }
+        ]
+      },
+      {
+        "name": "admin",
+        "label": "Platform admin",
+        "elements": [
+          {
+            "name": "platformAdminBootstrapEmail",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Bootstrap admin email",
+            "defaultValue": "",
+            "toolTip": "The first platform-admin account, created if none exists. Leave blank to create no admin (you'd have to seed one manually).",
+            "constraints": {
+              "required": false,
+              "regex": "^$|^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$",
+              "validationMessage": "A valid email address, or leave blank."
+            }
+          },
+          {
+            "name": "platformAdminBootstrapPassword",
+            "type": "Microsoft.Common.PasswordBox",
+            "label": {
+              "password": "Bootstrap admin password",
+              "confirmPassword": "Confirm password"
+            },
+            "toolTip": "Password for the first platform admin. Required if you set an email above.",
+            "constraints": {
+              "required": false
+            },
+            "options": {
+              "hideConfirmation": false
+            }
+          }
+        ]
+      },
+      {
+        "name": "entra",
+        "label": "Entra (optional)",
+        "elements": [
+          {
+            "name": "info",
+            "type": "Microsoft.Common.InfoBox",
+            "visible": true,
+            "options": {
+              "icon": "Info",
+              "text": "Optional. Leave blank for local email+password+TOTP login and DNS-checks-only use. Fill in to enable Entra SSO (api) and/or Microsoft Graph mailbox report ingestion (worker)."
+            }
+          },
+          {
+            "name": "entraSsoClientId",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Entra SSO client ID",
+            "defaultValue": "",
+            "constraints": {
+              "required": false
+            }
+          },
+          {
+            "name": "entraSsoClientSecret",
+            "type": "Microsoft.Common.PasswordBox",
+            "label": {
+              "password": "Entra SSO client secret",
+              "confirmPassword": "Confirm"
+            },
+            "constraints": {
+              "required": false
+            },
+            "options": {
+              "hideConfirmation": true
+            }
+          },
+          {
+            "name": "entraMailClientId",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Entra Mail client ID",
+            "defaultValue": "",
+            "constraints": {
+              "required": false
+            }
+          },
+          {
+            "name": "entraMailClientSecret",
+            "type": "Microsoft.Common.PasswordBox",
+            "label": {
+              "password": "Entra Mail client secret",
+              "confirmPassword": "Confirm"
+            },
+            "constraints": {
+              "required": false
+            },
+            "options": {
+              "hideConfirmation": true
+            }
+          }
+        ]
+      }
+    ],
+    "outputs": {
+      "location": "[location()]",
+      "namePrefix": "[basics('namePrefix')]",
+      "imageTag": "[basics('imageTag')]",
+      "deploymentSize": "[steps('sizing').deploymentSize]",
+      "postgresHighAvailability": "[if(steps('sizing').postgresHighAvailability, 'ZoneRedundant', 'Disabled')]",
+      "administratorLogin": "[steps('secrets').administratorLogin]",
+      "administratorPassword": "[steps('secrets').administratorPassword]",
+      "dmarcAppDbPassword": "[steps('secrets').dmarcAppDbPassword]",
+      "fernetKey": "[steps('secrets').fernetKey]",
+      "platformAdminBootstrapEmail": "[steps('admin').platformAdminBootstrapEmail]",
+      "platformAdminBootstrapPassword": "[steps('admin').platformAdminBootstrapPassword]",
+      "entraSsoClientId": "[steps('entra').entraSsoClientId]",
+      "entraSsoClientSecret": "[steps('entra').entraSsoClientSecret]",
+      "entraMailClientId": "[steps('entra').entraMailClientId]",
+      "entraMailClientSecret": "[steps('entra').entraMailClientSecret]",
+      "publicBaseUrlOverride": "[steps('sizing').publicBaseUrlOverride]"
+    }
+  }
+}
