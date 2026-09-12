@@ -451,8 +451,6 @@ a private Key Vault, and Container Apps that scale the api on HTTP concurrency a
 the worker on the background-job queue depth, with a sizing-tier system (test/small/
 medium/large) that pre-fills network, Postgres, and replica-count sizing:
 
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FBJD1997%2FYetAnotherDmarcTool%2Fv0.1.5-beta%2Fdeploy%2Fazure%2Fazuredeploy.json/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2FBJD1997%2FYetAnotherDmarcTool%2Fv0.1.5-beta%2Fdeploy%2Fazure%2FcreateUiDefinition.json)
-
 > **Not yet functional:** the compiled `azuredeploy.json` the button needs hasn't
 > been generated in this environment (no Azure CLI available), so clicking it will
 > fail to resolve a template today. The **manual `az deployment group create`**
@@ -461,6 +459,8 @@ medium/large) that pre-fills network, Postgres, and replica-count sizing:
 > The button also points at the `v0.1.5-beta` branch rather than `master` for now,
 > since this work hasn't promoted to `master`/a stable tag yet; both of these will
 > be revisited once `v0.1.5` goes stable.
+
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FBJD1997%2FYetAnotherDmarcTool%2Fv0.1.5-beta%2Fdeploy%2Fazure%2Fazuredeploy.json/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2FBJD1997%2FYetAnotherDmarcTool%2Fv0.1.5-beta%2Fdeploy%2Fazure%2FcreateUiDefinition.json)
 
 The button opens a parameter form in the Azure Portal (admin credentials, a Fernet
 key, optional Entra). It provisions everything and runs the database migration
