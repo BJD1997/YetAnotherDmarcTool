@@ -81,9 +81,15 @@ param workerMaxReplicasOverride int = 0
 // --- the sizing-tier lookup table: the ONLY place tier logic is resolved ---
 var sizingTiers = {
   test: {
+    // aca is /27 (32 addresses) — Azure's documented minimum for a Container
+    // Apps workload-profiles environment subnet, with no headroom to raise
+    // this tier's replica ceiling above 1 without resizing it too.
     vnetAddressPrefix: '10.20.0.0/25'
     acaSubnetPrefix: '10.20.0.32/27'
-    pgSubnetPrefix: '10.20.0.8/29'
+    // /28 (10.20.0.64-79): Azure's documented minimum delegated-subnet size
+    // for a Postgres Flexible Server is /28 (16 addresses) — a /29 here is
+    // rejected at deployment time.
+    pgSubnetPrefix: '10.20.0.64/28'
     keyVaultSubnetPrefix: '10.20.0.16/29'
     postgresSkuName: 'Standard_B1ms'
     postgresSkuTier: 'Burstable'
@@ -141,9 +147,14 @@ var resolvedPostgresStorageGB = postgresStorageGBOverride == 0 ? tier.postgresSt
 var resolvedApiMaxReplicas = apiMaxReplicasOverride == 0 ? tier.apiMaxReplicas : apiMaxReplicasOverride
 var resolvedWorkerMaxReplicas = workerMaxReplicasOverride == 0 ? tier.workerMaxReplicas : workerMaxReplicasOverride
 
+// The wizard's regex already enforces lowercase, but a CLI/parameters-file
+// deploy can pass any case — normalize once here so every namePrefix-derived
+// resource name (Key Vault, identities, the migrate script) is consistent
+// regardless of caller casing.
+var namePrefixLower = toLower(namePrefix)
 var suffix = uniqueString(resourceGroup().id)
-var keyVaultName = take('${namePrefix}kv${suffix}', 24)
-var pgServerName = toLower('${namePrefix}-pg-${suffix}')
+var keyVaultName = take('${namePrefixLower}kv${suffix}', 24)
+var pgServerName = '${namePrefixLower}-pg-${suffix}'
 var appImage = 'ghcr.io/bjd1997/yetanotherdmarctool:${imageTag}'
 var resolverImage = 'ghcr.io/bjd1997/yetanotherdmarctool-resolver:${imageTag}'
 
@@ -157,7 +168,7 @@ module network 'modules/network.bicep' = {
   name: 'network'
   params: {
     location: location
-    namePrefix: namePrefix
+    namePrefix: namePrefixLower
     vnetAddressPrefix: tier.vnetAddressPrefix
     acaSubnetPrefix: tier.acaSubnetPrefix
     pgSubnetPrefix: tier.pgSubnetPrefix
@@ -186,7 +197,7 @@ module keyvault 'modules/keyvault.bicep' = {
   params: {
     location: location
     keyVaultName: keyVaultName
-    identityName: '${namePrefix}-id'
+    identityName: '${namePrefixLower}-id'
     keyVaultSubnetId: network.outputs.keyVaultSubnetId
     kvPrivateDnsZoneId: network.outputs.kvPrivateDnsZoneId
     pgFqdn: postgres.outputs.serverFqdn
@@ -205,7 +216,7 @@ module environment 'modules/environment.bicep' = {
   name: 'environment'
   params: {
     location: location
-    namePrefix: namePrefix
+    namePrefix: namePrefixLower
     acaSubnetId: network.outputs.acaSubnetId
     identityId: keyvault.outputs.identityId
     vaultUri: keyvault.outputs.vaultUri
@@ -218,7 +229,7 @@ module environment 'modules/environment.bicep' = {
 
 // Dedicated identity for the deploymentScript to start the migrate job.
 resource deployIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
-  name: '${namePrefix}-deploy-id'
+  name: '${namePrefixLower}-deploy-id'
   location: location
 }
 
@@ -235,7 +246,7 @@ resource deployContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' 
 // so the schema + dmarc_app role exist before the apps start. Only calls the ARM
 // control plane, so it needs no VNet access.
 resource runMigrate 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
-  name: '${namePrefix}-run-migrate'
+  name: '${namePrefixLower}-run-migrate'
   location: location
   kind: 'AzureCLI'
   identity: {
@@ -261,6 +272,10 @@ resource runMigrate 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
     ]
     scriptContent: '''
       set -e
+      # `az containerapp` ships as a CLI extension, not a core command group;
+      # this image may not have it pre-installed. Adding it explicitly avoids
+      # relying on az's dynamic-install prompt in this non-interactive script.
+      az extension add --name containerapp --upgrade -y 2>/dev/null || true
       echo "waiting for RBAC propagation before starting the migrate job..."
       sleep 45
       echo "starting migrate job $JOB in $RG"
@@ -284,7 +299,7 @@ module apps 'modules/apps.bicep' = {
   name: 'apps'
   params: {
     location: location
-    namePrefix: namePrefix
+    namePrefix: namePrefixLower
     environmentId: environment.outputs.environmentId
     envDefaultDomain: environment.outputs.defaultDomain
     identityId: keyvault.outputs.identityId

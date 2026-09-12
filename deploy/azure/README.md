@@ -78,7 +78,7 @@ button uses.
 | `namePrefix` | yes | 2–12 chars, lowercase-letter first. Prefix for resource names. |
 | `imageTag` | yes | Release tag (e.g. `v0.1.5`) or `latest`. Drives both the app image and the resolver sidecar image. |
 | `deploymentSize` | yes | `test` / `small` (default) / `medium` / `large`. Pre-fills network, Postgres, and replica-count sizing — see "What it creates" above. |
-| `postgresHighAvailability` | yes | `Disabled` (default) / `ZoneRedundant`. Independent of `deploymentSize` — roughly doubles Postgres compute cost when enabled. |
+| `postgresHighAvailability` | yes | `Disabled` (default) / `ZoneRedundant`. Independent of `deploymentSize` — roughly doubles Postgres compute cost when enabled. Not offered (hidden) in the wizard for `test`/`small`: Azure's Burstable Postgres SKU (both tiers) doesn't support zone-redundant HA at all — only General Purpose/Memory Optimized (`medium`/`large`) do. Also requires a region with Availability Zone support; an incompatible region surfaces as an Azure deployment-time validation error, not a wizard warning. |
 | `administratorLogin` / `administratorPassword` | yes | Postgres admin (used only by the migrate job). |
 | `dmarcAppDbPassword` | yes | Password for the non-owner `dmarc_app` role the app connects as. |
 | `fernetKey` | yes | Encrypts TOTP secrets/credentials at rest. |
@@ -129,6 +129,19 @@ directly from `main.bicep`, no compiled ARM template needed.
   adds a synchronously-replicated standby in a second zone with automatic
   failover — worthwhile for production, but it's an explicit opt-in for a reason:
   it roughly doubles the Postgres compute cost over the same SKU without it.
+  Two hard constraints to know before overriding it via CLI/parameters file
+  (the wizard already enforces the first by hiding the checkbox): it requires
+  a `GeneralPurpose`/`MemoryOptimized` Postgres SKU — Azure does not support it
+  on `Burstable` (`test`/`small`'s default SKU) at all — and it requires a
+  region with Availability Zone support; an incompatible region surfaces as an
+  Azure deployment-time validation error, not a pre-flight warning.
+- **Redeploying into a resource group you deleted can collide on the Key Vault
+  name.** The vault's name is derived from `uniqueString(resourceGroup().id)`,
+  which is stable for the same resource-group name/subscription, and soft-delete
+  keeps a deleted vault's name reserved for 7 days. If a redeploy within that
+  window fails with "vault name already in use," either wait it out or run
+  `az keyvault purge -n <vaultName>` first (irreversible — only do this if
+  nothing needs recovering from the deleted vault).
 - **Cost (baseline, `small` tier, no HA)**: Container Apps Consumption
   (scale-to-1 here for the always-on leader), a Burstable `Standard_B2s`
   Postgres, Key Vault, and Log Analytics — a small always-on baseline. Raise the

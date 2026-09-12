@@ -229,7 +229,11 @@ async def main() -> None:
         # `asyncio.gather(*tasks)` used to do before this task's SIGTERM handling
         # was added.
         for task in done:
-            if task is stop_task or task.cancelled():
+            # A real task can land in `done` alongside stop_task on the
+            # SIGTERM path too (e.g. it happened to finish an iteration in
+            # the same event-loop pass) — that's not a failure, so check
+            # stop_event itself rather than only excluding stop_task.
+            if task is stop_task or task.cancelled() or stop_event.is_set():
                 continue
             exc = task.exception()
             if exc is not None:

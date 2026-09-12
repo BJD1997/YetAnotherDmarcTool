@@ -17,6 +17,10 @@ Graph/Entra-adjacent config for that. Instead:
     `_consumer_loop`) replaced with trivial stand-ins, so the real signal
     handler registration, stop_event/task racing, and `finally:
     leader.release()` wiring in `main()` itself is exercised end to end.
+    One of these (`test_main_shuts_down_cleanly_when_a_loop_returns_
+    alongside_stop_task`) uses a stand-in that deliberately races stop_task
+    rather than an inert one, to reproduce a `done`-set edge case the loops
+    never hit at real DB-round-trip timings.
 """
 
 import asyncio
@@ -134,6 +138,44 @@ async def test_main_propagates_task_exception_and_still_releases_leader(monkeypa
 
         with pytest.raises(_SimulatedCrash):
             await asyncio.wait_for(scheduler_module.main(), timeout=3)
+
+    release_mock.assert_awaited_once()
+
+
+async def test_main_shuts_down_cleanly_when_a_loop_returns_alongside_stop_task(monkeypatch):
+    """Regression test for a latent bug the final whole-branch review caught:
+    the `done` guard used to treat any non-stop_task member of `done` as "a
+    task died unexpectedly" (`task is stop_task or task.cancelled()`), without
+    checking stop_event itself. A loop that (like the real _consumer_loop's
+    idle path) awaits stop_event directly and returns cleanly can land in
+    `done` in the very same asyncio.wait() batch as stop_task on a genuine
+    SIGTERM — that used to raise RuntimeError and log a false-alarm crash
+    traceback on every normal shutdown where timing lined up this way.
+    """
+    monkeypatch.setattr(scheduler_module, "_heartbeat_loop", _idle_loop)
+    monkeypatch.setattr(scheduler_module, "_leadership_loop", _idle_loop)
+
+    async def _consumer_stand_in(_worker_id, stop_event):
+        # No round-trip before the await, unlike the real loop's process_next
+        # call — so this resolves in lockstep with stop_task, reproducing the
+        # race rather than leaving it latent.
+        await stop_event.wait()
+
+    monkeypatch.setattr(scheduler_module, "_consumer_loop", _consumer_stand_in)
+    monkeypatch.setattr(scheduler_module, "start_health_server", lambda *_a, **_k: None)
+    monkeypatch.setattr(scheduler_module.settings, "worker_concurrency", 1)
+
+    release_mock = AsyncMock()
+    with patch.object(scheduler_module, "LeaderLock") as MockLeaderLock:
+        instance = MockLeaderLock.return_value
+        instance.release = release_mock
+        instance.is_leader = False
+
+        run_task = asyncio.create_task(scheduler_module.main())
+        await asyncio.sleep(0.1)
+        os.kill(os.getpid(), signal.SIGTERM)
+        # Before the fix, this raised RuntimeError instead of returning.
+        await asyncio.wait_for(run_task, timeout=3)
 
     release_mock.assert_awaited_once()
 

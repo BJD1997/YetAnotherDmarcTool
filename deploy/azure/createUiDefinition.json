@@ -143,8 +143,8 @@
             "name": "postgresHighAvailability",
             "type": "Microsoft.Common.CheckBox",
             "label": "Enable Postgres high availability (zone-redundant)",
-            "toolTip": "Adds a synchronously-replicated standby in a second Availability Zone with automatic failover. Roughly doubles Postgres compute cost. Requires a region with Availability Zone support.",
-            "visible": "[not(equals(steps('sizing').deploymentSize, 'test'))]"
+            "toolTip": "Adds a synchronously-replicated standby in a second Availability Zone with automatic failover. Roughly doubles Postgres compute cost. Requires a region with Availability Zone support. Not offered for Test/Small — their Burstable Postgres SKU doesn't support zone redundancy.",
+            "visible": "[and(not(equals(steps('sizing').deploymentSize, 'test')), not(equals(steps('sizing').deploymentSize, 'small')))]"
           },
           {
             "name": "publicBaseUrlOverride",
@@ -260,7 +260,7 @@
       "namePrefix": "[basics('namePrefix')]",
       "imageTag": "[basics('imageTag')]",
       "deploymentSize": "[steps('sizing').deploymentSize]",
-      "postgresHighAvailability": "[if(steps('sizing').postgresHighAvailability, 'ZoneRedundant', 'Disabled')]",
+      "postgresHighAvailability": "[if(coalesce(steps('sizing').postgresHighAvailability, false), 'ZoneRedundant', 'Disabled')]",
       "administratorLogin": "[steps('secrets').administratorLogin]",
       "administratorPassword": "[steps('secrets').administratorPassword]",
       "dmarcAppDbPassword": "[steps('secrets').dmarcAppDbPassword]",

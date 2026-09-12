@@ -107,9 +107,13 @@ resource kvDnsVnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@20
 output acaSubnetId string = vnet.properties.subnets[0].id
 output pgSubnetId string = vnet.properties.subnets[1].id
 output keyVaultSubnetId string = vnet.properties.subnets[2].id
-// The Flexible Server needs the zone linked to the VNet before it's created;
-// expose the link's id so the server (and the KV private endpoint) can
-// dependsOn it.
+// The Flexible Server and the KV private endpoint each take this module's
+// *PrivateDnsZoneId output and reference it directly, which already gives
+// Bicep an implicit dependency on the zone (and, transitively, its VNet
+// link) completing first — so main.bicep needs no explicit dependsOn here.
+// The link-id outputs are exposed for completeness/debugging (e.g.
+// confirming the link exists via `az network private-dns link vnet show`)
+// but aren't consumed by any other module today.
 output pgPrivateDnsZoneId string = pgPrivateDnsZone.id
 output pgDnsVnetLinkId string = pgDnsVnetLink.id
 output kvPrivateDnsZoneId string = kvPrivateDnsZone.id

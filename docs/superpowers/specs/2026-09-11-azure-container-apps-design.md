@@ -36,7 +36,7 @@ A `deploymentSize` parameter (`test` | `small` | `medium` | `large`, Portal drop
 |---|---|---|---|---|
 | VNet | `/25` | `/24` | `/23` | `/22` |
 | `aca` subnet | `/27` | `/26` | `/25` | `/23` (Microsoft's own ACA production-scale guidance) |
-| `postgres` subnet | `/29` | `/28` | `/28` | `/27` |
+| `postgres` subnet | `/28` | `/28` | `/28` | `/27` |
 | `keyvault-pe` subnet | `/29` | `/28` | `/28` | `/28` |
 | Postgres SKU / tier | `Standard_B1ms` / Burstable | `Standard_B2s` / Burstable | `Standard_D2ds_v4` / General Purpose | `Standard_D4ds_v4` / General Purpose |
 | Postgres storage | 32 GB | 32 GB | 64 GB | 128 GB |
@@ -44,7 +44,7 @@ A `deploymentSize` parameter (`test` | `small` | `medium` | `large`, Portal drop
 | `worker` min/max replicas | 1 / 1 | 1 / 2 | 1 / 3 | 1 / 5 |
 | Log Analytics retention | 30 days | 30 days | 60 days | 90 days |
 
-All four subnets in every tier fit comfortably inside that tier's VNet with room to spare — concrete CIDR allocation (base addresses per subnet within the VNet block) is an implementation-plan detail, not re-litigated here. This replaces the old design's flat `/16` VNet / `/23` `aca` subnet applied uniformly regardless of deployment size.
+All four subnets in every tier fit comfortably inside that tier's VNet with room to spare — concrete CIDR allocation (base addresses per subnet within the VNet block) is an implementation-plan detail, not re-litigated here. This replaces the old design's flat `/16` VNet / `/23` `aca` subnet applied uniformly regardless of deployment size. `/28` is a floor, not a starting point that shrinks further for `test`: Azure's documented minimum delegated-subnet size for a Postgres Flexible Server is `/28` (16 addresses) — a smaller `postgres` subnet is rejected at deployment time, so `test` uses the same `/28` as `small`/`medium` rather than a tighter `/29`.
 
 **Wizard control:** `createUiDefinition.json` renders the tier picker as `Microsoft.Common.OptionsGroup` (Azure Portal's radio-button group, not a dropdown) — all four tiers visible and their trade-off legible at a glance, rather than hidden behind a click. Each option's label states what that tier actually provisions, not just its name, e.g.:
 
@@ -65,7 +65,7 @@ A `postgresHighAvailability` checkbox (`Microsoft.Common.CheckBox`), independent
 
 **Availability-zone region support:** rather than building wizard logic to pre-detect whether the selected region supports Availability Zones (real added complexity — `Microsoft.Solutions.ArmApiControl` region-capability lookups), an incompatible region/HA combination surfaces as Azure's own deployment-time validation error, documented as a known constraint in `deploy/azure/README.md`.
 
-**Interaction with `deploymentSize`:** the checkbox is hidden entirely when `test` is selected — pairing a throwaway trial deployment with a cost roughly double its own baseline doesn't make sense, so the option simply isn't offered there rather than being offered-then-discouraged. Available and unchecked by default for `small`/`medium`/`large`. No other tier-driven parameter needs to change as a direct consequence of toggling it — Postgres HA duplicates whatever SKU/storage the selected tier already specifies; it doesn't require a bigger SKU or affect `api`/`worker` replica counts, backup retention, or Log Analytics retention. If the implementation plan finds a concrete reason a specific pre-fill coupling is actually needed, it can add one — none was identified during design.
+**Interaction with `deploymentSize`:** the checkbox is hidden for `test` **and** `small` — not just `test`. `test`'s reason is the cost-pairing one above; `small` is a hard Azure constraint discovered during implementation review, not a judgment call: both tiers run Postgres on the `Burstable` compute tier (`Standard_B1ms`/`Standard_B2s`), and Azure Database for PostgreSQL Flexible Server does not support zone-redundant HA on `Burstable` at all — only `GeneralPurpose` and `MemoryOptimized` do. Offering the checkbox there would let a deployer select a combination Azure rejects at deployment time. Available and unchecked by default for `medium`/`large` (both `GeneralPurpose`). No other tier-driven parameter needs to change as a direct consequence of toggling it — Postgres HA duplicates whatever SKU/storage the selected tier already specifies; it doesn't require a bigger SKU or affect `api`/`worker` replica counts, backup retention, or Log Analytics retention. If the implementation plan finds a concrete reason a specific pre-fill coupling is actually needed, it can add one — none was identified during design.
 
 ### 3. Key Vault: private endpoint (supersedes the old public-endpoint-plus-RBAC design)
 
