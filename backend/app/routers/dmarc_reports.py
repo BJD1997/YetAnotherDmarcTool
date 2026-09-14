@@ -5,7 +5,8 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import get_db
+from app.db.rls import set_org_context
+from app.db.session import get_db, get_read_db
 from app.middleware.tenant_context import get_current_user, require_org_admin
 from app.models.enums import AuthResult, Disposition, DomainVerificationStatus
 from app.models.sender_review import SenderReview
@@ -165,9 +166,15 @@ async def update_sender_review(
 async def dmarc_trend(
     domain_id: uuid.UUID | None = Query(None),
     days: int = Query(30, ge=1, le=90),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
     user: User = Depends(get_current_user),
 ) -> list[dict]:
+    # get_current_user's Depends(get_db) sets RLS org context on ITS OWN session —
+    # this endpoint's Depends(get_read_db) session is a separate connection that
+    # never saw that SET LOCAL, so it must be set here too (same pattern used
+    # wherever a second, independently-injected session needs RLS scoping, e.g.
+    # app/workers/jobs/mailbox_poll_job.py).
+    await set_org_context(db, user.organization_id)
     if domain_id is not None:
         await get_owned_domain(db, domain_id, user.organization_id)
 
@@ -190,12 +197,15 @@ async def dmarc_trend(
 async def dmarc_posture(
     domain_id: uuid.UUID | None = Query(None),
     days: int = Query(30, ge=1, le=90),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
     user: User = Depends(get_current_user),
 ) -> dict:
     """Bundled compliance/policy/failed-volume/freshness/new-senders/
     ready-to-enforce, rather than six tiny endpoints — matches the
     "don't over-fragment" instinct already applied in dmarc_summary."""
+    # See dmarc_trend's comment above: this endpoint's Depends(get_read_db)
+    # session is separate from the one get_current_user set RLS context on.
+    await set_org_context(db, user.organization_id)
     if domain_id is not None:
         domains = [await get_owned_domain(db, domain_id, user.organization_id)]
     else:
@@ -272,13 +282,16 @@ async def dmarc_reports_by_day(
     dkim_result: AuthResult | None = Query(None),
     reporter: str | None = Query(None),
     source_ip: str | None = Query(None),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
     user: User = Depends(get_current_user),
 ) -> dict:
     """Row granularity is one DmarcAggregateRecord (one sending host within
     one report), not one whole report — a report with several source IPs
     shows as several rows on its day. Keyset-paginated on
     (date_range_begin, record id)."""
+    # See dmarc_trend's comment above: this endpoint's Depends(get_read_db)
+    # session is separate from the one get_current_user set RLS context on.
+    await set_org_context(db, user.organization_id)
     await get_owned_domain(db, domain_id, user.organization_id)
     since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
 
@@ -334,12 +347,15 @@ async def dmarc_reports_summary(
     dkim_result: AuthResult | None = Query(None),
     reporter: str | None = Query(None),
     source_ip: str | None = Query(None),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
     user: User = Depends(get_current_user),
 ) -> dict:
     """Summary bar for the Reports page — same filter vocabulary as
     by-day/grouped, so switching a filter updates the totals and the rows
     together."""
+    # See dmarc_trend's comment above: this endpoint's Depends(get_read_db)
+    # session is separate from the one get_current_user set RLS context on.
+    await set_org_context(db, user.organization_id)
     await get_owned_domain(db, domain_id, user.organization_id)
     since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
     filter_kwargs = dict(
@@ -385,11 +401,14 @@ async def dmarc_reports_grouped(
     dkim_result: AuthResult | None = Query(None),
     reporter: str | None = Query(None),
     source_ip: str | None = Query(None),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
     user: User = Depends(get_current_user),
 ) -> list[dict]:
     """The Reports page's Source/Reporter/Disposition grouping views — small
     cardinality per domain, so one GROUP BY query with no pagination."""
+    # See dmarc_trend's comment above: this endpoint's Depends(get_read_db)
+    # session is separate from the one get_current_user set RLS context on.
+    await set_org_context(db, user.organization_id)
     await get_owned_domain(db, domain_id, user.organization_id)
     since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
 

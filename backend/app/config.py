@@ -126,6 +126,39 @@ class Settings(BaseSettings):
     updater_url: str | None = None
     updater_shared_secret: str | None = None
 
+    # Worker (app/workers/scheduler.py): the Postgres advisory-lock key the
+    # leader is elected on. leader_database_url is the connection the leader's
+    # advisory lock is held on — defaults to database_url, but if PgBouncer (or
+    # any transaction-mode pooler) sits in front of database_url, set this to a
+    # DIRECT (unpooled) Postgres connection string instead: pg_advisory_lock is
+    # session-scoped, and transaction pooling would silently return the
+    # connection to the pool between statements, breaking leadership.
+    leader_lock_key: int = 0x59414454
+    leader_database_url: str | None = None
+
+    # Worker (app/workers/scheduler.py): every replica runs this many concurrent
+    # queue-consumer loops; the queue is polled this often when idle. The leader
+    # reclaims jobs stuck "running" longer than worker_job_stale_seconds (a crashed
+    # worker) — must exceed the longest expected job runtime. worker_health_port
+    # serves the liveness endpoint (app/workers/health.py).
+    worker_concurrency: int = 4
+    worker_queue_poll_interval_seconds: float = 5.0
+    worker_job_stale_seconds: int = 1800
+    worker_health_port: int = 8080
+
+    # Auth rate-limiter backend: "memory" (per-process, correct for a single api
+    # container — the default) or "postgres" (shared across replicas). See
+    # app/services/auth/rate_limit.py. Switch to "postgres" when running >1 api replica.
+    rate_limit_backend: str = "memory"
+
+    # Optional read-replica connection for report/analytics queries (see
+    # app/db/session.py's get_read_db). Unset by default — every read goes to
+    # the primary, exactly as today. Set to a read-only Postgres connection
+    # string (e.g. a managed streaming replica) to offload latency-tolerant
+    # dashboard/report reads there. Never used for anything a user might
+    # expect to see their own just-made write reflected in.
+    database_read_url: str | None = None
+
     @property
     def entra_sso_redirect_uri(self) -> str:
         return f"{self.public_base_url}/api/auth/callback"
