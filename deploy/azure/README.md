@@ -30,10 +30,10 @@ button uses.
 
 [![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FBJD1997%2FYetAnotherDmarcTool%2Fv0.1.5-beta%2Fdeploy%2Fazure%2Fazuredeploy.json/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2FBJD1997%2FYetAnotherDmarcTool%2Fv0.1.5-beta%2Fdeploy%2Fazure%2FcreateUiDefinition.json)
 
-> The button points at the `v0.1.5-beta` branch, not `master` — this work (the
+> The button points at the `v0.1.5-beta` branch, not `main` — this work (the
 > sizing-tier system, the Key Vault private endpoint, the resolver sidecar image) lives
-> on `v0.1.5-beta` and hasn't been promoted to `master`/a stable tag yet. Repoint it to
-> `master` (or a stable `v0.1.5` tag) once `v0.1.5` promotes to stable, mirroring how
+> on `v0.1.5-beta` and hasn't been promoted to `main`/a stable tag yet. Repoint it to
+> `main` (or a stable `v0.1.5` tag) once `v0.1.5` promotes to stable, mirroring how
 > `imageTag`'s own default matured over this project's beta cycle
 > (`v0.1.4-beta1` → `v0.1.4-rc*` → `v0.1.4` stable).
 

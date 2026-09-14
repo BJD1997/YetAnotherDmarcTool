@@ -43,7 +43,7 @@ Open `https://<your-domain>/admin`, log in with your bootstrap credentials, crea
 
 ## ☁️ Deploy on Azure
 
-A managed, autoscaling deployment (private Postgres + Key Vault, KEDA-scaled Container Apps, a Test/Small/Medium/Large sizing picker) — this branch's own addition, not yet on `master`.
+A managed, autoscaling deployment (private Postgres + Key Vault, KEDA-scaled Container Apps, a Test/Small/Medium/Large sizing picker) — this branch's own addition, not yet on `main`.
 
 [![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FBJD1997%2FYetAnotherDmarcTool%2Fv0.1.5-beta%2Fdeploy%2Fazure%2Fazuredeploy.json/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2FBJD1997%2FYetAnotherDmarcTool%2Fv0.1.5-beta%2Fdeploy%2Fazure%2FcreateUiDefinition.json)
 

@@ -18,4 +18,4 @@ contact at `/.well-known/security.txt` ([RFC 9116](https://www.rfc-editor.org/rf
 
 ## Supported versions
 
-There's no versioned release track yet — `master` is the supported branch.
+There's no versioned release track yet — `main` is the supported branch.
