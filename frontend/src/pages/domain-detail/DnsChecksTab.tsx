@@ -422,7 +422,7 @@ function DkimSelectors({ domainId, canManage }: { domainId: string; canManage: b
         Selectors
       </div>
       <p className="section-hint" style={{ marginTop: 0, marginBottom: "0.5rem" }}>
-        Selectors aren't discoverable via DNS — add the ones this domain actually signs with (check a received
+        Selectors aren't discoverable via DNS — add the ones this domain signs with (check a received
         email's DKIM-Signature header for "s=", or your mail provider's docs).
       </p>
       <div className="chip-row" style={{ marginBottom: canManage ? "0.6rem" : 0 }}>
