@@ -2,7 +2,7 @@ name: Release
 
 # Publishes a versioned image to GHCR on a tagged release (e.g. v0.1.0).
 # Assumes the tagged commit already passed ci.yml — tags are cut from
-# already-merged master, so this doesn't re-run the test suite itself.
+# already-merged main, so this doesn't re-run the test suite itself.
 
 on:
   push:
