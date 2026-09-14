@@ -27,7 +27,7 @@ password: lantern-maple-falcon-willow-989
 - 🏢 Multi-tenant enforced at the database layer (Postgres RLS)
 - 🔑 Microsoft Entra SSO or local email + password + TOTP, chosen per organization
 
-→ **[Core Concepts](https://github.com/BJD1997/YetAnotherDmarcTool/wiki/Core-Concepts)** for how each of these actually works.
+→ **[Core Concepts](https://github.com/BJD1997/YetAnotherDmarcTool/wiki/Core-Concepts)** for how each of these works.
 
 ## 🚀 Quick start
 
@@ -86,7 +86,8 @@ Security issue? [`SECURITY.md`](SECURITY.md) — please don't open a public issu
 
 Built as a hobby project — wanted a self-hosted tool that covered all of
 this in one place, couldn't find one, so built it (with Claude's help).
-Multi-tenant is just an MSP habit, not a commercial offering.
+Multi-tenant because that's an MSP habit: anything worth building gets
+built to support more than one tenant, even at a scale of one.
 
 ## License
 
