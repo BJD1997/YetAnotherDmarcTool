@@ -11,7 +11,7 @@ best-practice checks, a 0–100 domain rating, and a guided path to
 
 ## Live demo
 
-**[demo.yetanotherdmarctool.com](https://demo.yetanotherdmarctool.com)** — real checks against this project's own domain, not fixtures.
+**[demo.yetanotherdmarctool.com](https://demo.yetanotherdmarctool.com)** — live checks against this project's own domain.
 ```
 email:    demo@yetanotherdmarctool.com
 password: lantern-maple-falcon-willow-989
