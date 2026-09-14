@@ -42,7 +42,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.config import settings
-from app.db.session import get_db, get_read_db
+from app.db.session import get_db
 from app.main import app
 from app.models.enums import AuthMethod, OrganizationStatus, UserRole, UserStatus
 from app.models.organization import Organization
@@ -119,33 +119,11 @@ async def rls_sessions(migrated_db):
     async with owner_factory() as owner:
         # Clean slate — cascades to every org-scoped table.
         await owner.execute(text("TRUNCATE organizations CASCADE"))
-        await owner.execute(text("DELETE FROM rate_limit_hits"))
         await owner.commit()
         async with app_factory() as app:
             yield owner, app
     await app_engine.dispose()
     await owner_engine.dispose()
-
-
-@pytest.fixture
-def app_db_url(migrated_db) -> str:
-    """The dmarc_app (non-owner) async URL — used by tests that build their own
-    engine(s), e.g. leader-election contention."""
-    return _app_url()
-
-
-@pytest_asyncio.fixture
-async def app_sessionmaker(migrated_db):
-    """A sessionmaker on the non-owner dmarc_app role (the role the worker runs
-    as), with the worker/infra tables emptied first. Lets a test open several
-    concurrent sessions — e.g. to prove FOR UPDATE SKIP LOCKED never
-    double-claims a job."""
-    engine = create_async_engine(_app_url(), poolclass=NullPool)
-    async with engine.begin() as conn:
-        await conn.execute(text("DELETE FROM background_jobs"))
-        await conn.execute(text("DELETE FROM rate_limit_hits"))
-    yield async_sessionmaker(engine, expire_on_commit=False)
-    await engine.dispose()
 
 
 CSRF_HEADERS = {"X-Requested-With": "yetanotherdmarctool"}
@@ -175,8 +153,8 @@ async def api(migrated_db):
     without this reset the 11th test in a session hitting any rate-limited
     auth endpoint from the same simulated client IP gets a spurious 429.
     """
-    login_limiter._memory._hits.clear()
-    otp_limiter._memory._hits.clear()
+    login_limiter._hits.clear()
+    otp_limiter._hits.clear()
 
     owner_engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
     app_engine = create_async_engine(_app_url(), poolclass=NullPool)
@@ -185,7 +163,6 @@ async def api(migrated_db):
 
     async with owner_factory() as owner:
         await owner.execute(text("TRUNCATE organizations CASCADE"))
-        await owner.execute(text("DELETE FROM rate_limit_hits"))
         await owner.commit()
 
     async def _override_get_db():
@@ -198,20 +175,7 @@ async def api(migrated_db):
     # since app.middleware.demo_read_only and app.workers.jobs.mailbox_poll_job both
     # imported it directly. mailbox_poll_job also imports `engine` directly (for its
     # advisory-lock connection), so that needs patching here too.
-    #
-    # get_read_db is overridden the same way, to the same app_factory: FastAPI's
-    # dependency_overrides is keyed by the exact callable, so overriding get_db alone
-    # would leave the report/analytics endpoints on Depends(get_read_db) untouched by
-    # it. In every test environment DATABASE_READ_URL is unset, so get_read_db falls
-    # back to the primary connection just like get_db does — this override just makes
-    # that fallback go through the same dmarc_app-role, test-DB session as everything
-    # else here, rather than the real get_read_db()'s module-level _read_session_factory,
-    # which was bound to the pre-override primary sessionmaker at import time and
-    # wouldn't see this monkeypatch (it isn't the app.db.session module attribute
-    # session_module.async_session_factory being reassigned below, it's a separate name
-    # already pointing at the old object).
     app.dependency_overrides[get_db] = _override_get_db
-    app.dependency_overrides[get_read_db] = _override_get_db
     original_session_factory = session_module.async_session_factory
     original_demo_read_only_factory = demo_read_only_module.async_session_factory
     original_mailbox_poll_job_factory = mailbox_poll_job_module.async_session_factory
@@ -226,7 +190,6 @@ async def api(migrated_db):
         yield client, owner_factory
 
     app.dependency_overrides.pop(get_db, None)
-    app.dependency_overrides.pop(get_read_db, None)
     session_module.async_session_factory = original_session_factory
     demo_read_only_module.async_session_factory = original_demo_read_only_factory
     mailbox_poll_job_module.async_session_factory = original_mailbox_poll_job_factory
