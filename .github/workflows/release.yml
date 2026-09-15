@@ -72,3 +72,29 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             APP_VERSION=${{ github.ref_name }}
+
+      # Powers the in-app "Update now" button (see docker-compose.yml's
+      # updater service, updater/server.py) — docker-compose.yml has
+      # referenced this as a pullable ghcr.io image since the feature was
+      # introduced, but nothing ever actually built or pushed it here, so
+      # every tag's `updater` image silently 404s/denies on pull. Not a
+      # registry visibility setting — no tag of this image has ever been
+      # published at all. Found while upgrading a real deployment: `docker
+      # compose pull` succeeded for the app image and failed only on this
+      # one, for every tag ever checked, not just the one being pulled.
+      - uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        id: meta_updater
+        with:
+          images: ghcr.io/${{ github.repository }}-updater
+          flavor: |
+            latest=false
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ./updater
+          push: true
+          tags: ${{ steps.meta_updater.outputs.tags }}
+          labels: ${{ steps.meta_updater.outputs.labels }}
