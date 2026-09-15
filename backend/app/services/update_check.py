@@ -18,18 +18,22 @@ logger = logging.getLogger(__name__)
 
 GITHUB_API_BASE = "https://api.github.com"
 
-_VERSION_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:-rc(\d+))?$")
+_VERSION_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:-(beta|rc)(\d+))?$")
+
+# Prerelease channel ordering for same major.minor.patch: beta < rc < stable.
+# Every -rcN outranks every -betaN regardless of number — they're separate
+# channels, not one shared counter (see this project's own tag history:
+# v0.1.4-beta1, then v0.1.4-rc1..rc6, then v0.1.4 stable).
+_CHANNEL_RANK = {"beta": 0, "rc": 1, None: 2}
 
 
-def _parse_version(version: str) -> tuple[int, int, int, float] | None:
+def _parse_version(version: str) -> tuple[int, int, int, int, int] | None:
     match = _VERSION_RE.match(version)
     if match is None:
         return None
-    major, minor, patch, rc = match.groups()
-    # A stable release outranks every -rcN of the same major.minor.patch —
-    # inf sorts higher than any real rc number.
-    prerelease_rank = float(rc) if rc is not None else float("inf")
-    return (int(major), int(minor), int(patch), prerelease_rank)
+    major, minor, patch, channel, number = match.groups()
+    number_rank = int(number) if number is not None else 0
+    return (int(major), int(minor), int(patch), _CHANNEL_RANK[channel], number_rank)
 
 
 def is_newer_version(latest: str, running: str) -> bool:
