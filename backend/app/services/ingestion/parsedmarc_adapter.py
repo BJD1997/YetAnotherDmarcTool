@@ -1,5 +1,5 @@
 """Isolates parsedmarc's exact API surface from the rest of the app — the
-pinned version is parsedmarc==8.15.0 (see requirements.txt); re-verify this
+pinned version is parsedmarc==11.0.2 (see requirements.txt); re-verify this
 file against that package's actual functions if it's ever upgraded.
 
 Deliberately uses parsedmarc as a PARSER ONLY, not via its mailbox
