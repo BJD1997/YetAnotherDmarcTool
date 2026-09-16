@@ -85,12 +85,21 @@ async def latest_dns_check_results_of_type_for_domain(
     return result.scalars().all()
 
 
-def _apply_tls_rpt_filters(query, *, since: datetime | None, org_name: str | None, failures_only: bool):
+def _apply_tls_rpt_filters(
+    query, *, since: datetime | None, until: datetime | None = None, org_name: str | None, failures_only: bool
+):
     """Shared filter-building for both list_tls_rpt_reports_for_domain and
     its paginated sibling — extracted so /summary, /by-sender, and
-    /reports can never silently disagree about what "matching" means."""
+    /reports can never silently disagree about what "matching" means.
+
+    `until` is exclusive (`date_range_begin < until`), same semantics as
+    dmarc_reports.py's _apply_report_filters — the router computes it as
+    "the day after date_to, at 00:00:00 UTC" so the whole of date_to is
+    included."""
     if since is not None:
         query = query.where(TlsRptReport.date_range_begin >= since)
+    if until is not None:
+        query = query.where(TlsRptReport.date_range_begin < until)
     if org_name is not None:
         query = query.where(TlsRptReport.org_name.ilike(f"%{org_name}%"))
     if failures_only:
@@ -103,6 +112,7 @@ async def list_tls_rpt_reports_for_domain(
     domain_id: UUID,
     *,
     since: datetime | None,
+    until: datetime | None,
     org_name: str | None,
     failures_only: bool,
 ) -> Sequence[TlsRptReport]:
@@ -113,7 +123,7 @@ async def list_tls_rpt_reports_for_domain(
     message counts) doesn't justify jsonb_array_elements. Returns
     newest-first."""
     query = select(TlsRptReport).where(TlsRptReport.domain_id == domain_id)
-    query = _apply_tls_rpt_filters(query, since=since, org_name=org_name, failures_only=failures_only)
+    query = _apply_tls_rpt_filters(query, since=since, until=until, org_name=org_name, failures_only=failures_only)
     query = query.order_by(TlsRptReport.date_range_begin.desc())
     result = await db.execute(query)
     return result.scalars().all()
@@ -124,6 +134,7 @@ async def list_tls_rpt_reports_for_domain_page(
     domain_id: UUID,
     *,
     since: datetime | None,
+    until: datetime | None,
     org_name: str | None,
     failures_only: bool,
     limit: int,
@@ -135,7 +146,7 @@ async def list_tls_rpt_reports_for_domain_page(
     keep calling the unpaginated function above — do not repoint them at
     this one."""
     query = select(TlsRptReport).where(TlsRptReport.domain_id == domain_id)
-    query = _apply_tls_rpt_filters(query, since=since, org_name=org_name, failures_only=failures_only)
+    query = _apply_tls_rpt_filters(query, since=since, until=until, org_name=org_name, failures_only=failures_only)
 
     anchor_query = None
     if before_id is not None:

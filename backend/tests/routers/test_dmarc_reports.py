@@ -428,6 +428,64 @@ async def test_dmarc_reports_by_day_keyset_pagination_with_before_id(api):
     assert len(first_page_ids & page2_ids) == 0, "Page 2 should not contain records from Page 1"
 
 
+async def test_dmarc_reports_by_day_date_range_filters_and_total(api):
+    """An arbitrary date_from/date_to window (not a day-count preset)
+    should narrow both the returned rows AND the `total` count to exactly
+    what falls in [date_from 00:00 UTC, date_to+1 00:00 UTC). `total` is
+    only populated on the first page (before_id is None) — a later page
+    must come back with total: null, same convention as Admin
+    Organizations' summary stats."""
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org)
+    now = datetime.now(timezone.utc)
+
+    too_old = now - timedelta(days=30)
+    in_range_older = now - timedelta(days=20)
+    in_range_newer = now - timedelta(days=15)
+    too_recent = now - timedelta(days=3)
+
+    report_old = await _add_aggregate_report(owner_factory, org, domain, date_range_begin=too_old)
+    report_a = await _add_aggregate_report(owner_factory, org, domain, date_range_begin=in_range_older)
+    report_b = await _add_aggregate_report(owner_factory, org, domain, date_range_begin=in_range_newer)
+    report_recent = await _add_aggregate_report(owner_factory, org, domain, date_range_begin=too_recent)
+
+    await _add_aggregate_record(owner_factory, org, domain, report_old, source_ip="203.0.113.1", count=1)
+    await _add_aggregate_record(owner_factory, org, domain, report_a, source_ip="203.0.113.2", count=2)
+    await _add_aggregate_record(owner_factory, org, domain, report_b, source_ip="203.0.113.3", count=3)
+    await _add_aggregate_record(owner_factory, org, domain, report_recent, source_ip="203.0.113.4", count=4)
+
+    # Wide margins around the boundaries (>=2 days each side) so the
+    # YYYY-MM-DD truncation _parse_date_range does can't flip an assertion
+    # regardless of what time of day this test happens to run at.
+    date_from = (now - timedelta(days=22)).strftime("%Y-%m-%d")
+    date_to = (now - timedelta(days=13)).strftime("%Y-%m-%d")
+
+    response = await client.get(
+        f"/api/domains/{domain.id}/dmarc/reports/by-day?date_from={date_from}&date_to={date_to}&limit=1"
+    )
+    assert response.status_code == 200
+    body = response.json()
+    page1_records = [r for day in body["days"] for r in day["rows"]]
+    assert len(page1_records) == 1  # limit=1 caps this page…
+    assert body["total"] == 2  # …but total reflects the full filtered count
+
+    last_id = page1_records[-1]["record_id"]
+    page2 = await client.get(
+        f"/api/domains/{domain.id}/dmarc/reports/by-day"
+        f"?date_from={date_from}&date_to={date_to}&limit=1&before_id={last_id}"
+    )
+    assert page2.status_code == 200
+    page2_body = page2.json()
+    page2_records = [r for day in page2_body["days"] for r in day["rows"]]
+    assert len(page2_records) == 1
+    assert page2_body["total"] is None  # not recomputed past the first page
+
+    combined_ips = {r["source_ip"] for r in page1_records + page2_records}
+    assert combined_ips == {"203.0.113.2", "203.0.113.3"}  # only the in-range records, not too_old/too_recent
+
+
 async def test_dmarc_record_detail_404_for_different_domain(api):
     client, owner_factory = api
     org, user = await seed_org_and_user(owner_factory)
