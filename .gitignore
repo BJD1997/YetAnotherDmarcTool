@@ -23,3 +23,7 @@ backups/
 
 # Subagent-driven-development scratch (ledger, briefs, review packages)
 .superpowers/
+
+# Stray leftover from an earlier npm install attempt (partly root-owned,
+# harmless, not worth chasing down — just keeping it out of git status)
+frontend/node_modules.old-locked/
