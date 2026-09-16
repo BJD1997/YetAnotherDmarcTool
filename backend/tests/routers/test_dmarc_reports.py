@@ -574,6 +574,52 @@ async def test_dmarc_reports_grouped_by_source(api):
     assert body[0]["label"] == "203.0.113.10"  # ip_fallback identity
 
 
+async def test_dmarc_reports_grouped_respects_date_range(api):
+    """Regression test: /reports/grouped must actually narrow its results
+    when date_from/date_to are set, not just silently accept (and ignore)
+    them. Two source IPs each get one record; one record's report falls
+    inside the requested window, the other falls well outside it in both
+    directions — grouped-by-source must surface only the in-range IP, and
+    its message_count must reflect only that record (not both)."""
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org)
+    now = datetime.now(timezone.utc)
+
+    too_old = now - timedelta(days=30)
+    in_range = now - timedelta(days=15)
+    too_recent = now - timedelta(days=3)
+
+    report_old = await _add_aggregate_report(owner_factory, org, domain, date_range_begin=too_old)
+    report_in_range = await _add_aggregate_report(owner_factory, org, domain, date_range_begin=in_range)
+    report_recent = await _add_aggregate_report(owner_factory, org, domain, date_range_begin=too_recent)
+
+    await _add_aggregate_record(owner_factory, org, domain, report_old, source_ip="203.0.113.1", count=9)
+    await _add_aggregate_record(owner_factory, org, domain, report_in_range, source_ip="203.0.113.2", count=5)
+    await _add_aggregate_record(owner_factory, org, domain, report_recent, source_ip="203.0.113.3", count=7)
+
+    # Wide margins (>=2 days) around both boundaries so the YYYY-MM-DD
+    # truncation _parse_date_range does can't flip an assertion regardless
+    # of what time of day this test happens to run at.
+    date_from = (now - timedelta(days=20)).strftime("%Y-%m-%d")
+    date_to = (now - timedelta(days=10)).strftime("%Y-%m-%d")
+
+    # Sanity check: without the date filter, all three sources show up.
+    unfiltered = await client.get(f"/api/domains/{domain.id}/dmarc/reports/grouped?by=source")
+    assert unfiltered.status_code == 200
+    assert {row["key"] for row in unfiltered.json()} == {"203.0.113.1", "203.0.113.2", "203.0.113.3"}
+
+    response = await client.get(
+        f"/api/domains/{domain.id}/dmarc/reports/grouped?by=source&date_from={date_from}&date_to={date_to}"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert {row["key"] for row in body} == {"203.0.113.2"}
+    assert body[0]["message_count"] == 5
+
+
 async def test_unmatched_reports_lists_only_domainless_reports(api):
     client, owner_factory = api
     org, user = await seed_org_and_user(owner_factory)

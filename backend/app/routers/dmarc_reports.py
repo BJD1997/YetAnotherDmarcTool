@@ -440,7 +440,8 @@ async def dmarc_reports_summary(
 async def dmarc_reports_grouped(
     domain_id: uuid.UUID,
     by: str = Query(..., pattern="^(source|reporter|disposition)$"),
-    days: int | None = Query(None, ge=1, le=365),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
     disposition: Disposition | None = Query(None),
     spf_result: AuthResult | None = Query(None),
     dkim_result: AuthResult | None = Query(None),
@@ -455,10 +456,10 @@ async def dmarc_reports_grouped(
     # session is separate from the one get_current_user set RLS context on.
     await set_org_context(db, user.organization_id)
     await get_owned_domain(db, domain_id, user.organization_id)
-    since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
+    since, until = _parse_date_range(date_from, date_to)
 
     rows = await dmarc_reports_repo.report_records_grouped(
-        db, domain_id, by, since=since, disposition=disposition, spf_result=spf_result,
+        db, domain_id, by, since=since, until=until, disposition=disposition, spf_result=spf_result,
         dkim_result=dkim_result, reporter=reporter, source_ip=source_ip,
     )
 

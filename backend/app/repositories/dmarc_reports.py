@@ -22,7 +22,7 @@ def _apply_report_filters(
     query,
     *,
     since: datetime | None,
-    until: datetime | None = None,
+    until: datetime | None,
     disposition: Disposition | None,
     spf_result: AuthResult | None,
     dkim_result: AuthResult | None,
@@ -31,12 +31,7 @@ def _apply_report_filters(
 ):
     """Shared WHERE-clause vocabulary for the reports/by-day, /summary and
     /grouped endpoints, applied to a query already joined to both
-    DmarcAggregateReport and DmarcAggregateRecord.
-
-    `until` defaults to None (not threaded through by report_records_grouped,
-    whose /grouped endpoint still only exposes the days-preset filter) so
-    that caller doesn't need touching just to keep calling this function —
-    every other caller passes it explicitly, same as `since`."""
+    DmarcAggregateReport and DmarcAggregateRecord."""
     if since is not None:
         query = query.where(DmarcAggregateReport.date_range_begin >= since)
     if until is not None:
@@ -537,6 +532,7 @@ async def report_records_grouped(
     by: str,
     *,
     since: datetime | None,
+    until: datetime | None,
     disposition: Disposition | None,
     spf_result: AuthResult | None,
     dkim_result: AuthResult | None,
@@ -567,7 +563,7 @@ async def report_records_grouped(
         .group_by(group_col)
     )
     query = _apply_report_filters(
-        query, since=since, disposition=disposition, spf_result=spf_result, dkim_result=dkim_result,
+        query, since=since, until=until, disposition=disposition, spf_result=spf_result, dkim_result=dkim_result,
         reporter=reporter, source_ip=source_ip,
     )
     return (await db.execute(query)).all()
