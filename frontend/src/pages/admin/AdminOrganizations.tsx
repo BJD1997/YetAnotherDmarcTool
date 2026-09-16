@@ -278,9 +278,10 @@ function OrgDetail({ org }: { org: AdminOrganization }) {
       {/* No consent-links block here anymore — dashboard SSO consent
           happens automatically at first sign-in (Microsoft handles it
           inline), and the Mail Access link is already surfaced inside the
-          client's own portal once they're in (see MailboxConnectionStatusBanner
-          in Domains.tsx), so there's nothing left for the platform admin to
-          relay out-of-band. */}
+          client's own portal once they're in (see MailboxConnectionSection,
+          rendered from Settings' GeneralTab.tsx and from Onboarding.tsx),
+          so there's nothing left for the platform admin to relay
+          out-of-band. */}
 
       {!org.entra_tenant_id && !org.is_operator && <CreateLocalUser orgId={org.id} />}
 
