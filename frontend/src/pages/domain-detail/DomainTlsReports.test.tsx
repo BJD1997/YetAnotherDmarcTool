@@ -32,8 +32,8 @@ describe("DomainTlsReports", () => {
   it("shows a Load more button when the first page has more, and fetches the next page on click", async () => {
     getMock.mockImplementation(async (url: string) => {
       if (url.includes("/summary")) return { total_reports: 3, total_successful_sessions: 30, total_failed_sessions: 0, failure_rate_pct: 0, distinct_reporting_orgs: 1, last_report_received_at: null, policy_type: null };
-      if (url.includes("before_id=r1")) return { reports: [{ id: "r2", org_name: "sender.com", policy_type: "tlsa", date_range_begin: "2026-01-01T00:00:00Z", date_range_end: "2026-01-02T00:00:00Z", successful_session_count: 10, failed_session_count: 0, failure_details: [] }], has_more: false };
-      return { reports: [{ id: "r1", org_name: "sender.com", policy_type: "tlsa", date_range_begin: "2026-01-02T00:00:00Z", date_range_end: "2026-01-03T00:00:00Z", successful_session_count: 20, failed_session_count: 0, failure_details: [] }], has_more: true };
+      if (url.includes("before_id=r1")) return { reports: [{ id: "r2", org_name: "sender.com", policy_type: "tlsa", date_range_begin: "2026-01-01T00:00:00Z", date_range_end: "2026-01-02T00:00:00Z", successful_session_count: 10, failed_session_count: 0, failure_details: [] }], has_more: false, next_before_id: "r2" };
+      return { reports: [{ id: "r1", org_name: "sender.com", policy_type: "tlsa", date_range_begin: "2026-01-02T00:00:00Z", date_range_end: "2026-01-03T00:00:00Z", successful_session_count: 20, failed_session_count: 0, failure_details: [] }], has_more: true, next_before_id: "r1" };
     });
 
     renderPage();

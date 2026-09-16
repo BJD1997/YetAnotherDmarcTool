@@ -9,7 +9,7 @@ export function useTlsReportSummary(domainId: string, filters: string) {
   return useQuery({ queryKey: queryKeys.tlsReports.summary(domainId, filters), queryFn: () => api.get<TlsRptSummary>(`/domains/${domainId}/dmarc/tls-rpt/summary${filters ? `?${filters}` : ""}`) });
 }
 
-interface TlsReportsPage { reports: TlsRptReportRow[]; has_more: boolean }
+interface TlsReportsPage { reports: TlsRptReportRow[]; has_more: boolean; next_before_id: string | null }
 
 export function useTlsReportRows(domainId: string, filters: string, enabled: boolean) {
   return useCursorPage<TlsReportsPage>(
@@ -19,7 +19,7 @@ export function useTlsReportRows(domainId: string, filters: string, enabled: boo
       if (cursor) qs.set("before_id", cursor);
       return api.get<TlsReportsPage>(`/domains/${domainId}/dmarc/tls-rpt/reports${qs.toString() ? `?${qs.toString()}` : ""}`);
     },
-    (lastPage) => (lastPage.has_more ? lastPage.reports[lastPage.reports.length - 1]?.id : undefined),
+    (lastPage) => (lastPage.has_more ? lastPage.next_before_id ?? undefined : undefined),
     { enabled },
   );
 }

@@ -230,6 +230,99 @@ async def test_tls_rpt_reports_paginated(api):
     assert page2_body["has_more"] is False
 
 
+async def test_tls_rpt_reports_result_type_filter_survives_all_filtered_page(api):
+    """Regression test for the Fix 1 critical bug: result_type filters in
+    Python after the SQL page comes back, so a SQL page whose rows are ALL
+    filtered out must still return a cursor (next_before_id) derived from
+    the SQL page itself, not from the (now-empty) visible rows — otherwise
+    "Load more" dead-ends (has_more effectively becomes unreachable via the
+    frontend's old row-derived cursor) even though matching history exists
+    further back."""
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    domain = await _add_domain(owner_factory, org)
+    now = datetime.now(timezone.utc)
+
+    async with owner_factory() as db:
+        # Two newest reports: neither has a "certificate-expired" entry in
+        # failure_details — a SQL page with limit=2 fetching just these two
+        # will have its post-filter `reports` list come back empty.
+        db.add(
+            TlsRptReport(
+                organization_id=org.id, domain_id=domain.id, org_name="newest.com",
+                policy_domain=domain.name, policy_type=TlsRptPolicyType.tlsa,
+                date_range_begin=now - timedelta(days=1), date_range_end=now,
+                summary_success_count=10, summary_failure_count=1,
+                failure_details=[{"result_type": "certificate-host-mismatch", "failed_session_count": 1}],
+                received_at=now, created_at=now,
+            )
+        )
+        db.add(
+            TlsRptReport(
+                organization_id=org.id, domain_id=domain.id, org_name="second.com",
+                policy_domain=domain.name, policy_type=TlsRptPolicyType.tlsa,
+                date_range_begin=now - timedelta(days=2), date_range_end=now - timedelta(days=1),
+                summary_success_count=10, summary_failure_count=0,
+                failure_details=[],
+                received_at=now - timedelta(days=1), created_at=now - timedelta(days=1),
+            )
+        )
+        # Third-newest report DOES have a matching "certificate-expired"
+        # entry — this is the row the frontend must still be able to reach
+        # via "Load more" after the first (all-filtered-out) page.
+        db.add(
+            TlsRptReport(
+                organization_id=org.id, domain_id=domain.id, org_name="third.com",
+                policy_domain=domain.name, policy_type=TlsRptPolicyType.tlsa,
+                date_range_begin=now - timedelta(days=3), date_range_end=now - timedelta(days=2),
+                summary_success_count=10, summary_failure_count=2,
+                failure_details=[{"result_type": "certificate-expired", "failed_session_count": 2}],
+                received_at=now - timedelta(days=2), created_at=now - timedelta(days=2),
+            )
+        )
+        # Fourth (oldest) report just fills out the second SQL page to
+        # `limit` rows — not otherwise significant to the assertions.
+        db.add(
+            TlsRptReport(
+                organization_id=org.id, domain_id=domain.id, org_name="fourth.com",
+                policy_domain=domain.name, policy_type=TlsRptPolicyType.tlsa,
+                date_range_begin=now - timedelta(days=4), date_range_end=now - timedelta(days=3),
+                summary_success_count=10, summary_failure_count=0,
+                failure_details=[],
+                received_at=now - timedelta(days=3), created_at=now - timedelta(days=3),
+            )
+        )
+        await db.commit()
+    await login_as(client, owner_factory, user)
+
+    # Page 1: the SQL page of size 2 returns [newest.com, second.com], and
+    # neither matches result_type=certificate-expired, so `reports` comes
+    # back empty. The old (broken) frontend derived its cursor from this
+    # empty list, so "Load more" would silently disappear here even though
+    # third.com — a real match — is still further back. The fix must keep
+    # has_more True and return a real next_before_id anyway.
+    page1 = await client.get(
+        f"/api/domains/{domain.id}/dmarc/tls-rpt/reports",
+        params={"limit": 2, "result_type": "certificate-expired"},
+    )
+    assert page1.status_code == 200
+    page1_body = page1.json()
+    assert page1_body["reports"] == []
+    assert page1_body["has_more"] is True
+    assert page1_body["next_before_id"] is not None
+
+    # Page 2, paging on next_before_id (not on any visible row's id, since
+    # there were none): the SQL page here is [third.com, fourth.com], and
+    # third.com's matching failure_details entry must surface.
+    page2 = await client.get(
+        f"/api/domains/{domain.id}/dmarc/tls-rpt/reports",
+        params={"limit": 2, "result_type": "certificate-expired", "before_id": page1_body["next_before_id"]},
+    )
+    assert page2.status_code == 200
+    page2_body = page2.json()
+    assert [r["org_name"] for r in page2_body["reports"]] == ["third.com"]
+
+
 async def test_tls_rpt_summary_unaffected_by_pagination(api):
     """/summary must keep seeing the complete result set, not one page —
     this is the regression check for the split described in this task."""

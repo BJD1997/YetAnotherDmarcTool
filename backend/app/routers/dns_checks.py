@@ -9,6 +9,7 @@ from app.middleware.tenant_context import get_current_user, require_org_admin
 from app.models.dns_check import DnsCheckResult
 from app.models.enums import DomainVerificationStatus
 from app.models.organization import Organization
+from app.models.tls_rpt import TlsRptReport
 from app.models.user import User
 from app.repositories.dns_checks import (
     list_latest_check_results,
@@ -70,6 +71,21 @@ async def inbound_hosts(
     ]
 
 
+def _tls_rpt_row_out(r: TlsRptReport, failure_details: list) -> dict:
+    """Shared row shaping for both _fetch_tls_rpt_rows and its paginated
+    sibling."""
+    return {
+        "id": str(r.id),
+        "org_name": r.org_name,
+        "policy_type": r.policy_type.value,
+        "date_range_begin": r.date_range_begin.isoformat(),
+        "date_range_end": r.date_range_end.isoformat(),
+        "successful_session_count": r.summary_success_count,
+        "failed_session_count": r.summary_failure_count,
+        "failure_details": failure_details,
+    }
+
+
 async def _fetch_tls_rpt_rows(
     db: AsyncSession,
     domain_id: uuid.UUID,
@@ -100,18 +116,7 @@ async def _fetch_tls_rpt_rows(
         failure_details = r.failure_details if isinstance(r.failure_details, list) else []
         if result_type is not None and not any(item.get("result_type") == result_type for item in failure_details):
             continue
-        rows.append(
-            {
-                "id": str(r.id),
-                "org_name": r.org_name,
-                "policy_type": r.policy_type.value,
-                "date_range_begin": r.date_range_begin.isoformat(),
-                "date_range_end": r.date_range_end.isoformat(),
-                "successful_session_count": r.summary_success_count,
-                "failed_session_count": r.summary_failure_count,
-                "failure_details": failure_details,
-            }
-        )
+        rows.append(_tls_rpt_row_out(r, failure_details))
     return rows
 
 
@@ -125,7 +130,7 @@ async def _fetch_tls_rpt_rows_page(
     failures_only: bool,
     limit: int,
     before_id: uuid.UUID | None,
-) -> tuple[list[dict], bool]:
+) -> tuple[list[dict], bool, str | None]:
     """Paginated sibling of _fetch_tls_rpt_rows, for the /reports list
     only — see list_tls_rpt_reports_for_domain_page. result_type still
     filters in Python after the SQL page comes back (same reason as
@@ -133,7 +138,13 @@ async def _fetch_tls_rpt_rows_page(
     jsonb_array_elements at this data volume), so a page can return fewer
     than `limit` visible rows when result_type narrows it — has_more
     still reflects whether the SQL fetch itself was exhausted, so "Load
-    more" stays correct even then."""
+    more" stays correct even then. next_before_id is derived from the
+    last SQL row BEFORE the result_type filter, not the last visible row
+    — deriving it from the visible rows would make the cursor undefined
+    (and "Load more" silently disappear) whenever result_type filters out
+    every row on a page, even though more matching history exists further
+    back. The frontend must page on this field, not on the last visible
+    row's id."""
     since = datetime.now(timezone.utc) - timedelta(days=days) if days is not None else None
     reports, has_more = await list_tls_rpt_reports_for_domain_page(
         db, domain_id, since=since, org_name=org_name, failures_only=failures_only, limit=limit, before_id=before_id
@@ -144,19 +155,10 @@ async def _fetch_tls_rpt_rows_page(
         failure_details = r.failure_details if isinstance(r.failure_details, list) else []
         if result_type is not None and not any(item.get("result_type") == result_type for item in failure_details):
             continue
-        rows.append(
-            {
-                "id": str(r.id),
-                "org_name": r.org_name,
-                "policy_type": r.policy_type.value,
-                "date_range_begin": r.date_range_begin.isoformat(),
-                "date_range_end": r.date_range_end.isoformat(),
-                "successful_session_count": r.summary_success_count,
-                "failed_session_count": r.summary_failure_count,
-                "failure_details": failure_details,
-            }
-        )
-    return rows, has_more
+        rows.append(_tls_rpt_row_out(r, failure_details))
+
+    next_before_id = str(reports[-1].id) if reports else None
+    return rows, has_more, next_before_id
 
 
 @router.get("/domains/{domain_id}/dmarc/tls-rpt/summary")
@@ -209,11 +211,11 @@ async def tls_rpt_reports(
     complete result set to compute correct totals/aggregates, not a page
     of it."""
     await get_owned_domain(db, domain_id, user.organization_id)
-    rows, has_more = await _fetch_tls_rpt_rows_page(
+    rows, has_more, next_before_id = await _fetch_tls_rpt_rows_page(
         db, domain_id, days=days, org_name=org_name, result_type=result_type,
         failures_only=failures_only, limit=limit, before_id=before_id,
     )
-    return {"reports": rows, "has_more": has_more}
+    return {"reports": rows, "has_more": has_more, "next_before_id": next_before_id}
 
 
 @router.get("/domains/{domain_id}/dmarc/tls-rpt/by-sender")
