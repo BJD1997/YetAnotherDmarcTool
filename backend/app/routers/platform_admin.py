@@ -502,37 +502,41 @@ async def upsert_mailbox_connection(
 
 @router.get("/job-runs")
 async def list_job_runs_route(
-    limit: int = 50,
+    limit: int = Query(50, ge=1, le=200),
+    before_id: uuid.UUID | None = Query(None),
     organization_id: uuid.UUID | None = Query(None),
     job_type: JobType | None = Query(None),
     status_filter: JobStatus | None = Query(None, alias="status"),
     since_days: int | None = Query(None, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
     _admin: AdminPrincipal = Depends(get_current_platform_admin),
-) -> list[dict]:
-    limit = max(1, min(limit, 200))
-    runs = await list_job_runs(
+) -> dict:
+    runs, has_more = await list_job_runs(
         db,
         limit=limit,
+        before_id=before_id,
         organization_id=organization_id,
         job_type=job_type,
         status_filter=status_filter,
         since_days=since_days,
     )
-    return [
-        {
-            "id": str(run.id),
-            "job_type": run.job_type.value,
-            "organization_id": str(run.organization_id) if run.organization_id else None,
-            "domain_id": str(run.domain_id) if run.domain_id else None,
-            "status": run.status.value,
-            "started_at": run.started_at.isoformat(),
-            "finished_at": run.finished_at.isoformat() if run.finished_at else None,
-            "error_message": run.error_message,
-            "stats": run.stats,
-        }
-        for run in runs
-    ]
+    return {
+        "job_runs": [
+            {
+                "id": str(run.id),
+                "job_type": run.job_type.value,
+                "organization_id": str(run.organization_id) if run.organization_id else None,
+                "domain_id": str(run.domain_id) if run.domain_id else None,
+                "status": run.status.value,
+                "started_at": run.started_at.isoformat(),
+                "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+                "error_message": run.error_message,
+                "stats": run.stats,
+            }
+            for run in runs
+        ],
+        "has_more": has_more,
+    }
 
 
 @router.get("/job-runs/summary")

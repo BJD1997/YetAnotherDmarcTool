@@ -158,12 +158,13 @@ async def list_job_runs(
     db: AsyncSession,
     *,
     limit: int,
+    before_id: UUID | None,
     organization_id: UUID | None,
     job_type: JobType | None,
     status_filter: JobStatus | None,
     since_days: int | None,
-) -> Sequence[JobRun]:
-    query = select(JobRun).order_by(JobRun.started_at.desc())
+) -> tuple[Sequence[JobRun], bool]:
+    query = select(JobRun)
     if organization_id is not None:
         query = query.where(JobRun.organization_id == organization_id)
     if job_type is not None:
@@ -172,9 +173,15 @@ async def list_job_runs(
         query = query.where(JobRun.status == status_filter)
     if since_days is not None:
         query = query.where(JobRun.started_at >= datetime.now(timezone.utc) - timedelta(days=since_days))
-    query = query.limit(limit)
-    result = await db.execute(query)
-    return result.scalars().all()
+
+    anchor_query = None
+    if before_id is not None:
+        anchor_query = select(JobRun.started_at, JobRun.id).where(JobRun.id == before_id)
+
+    return await keyset_paginate(
+        db, query, order_column=JobRun.started_at, id_column=JobRun.id,
+        anchor_query=anchor_query, limit=limit,
+    )
 
 
 async def count_platform_admins(db: AsyncSession) -> int:

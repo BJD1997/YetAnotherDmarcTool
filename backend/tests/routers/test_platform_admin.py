@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pyotp
 import pytest
@@ -439,7 +440,39 @@ async def test_job_runs_empty(api):
     response = await client.get("/api/admin/job-runs")
 
     assert response.status_code == 200
-    assert response.json() == []
+    assert response.json() == {"job_runs": [], "has_more": False}
+
+
+async def test_job_runs_paginated(api):
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+    org, _user = await seed_org_and_user(owner_factory)
+    now = datetime.now(timezone.utc)
+    async with owner_factory() as db:
+        from app.db.rls import set_platform_admin_context
+        from app.models.enums import JobStatus, JobType
+        from app.models.job_run import JobRun
+        await set_platform_admin_context(db, is_admin=True)
+        for i in range(3):
+            db.add(
+                JobRun(
+                    organization_id=org.id, job_type=JobType.mailbox_poll, status=JobStatus.success,
+                    started_at=now - timedelta(hours=3 - i), finished_at=now - timedelta(hours=3 - i) + timedelta(minutes=1),
+                )
+            )
+        await db.commit()
+
+    page1 = await client.get("/api/admin/job-runs", params={"limit": 2})
+    assert page1.status_code == 200
+    body1 = page1.json()
+    assert len(body1["job_runs"]) == 2
+    assert body1["has_more"] is True
+
+    last_id = body1["job_runs"][-1]["id"]
+    page2 = await client.get("/api/admin/job-runs", params={"limit": 2, "before_id": last_id})
+    body2 = page2.json()
+    assert len(body2["job_runs"]) == 1
+    assert body2["has_more"] is False
 
 
 async def test_job_runs_summary_empty(api):
