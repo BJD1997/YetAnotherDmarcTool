@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { RefreshCw } from "lucide-react";
+import { LoadMoreButton } from "../../components/shared/LoadMoreButton";
 import { ReportFreshnessValue, RiskTile } from "../../components/overview/widgets";
 import { useAdminJobRuns, useAdminJobRunsSummary, useAdminOrganizations } from "../../hooks/useAdmin";
 
@@ -13,24 +14,25 @@ const SINCE_OPTIONS = [
 ];
 
 export default function AdminJobRuns() {
-  const [limit, setLimit] = useState(50);
   const [orgFilter, setOrgFilter] = useState("");
   const [jobTypeFilter, setJobTypeFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [sinceFilter, setSinceFilter] = useState("");
 
-  const { data: orgs } = useAdminOrganizations();
-  const orgNameById = new Map((orgs ?? []).map((o) => [o.id, o.name]));
+  const orgsQuery = useAdminOrganizations("");
+  const orgs = orgsQuery.data?.pages.flatMap((p) => p.organizations) ?? [];
+  const orgNameById = new Map(orgs.map((o) => [o.id, o.name]));
 
   const { data: summary } = useAdminJobRunsSummary();
 
-  const params = new URLSearchParams({ limit: String(limit) });
+  const params = new URLSearchParams();
   if (orgFilter) params.set("organization_id", orgFilter);
   if (jobTypeFilter) params.set("job_type", jobTypeFilter);
   if (statusFilter) params.set("status", statusFilter);
   if (sinceFilter) params.set("since_days", sinceFilter);
 
-  const { data: runs, isLoading, isFetching, refetch } = useAdminJobRuns(params.toString());
+  const query = useAdminJobRuns(params.toString());
+  const runs = query.data?.pages.flatMap((p) => p.job_runs) ?? [];
 
   return (
     <section>
@@ -84,7 +86,7 @@ export default function AdminJobRuns() {
       <div className="field-row" style={{ marginBottom: "1.25rem" }}>
         <select className="input" value={orgFilter} onChange={(e) => setOrgFilter(e.target.value)}>
           <option value="">All organizations</option>
-          {(orgs ?? []).map((o) => (
+          {orgs.map((o) => (
             <option key={o.id} value={o.id}>
               {o.name}
             </option>
@@ -113,25 +115,16 @@ export default function AdminJobRuns() {
             </option>
           ))}
         </select>
-        <label className="muted" style={{ fontSize: "0.85rem", display: "flex", alignItems: "center", gap: "0.4rem" }}>
-          Show last
-          <select className="input" value={limit} onChange={(e) => setLimit(Number(e.target.value))}>
-            <option value={20}>20</option>
-            <option value={50}>50</option>
-            <option value={100}>100</option>
-            <option value={200}>200</option>
-          </select>
-        </label>
-        <button className="btn btn--secondary btn--sm" onClick={() => refetch()} disabled={isFetching}>
+        <button className="btn btn--secondary btn--sm" onClick={() => query.refetch()} disabled={query.isFetching}>
           <RefreshCw />
-          {isFetching ? "Refreshing…" : "Refresh"}
+          {query.isFetching ? "Refreshing…" : "Refresh"}
         </button>
       </div>
 
-      {isLoading && <p className="muted">Loading…</p>}
-      {runs && runs.length === 0 && <p className="empty-state">No job runs match these filters.</p>}
+      {query.isLoading && <p className="muted">Loading…</p>}
+      {query.isSuccess && runs.length === 0 && <p className="empty-state">No job runs match these filters.</p>}
 
-      {runs && runs.length > 0 && (
+      {runs.length > 0 && (
         <div className="card" style={{ padding: 0 }}>
           <div className="table-wrap">
             <table className="table">
@@ -190,6 +183,8 @@ export default function AdminJobRuns() {
           </div>
         </div>
       )}
+
+      <LoadMoreButton hasNextPage={query.hasNextPage} isFetchingNextPage={query.isFetchingNextPage} onClick={() => query.fetchNextPage()} />
     </section>
   );
 }

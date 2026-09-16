@@ -98,8 +98,21 @@ export function useAdminJobRunsSummary() {
   return useQuery({ queryKey: queryKeys.admin.jobRunsSummary, queryFn: () => api.get<AdminJobRunsSummary>("/admin/job-runs/summary") });
 }
 
+export interface AdminJobRunsPage {
+  job_runs: AdminJobRun[];
+  has_more: boolean;
+}
+
 export function useAdminJobRuns(filters: string) {
-  return useQuery({ queryKey: queryKeys.admin.jobRuns(filters), queryFn: () => api.get<AdminJobRun[]>(`/admin/job-runs?${filters}`) });
+  return useCursorPage<AdminJobRunsPage>(
+    queryKeys.admin.jobRuns(filters),
+    (cursor) => {
+      const qs = new URLSearchParams(filters);
+      if (cursor) qs.set("before_id", cursor);
+      return api.get<AdminJobRunsPage>(`/admin/job-runs?${qs.toString()}`);
+    },
+    (lastPage) => (lastPage.has_more ? lastPage.job_runs[lastPage.job_runs.length - 1]?.id : undefined),
+  );
 }
 
 function useInvalidateAdminOrganizations() {
