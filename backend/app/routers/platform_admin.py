@@ -32,6 +32,7 @@ from app.repositories.platform_admin import (
     list_all_organizations,
     list_job_runs,
     org_aggregates,
+    org_summary_stats,
 )
 from app.schemas.platform_admin import (
     AdminEnrollOtpConfirmRequest,
@@ -304,11 +305,19 @@ async def change_password(
 
 @router.get("/organizations")
 async def list_organizations(
+    limit: int = Query(50, ge=1, le=200),
+    before_id: uuid.UUID | None = Query(None),
+    search: str | None = Query(None),
     db: AsyncSession = Depends(get_db), _admin: AdminPrincipal = Depends(get_current_platform_admin)
-) -> list[dict]:
-    orgs = await list_all_organizations(db)
+) -> dict:
+    orgs, has_more = await list_all_organizations(db, limit=limit, before_id=before_id, search=search)
     aggregates = await org_aggregates(db, [org.id for org in orgs])
-    return [await _org_out(db, org, aggregates=aggregates.get(org.id)) for org in orgs]
+    summary = await org_summary_stats(db, search=search)
+    return {
+        "organizations": [await _org_out(db, org, aggregates=aggregates.get(org.id)) for org in orgs],
+        "has_more": has_more,
+        "summary": summary,
+    }
 
 
 @router.post("/organizations", status_code=status.HTTP_201_CREATED)

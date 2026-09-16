@@ -316,7 +316,7 @@ async def test_list_organizations_includes_aggregates(api):
     response = await client.get("/api/admin/organizations")
 
     assert response.status_code == 200
-    body = response.json()
+    body = response.json()["organizations"]
     assert len(body) == 2
     for org in body:
         assert org["domain_count"] == 0
@@ -372,7 +372,7 @@ async def test_list_organizations_aggregates_reflect_real_data(api):
     response = await client.get("/api/admin/organizations")
 
     assert response.status_code == 200
-    body = response.json()
+    body = response.json()["organizations"]
     org = next(o for o in body if o["id"] == org_id)
     assert org["domain_count"] == 1
     assert org["job_error_count_7d"] == 1
@@ -382,6 +382,54 @@ async def test_list_organizations_aggregates_reflect_real_data(api):
     assert other_org["domain_count"] == 0
     assert other_org["job_error_count_7d"] == 0
     assert other_org["last_report_at"] is None
+
+
+async def test_list_organizations_paginated_and_searchable(api):
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+    async with owner_factory() as db:
+        from app.db.rls import set_platform_admin_context
+        from app.models.organization import Organization
+        await set_platform_admin_context(db, is_admin=True)
+        for name in ["Zeta Corp", "Alpha Corp", "Beta Corp"]:
+            db.add(Organization(name=name))
+        await db.commit()
+
+    page1 = await client.get("/api/admin/organizations", params={"limit": 2})
+    assert page1.status_code == 200
+    body1 = page1.json()
+    # Ascending alphabetical, not newest-first.
+    assert [o["name"] for o in body1["organizations"]] == ["Alpha Corp", "Beta Corp"]
+    assert body1["has_more"] is True
+    assert body1["summary"]["total"] == 3
+
+    last_id = body1["organizations"][-1]["id"]
+    page2 = await client.get("/api/admin/organizations", params={"limit": 2, "before_id": last_id})
+    body2 = page2.json()
+    assert [o["name"] for o in body2["organizations"]] == ["Zeta Corp"]
+    assert body2["has_more"] is False
+
+    search = await client.get("/api/admin/organizations", params={"search": "zeta"})
+    assert [o["name"] for o in search.json()["organizations"]] == ["Zeta Corp"]
+    assert search.json()["summary"]["total"] == 1
+
+
+async def test_organizations_summary_counts_status_and_errors(api):
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+    async with owner_factory() as db:
+        from app.db.rls import set_platform_admin_context
+        from app.models.organization import Organization
+        from app.models.enums import OrganizationStatus
+        await set_platform_admin_context(db, is_admin=True)
+        db.add(Organization(name="Active One", status=OrganizationStatus.active))
+        db.add(Organization(name="Suspended One", status=OrganizationStatus.suspended))
+        await db.commit()
+
+    response = await client.get("/api/admin/organizations")
+    summary = response.json()["summary"]
+    assert summary["active"] >= 1
+    assert summary["suspended"] == 1
 
 
 async def test_job_runs_empty(api):
