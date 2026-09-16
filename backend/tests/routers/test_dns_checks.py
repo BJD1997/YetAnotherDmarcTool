@@ -257,6 +257,44 @@ async def test_tls_rpt_reports_arbitrary_date_range_narrows_results(api):
     assert {s["org_name"] for s in by_sender.json()} == {"in_range_older.com", "in_range_newer.com"}
 
 
+async def test_tls_rpt_reports_date_to_boundary_is_inclusive_of_whole_day(api):
+    """Same boundary precision check as the DMARC side (see
+    test_dmarc_reports.py's test_dmarc_reports_by_day_date_to_boundary_is_
+    inclusive_of_whole_day): `until` must be `date_to + 1 day` at 00:00
+    UTC, not `date_to` itself. A report exactly AT midnight of date_to is
+    INCLUDED; one exactly at midnight the day AFTER date_to is EXCLUDED.
+    dns_checks.py's _parse_date_range is a separate (deliberately
+    duplicated) implementation from dmarc_reports.py's, so it needs its
+    own boundary coverage rather than relying on the DMARC test."""
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    domain = await _add_domain(owner_factory, org)
+
+    on_boundary = datetime(2026, 6, 15, 0, 0, 0, tzinfo=timezone.utc)  # exactly date_to's midnight
+    past_boundary = datetime(2026, 6, 16, 0, 0, 0, tzinfo=timezone.utc)  # exactly the day after
+
+    async with owner_factory() as db:
+        for label, begin in [("on-boundary.com", on_boundary), ("past-boundary.com", past_boundary)]:
+            db.add(
+                TlsRptReport(
+                    organization_id=org.id, domain_id=domain.id, org_name=label,
+                    policy_domain=domain.name, policy_type=TlsRptPolicyType.tlsa,
+                    date_range_begin=begin, date_range_end=begin + timedelta(days=1),
+                    summary_success_count=5, summary_failure_count=0, failure_details=[],
+                    received_at=begin, created_at=begin,
+                )
+            )
+        await db.commit()
+    await login_as(client, owner_factory, user)
+
+    response = await client.get(
+        f"/api/domains/{domain.id}/dmarc/tls-rpt/reports?date_from=2026-05-01&date_to=2026-06-15"
+    )
+    assert response.status_code == 200
+    names = {r["org_name"] for r in response.json()["reports"]}
+    assert names == {"on-boundary.com"}  # the day-after report must be excluded
+
+
 async def test_tls_rpt_reports_paginated(api):
     client, owner_factory = api
     org, user = await seed_org_and_user(owner_factory)

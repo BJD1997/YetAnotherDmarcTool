@@ -86,7 +86,7 @@ async def latest_dns_check_results_of_type_for_domain(
 
 
 def _apply_tls_rpt_filters(
-    query, *, since: datetime | None, until: datetime | None = None, org_name: str | None, failures_only: bool
+    query, *, since: datetime | None, until: datetime | None, org_name: str | None, failures_only: bool
 ):
     """Shared filter-building for both list_tls_rpt_reports_for_domain and
     its paginated sibling — extracted so /summary, /by-sender, and

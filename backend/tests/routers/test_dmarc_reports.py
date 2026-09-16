@@ -486,6 +486,64 @@ async def test_dmarc_reports_by_day_date_range_filters_and_total(api):
     assert combined_ips == {"203.0.113.2", "203.0.113.3"}  # only the in-range records, not too_old/too_recent
 
 
+async def test_dmarc_reports_by_day_date_to_boundary_is_inclusive_of_whole_day(api):
+    """`until` must be computed as `date_to + 1 day` at 00:00 UTC, not
+    `date_to` itself — a report exactly AT midnight of date_to must be
+    INCLUDED (the whole of date_to is meant to be in range), while a
+    report exactly at midnight the day AFTER date_to must be EXCLUDED.
+    Unlike the other date-range tests in this file (which deliberately use
+    wide margins to avoid this exact edge), this test targets the boundary
+    precisely — it would fail if `until` were off by one day in either
+    direction (e.g. computed as `date_to` instead of `date_to + 1 day`)."""
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org)
+
+    on_boundary = datetime(2026, 6, 15, 0, 0, 0, tzinfo=timezone.utc)  # exactly date_to's midnight
+    past_boundary = datetime(2026, 6, 16, 0, 0, 0, tzinfo=timezone.utc)  # exactly the day after
+
+    report_on = await _add_aggregate_report(owner_factory, org, domain, date_range_begin=on_boundary)
+    report_past = await _add_aggregate_report(owner_factory, org, domain, date_range_begin=past_boundary)
+    await _add_aggregate_record(owner_factory, org, domain, report_on, source_ip="203.0.113.60", count=3)
+    await _add_aggregate_record(owner_factory, org, domain, report_past, source_ip="203.0.113.61", count=9)
+
+    response = await client.get(
+        f"/api/domains/{domain.id}/dmarc/reports/by-day?date_from=2026-05-01&date_to=2026-06-15"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    all_ips = {r["source_ip"] for day in body["days"] for r in day["rows"]}
+    assert all_ips == {"203.0.113.60"}  # the day-after report must be excluded
+    assert body["total"] == 1
+
+
+async def test_dmarc_reports_by_day_malformed_date_params_are_ignored(api):
+    """A malformed date_from/date_to must be treated as absent rather than
+    erroring — locking in _parse_date_range's defensive fallback against a
+    regression that turns it into a 422/500. Covers both failure modes:
+    a string that doesn't even match the YYYY-MM-DD regex ("not-a-date"),
+    and one that matches the regex shape but isn't a real calendar date
+    ("2026-13-40", month 13 / day 40)."""
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org)
+    report = await _add_aggregate_report(owner_factory, org, domain)
+    await _add_aggregate_record(owner_factory, org, domain, report, count=4)
+
+    response = await client.get(
+        f"/api/domains/{domain.id}/dmarc/reports/by-day?date_from=not-a-date&date_to=2026-13-40"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    all_records = [r for day in body["days"] for r in day["rows"]]
+    assert len(all_records) == 1  # both malformed values fell back to "absent", so nothing is filtered out
+    assert body["total"] == 1
+
+
 async def test_dmarc_record_detail_404_for_different_domain(api):
     client, owner_factory = api
     org, user = await seed_org_and_user(owner_factory)
