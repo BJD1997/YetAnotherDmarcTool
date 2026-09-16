@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useSignInEvents } from "../../hooks/useSignInEvents";
+import { LoadMoreButton } from "../shared/LoadMoreButton";
 
 const LIMIT = 50;
 
@@ -75,16 +76,11 @@ export default function SignInEventsSection() {
         </div>
       )}
 
-      {query.hasNextPage && (
-        <button
-          className="btn btn--secondary"
-          style={{ marginTop: "0.75rem" }}
-          onClick={() => query.fetchNextPage()}
-          disabled={query.isFetchingNextPage}
-        >
-          {query.isFetchingNextPage ? "Loading…" : "Load more"}
-        </button>
-      )}
+      <LoadMoreButton
+        hasNextPage={query.hasNextPage}
+        isFetchingNextPage={query.isFetchingNextPage}
+        onClick={() => query.fetchNextPage()}
+      />
     </div>
   );
 }
