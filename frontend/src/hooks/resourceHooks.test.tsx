@@ -21,7 +21,13 @@ vi.mock("../api/client", () => ({
 
 const getMock = vi.mocked(api.get);
 
-beforeEach(() => getMock.mockReset());
+beforeEach(() => {
+  // Note: must be a block body, not `() => getMock.mockReset()` — mockReset()
+  // returns the mock itself, and Vitest treats a function returned from
+  // beforeEach as an implicit afterEach cleanup, which would then invoke
+  // this mock a second time with no arguments after the test runs.
+  getMock.mockReset();
+});
 
 describe("canonical query keys", () => {
   it("keeps list and parameterized resource keys structurally related", () => {
