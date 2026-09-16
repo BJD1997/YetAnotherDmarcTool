@@ -110,3 +110,72 @@ async def test_keyset_paginate_ascending_order(rls_sessions):
     names = [r.name for r in rows]
     assert names == ["Alpha LLC", "Bravo Co"]
     assert has_more is True
+
+
+async def test_keyset_paginate_scalar_false_raw_rows(api):
+    """scalar=False returns raw Row tuples from multi-column projections,
+    not scalars. Essential for later tasks like list_report_records_by_day."""
+    _client, owner_factory = api
+    org, _user = await seed_org_and_user(owner_factory)
+    await _seed_events(owner_factory, org.id, 3)
+
+    async with owner_factory() as db:
+        # Multi-column projection: select only id and attempted_email
+        query = select(SignInEvent.id, SignInEvent.attempted_email).where(
+            SignInEvent.organization_id == org.id
+        )
+        rows, has_more = await keyset_paginate(
+            db, query, order_column=SignInEvent.created_at, id_column=SignInEvent.id,
+            anchor_query=None, limit=2, scalar=False,
+        )
+
+    # Rows should be raw Row tuples, not scalars — capture the values
+    results = [(r[0], r[1]) for r in rows]
+    # Events are created in order (user0, user1, user2), returned descending (newest first)
+    assert len(results) == 2
+    assert results[0][1] == "user2@example.com"  # Most recent email
+    assert results[1][1] == "user1@example.com"  # Earlier email
+    assert has_more is True
+
+
+async def test_keyset_paginate_ascending_order_second_page(rls_sessions):
+    """Ascending order with real anchor_query (>  comparison) exercises the
+    ascending keyset comparison branch, verifying that descending=False
+    reverses BOTH the ORDER BY and the comparison direction."""
+    from app.db.rls import set_platform_admin_context
+    from app.models.organization import Organization
+
+    owner, db = rls_sessions
+    # Seed with owner role (bypasses RLS) to create test data
+    for name in ["Charlie Inc", "Alpha LLC", "Bravo Co"]:
+        owner.add(Organization(name=name))
+    await owner.commit()
+
+    # Test with admin context on app role
+    await set_platform_admin_context(db, is_admin=True)
+
+    # First page: ascending order, limit=2
+    first_query = select(Organization).where(Organization.name.in_(["Charlie Inc", "Alpha LLC", "Bravo Co"]))
+    first_rows, first_has_more = await keyset_paginate(
+        db, first_query, order_column=Organization.name, id_column=Organization.id,
+        anchor_query=None, limit=2, descending=False,
+    )
+
+    # Capture first page results
+    first_names = [r.name for r in first_rows]
+    assert first_names == ["Alpha LLC", "Bravo Co"]
+    assert first_has_more is True
+
+    # Second page: use the last row from page 1 as anchor
+    anchor_id = first_rows[-1].id
+    second_query = select(Organization).where(Organization.name.in_(["Charlie Inc", "Alpha LLC", "Bravo Co"]))
+    anchor_query = select(Organization.name, Organization.id).where(Organization.id == anchor_id)
+    second_rows, second_has_more = await keyset_paginate(
+        db, second_query, order_column=Organization.name, id_column=Organization.id,
+        anchor_query=anchor_query, limit=2, descending=False,
+    )
+
+    # Capture second page results
+    second_names = [r.name for r in second_rows]
+    assert second_names == ["Charlie Inc"]
+    assert second_has_more is False
