@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 import { api } from "../../api/client";
@@ -50,5 +50,30 @@ describe("AdminJobRuns", () => {
     await waitFor(() => expect(screen.getByText("Org 74")).toBeInTheDocument());
     const orgOptions = screen.getAllByRole("option").filter((o) => o.textContent?.startsWith("Org "));
     expect(orgOptions.length).toBe(75);
+  });
+
+  it("clicking Load more fetches a second page with the correct before_id", async () => {
+    getMock.mockImplementation(async (url: string) => {
+      if (url.includes("job-runs/summary")) return { last_failure: null, success_rate_pct_24h: null, latest_mailbox_poll_at: null, reports_processed_today: 0 };
+      if (url.includes("/admin/organizations/names")) return [];
+      if (url.includes("before_id=run-1")) {
+        return {
+          job_runs: [{ id: "run-2", job_type: "dns_check", organization_id: null, domain_id: null, status: "success", started_at: "2026-01-01T00:00:00Z", finished_at: null, error_message: null, stats: null }],
+          has_more: false,
+        };
+      }
+      return {
+        job_runs: [{ id: "run-1", job_type: "mailbox_poll", organization_id: null, domain_id: null, status: "success", started_at: "2026-01-02T00:00:00Z", finished_at: null, error_message: null, stats: null }],
+        has_more: true,
+      };
+    });
+
+    renderWithAppProviders(<AdminJobRuns />);
+
+    await waitFor(() => expect(screen.getByText("Load more")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("Load more"));
+
+    await waitFor(() => expect(screen.queryByText("Load more")).not.toBeInTheDocument());
+    expect(getMock).toHaveBeenCalledWith(expect.stringContaining("before_id=run-1"));
   });
 });
