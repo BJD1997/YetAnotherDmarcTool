@@ -7,7 +7,7 @@ interface LoadMoreButtonProps {
 export function LoadMoreButton({ hasNextPage, isFetchingNextPage, onClick }: LoadMoreButtonProps) {
   if (!hasNextPage) return null;
   return (
-    <button className="btn btn--secondary" style={{ marginTop: "0.75rem" }} onClick={onClick} disabled={isFetchingNextPage}>
+    <button type="button" className="btn btn--secondary" style={{ marginTop: "0.75rem" }} onClick={onClick} disabled={isFetchingNextPage}>
       {isFetchingNextPage ? "Loading…" : "Load more"}
     </button>
   );

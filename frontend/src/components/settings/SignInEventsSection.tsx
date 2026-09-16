@@ -2,13 +2,15 @@ import { useState } from "react";
 import { useSignInEvents } from "../../hooks/useSignInEvents";
 import { LoadMoreButton } from "../shared/LoadMoreButton";
 
-const LIMIT = 50;
-
 export default function SignInEventsSection() {
   const [resultFilter, setResultFilter] = useState("");
   const [authMethodFilter, setAuthMethodFilter] = useState("");
 
-  const params = new URLSearchParams({ limit: String(LIMIT) });
+  // No explicit limit param — the backend's own default (50, see
+  // /sign-in-events' `limit: int = Query(50, ...)`) is relied on, matching
+  // the other four paginated hooks (DMARC by-day, TLS-RPT, Admin
+  // Organizations, Admin Job Runs), none of which set it explicitly either.
+  const params = new URLSearchParams();
   if (resultFilter) params.set("result", resultFilter);
   if (authMethodFilter) params.set("auth_method", authMethodFilter);
   const filterQS = params.toString();
