@@ -84,6 +84,15 @@ export function useAdminOrganizations(search: string) {
   );
 }
 
+export interface AdminOrganizationName { id: string; name: string }
+
+export function useAdminOrganizationNames() {
+  return useQuery({
+    queryKey: queryKeys.admin.organizationNames,
+    queryFn: () => api.get<AdminOrganizationName[]>("/admin/organizations/names"),
+  });
+}
+
 type AdminUpdatesOptions = Pick<UseQueryOptions<UpdateStatus>, "enabled" | "staleTime">;
 
 export function useAdminUpdates(options: AdminUpdatesOptions = {}) {

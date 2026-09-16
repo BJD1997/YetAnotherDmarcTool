@@ -19,7 +19,7 @@ describe("AdminJobRuns", () => {
   it("has no Show-last dropdown and shows Load more when has_more is true", async () => {
     getMock.mockImplementation(async (url: string) => {
       if (url.includes("job-runs/summary")) return { last_failure: null, success_rate_pct_24h: null, latest_mailbox_poll_at: null, reports_processed_today: 0 };
-      if (url.includes("/admin/organizations")) return { organizations: [], has_more: false, summary: { total: 0, active: 0, suspended: 0, orgs_with_job_errors_7d: 0 } };
+      if (url.includes("/admin/organizations/names")) return [];
       return {
         job_runs: [{ id: "run-1", job_type: "mailbox_poll", organization_id: null, domain_id: null, status: "success", started_at: "2026-01-01T00:00:00Z", finished_at: null, error_message: null, stats: null }],
         has_more: true,
@@ -35,5 +35,20 @@ describe("AdminJobRuns", () => {
     await waitFor(() => expect(screen.getByText("Load more")).toBeInTheDocument());
     expect(screen.queryByText("Show last")).not.toBeInTheDocument();
     expect(screen.getAllByText("mailbox_poll").length).toBeGreaterThan(0);
+  });
+
+  it("shows more than 50 organizations in the filter dropdown (regression: was capped at the first paginated page)", async () => {
+    const orgNames = Array.from({ length: 75 }, (_, i) => ({ id: `org-${i}`, name: `Org ${i}` }));
+    getMock.mockImplementation(async (url: string) => {
+      if (url.includes("job-runs/summary")) return { last_failure: null, success_rate_pct_24h: null, latest_mailbox_poll_at: null, reports_processed_today: 0 };
+      if (url.includes("/admin/organizations/names")) return orgNames;
+      return { job_runs: [], has_more: false };
+    });
+
+    renderWithAppProviders(<AdminJobRuns />);
+
+    await waitFor(() => expect(screen.getByText("Org 74")).toBeInTheDocument());
+    const orgOptions = screen.getAllByRole("option").filter((o) => o.textContent?.startsWith("Org "));
+    expect(orgOptions.length).toBe(75);
   });
 });

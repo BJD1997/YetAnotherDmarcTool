@@ -2,7 +2,7 @@ import { useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { LoadMoreButton } from "../../components/shared/LoadMoreButton";
 import { ReportFreshnessValue, RiskTile } from "../../components/overview/widgets";
-import { useAdminJobRuns, useAdminJobRunsSummary, useAdminOrganizations } from "../../hooks/useAdmin";
+import { useAdminJobRuns, useAdminJobRunsSummary, useAdminOrganizationNames } from "../../hooks/useAdmin";
 
 const JOB_TYPES = ["mailbox_poll", "dns_check"];
 const STATUSES = ["success", "failure"];
@@ -19,8 +19,7 @@ export default function AdminJobRuns() {
   const [statusFilter, setStatusFilter] = useState("");
   const [sinceFilter, setSinceFilter] = useState("");
 
-  const orgsQuery = useAdminOrganizations("");
-  const orgs = orgsQuery.data?.pages.flatMap((p) => p.organizations) ?? [];
+  const { data: orgs = [] } = useAdminOrganizationNames();
   const orgNameById = new Map(orgs.map((o) => [o.id, o.name]));
 
   const { data: summary } = useAdminJobRunsSummary();

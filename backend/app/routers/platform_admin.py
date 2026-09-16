@@ -29,6 +29,7 @@ from app.repositories.platform_admin import (
     get_platform_admin_by_email,
     get_unused_admin_recovery_code,
     job_runs_summary_stats,
+    list_all_organization_names,
     list_all_organizations,
     list_job_runs,
     org_aggregates,
@@ -331,6 +332,17 @@ async def create_organization(
     await db.commit()
     await db.refresh(org)
     return await _org_out(db, org)
+
+
+@router.get("/organizations/names")
+async def list_organization_names(
+    db: AsyncSession = Depends(get_db), _admin: AdminPrincipal = Depends(get_current_platform_admin)
+) -> list[dict]:
+    """Unpaginated id+name pairs for picker/lookup UI — see
+    list_all_organization_names. Registered before /organizations/{org_id}
+    so "names" is never mistaken for an org_id path segment."""
+    rows = await list_all_organization_names(db)
+    return [{"id": str(row.id), "name": row.name} for row in rows]
 
 
 @router.get("/organizations/{org_id}")

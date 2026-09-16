@@ -385,6 +385,52 @@ async def test_list_organizations_aggregates_reflect_real_data(api):
     assert other_org["last_report_at"] is None
 
 
+async def test_list_organization_names_unpaginated(api):
+    """Regression test for Fix 2: the /organizations/names picker/lookup
+    endpoint must return every organization as a bare list, never a page
+    of it — AdminJobRuns' org filter dropdown and name lookup broke on a
+    real platform with 200+ orgs because it was reading the paginated
+    /organizations endpoint's first 50-row page and never called
+    fetchNextPage for it."""
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+    async with owner_factory() as db:
+        from app.db.rls import set_platform_admin_context
+        await set_platform_admin_context(db, is_admin=True)
+        for i in range(60):
+            db.add(Organization(name=f"Org {i:03d}"))
+        await db.commit()
+
+    response = await client.get("/api/admin/organizations/names")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body, list)
+    assert len(body) == 60
+    assert {org["name"] for org in body} == {f"Org {i:03d}" for i in range(60)}
+    assert all(set(org.keys()) == {"id", "name"} for org in body)
+
+
+async def test_list_organization_names_requires_admin(api):
+    client, _owner_factory = api
+    response = await client.get("/api/admin/organizations/names")
+    assert response.status_code == 401
+
+
+async def test_organizations_names_route_not_shadowed_by_org_id_route(api):
+    """/organizations/names must resolve to the dedicated names route, not
+    be swallowed by GET /organizations/{org_id} trying (and failing) to
+    parse "names" as a UUID — this is the exact placement bug the fix's
+    route ordering guards against."""
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+
+    response = await client.get("/api/admin/organizations/names")
+
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+
 async def test_list_organizations_paginated_and_searchable(api):
     client, owner_factory = api
     await login_as_platform_admin(client, owner_factory)

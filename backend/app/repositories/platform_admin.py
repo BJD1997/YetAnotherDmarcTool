@@ -71,6 +71,18 @@ async def list_all_organizations(
     )
 
 
+async def list_all_organization_names(db: AsyncSession) -> Sequence:
+    """Lightweight, deliberately unpaginated id+name listing for
+    picker/lookup UI (e.g. Admin Job Runs' organization filter and name
+    lookup) — unlike list_all_organizations, this always returns every
+    organization regardless of count, since a picker needs the complete
+    set to be useful, not one page of it. Real-world org counts are in
+    the hundreds, not large enough to justify pagination for a plain
+    id+name projection."""
+    result = await db.execute(select(Organization.id, Organization.name).order_by(Organization.name))
+    return result.all()
+
+
 async def org_aggregates(db: AsyncSession, org_ids: list[UUID]) -> dict[UUID, dict]:
     """Batched per-org rollups for the admin organizations list — one GROUP
     BY query per metric across every org at once, not N queries per org.
