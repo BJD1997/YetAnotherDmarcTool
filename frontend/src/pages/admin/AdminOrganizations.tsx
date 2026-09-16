@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Check, ChevronDown, ChevronRight, Copy, Plus, Trash2, UserPlus } from "lucide-react";
 import { ApiError } from "../../api/client";
 import { useAdminAuth } from "../../auth/AdminAuthContext";
@@ -19,7 +19,16 @@ const STATUS_ROLE: Record<AdminOrganization["status"], "good" | "serious"> = {
 
 export default function AdminOrganizations() {
   const { admin } = useAdminAuth();
+  const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
+  // Debounce: the input itself always reflects every keystroke immediately
+  // (bound to searchInput below), but the query-triggering `search` state
+  // only catches up 300ms after typing pauses, so a fast typist doesn't
+  // fire a request per character.
+  useEffect(() => {
+    const timeout = setTimeout(() => setSearch(searchInput), 300);
+    return () => clearTimeout(timeout);
+  }, [searchInput]);
   const query = useAdminOrganizations(search);
   const pages = query.data?.pages ?? [];
   const orgs = pages.flatMap((p) => p.organizations);
@@ -84,8 +93,8 @@ export default function AdminOrganizations() {
         <input
           className="input"
           placeholder="Search organizations by name"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
         />
       </div>
 
@@ -130,6 +139,14 @@ function OrgRow({ org, expanded, onToggle }: { org: AdminOrganization; expanded:
     <div style={{ borderBottom: "1px solid var(--border)" }}>
       <div
         onClick={onToggle}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            if (e.key === " ") e.preventDefault();
+            onToggle();
+          }
+        }}
         style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0.65rem 1.1rem", cursor: "pointer", gap: "0.75rem", flexWrap: "wrap" }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
@@ -257,6 +274,13 @@ function OrgDetail({ org }: { org: AdminOrganization }) {
           )}
         </div>
       </div>
+
+      {/* No consent-links block here anymore — dashboard SSO consent
+          happens automatically at first sign-in (Microsoft handles it
+          inline), and the Mail Access link is already surfaced inside the
+          client's own portal once they're in (see MailboxConnectionStatusBanner
+          in Domains.tsx), so there's nothing left for the platform admin to
+          relay out-of-band. */}
 
       {!org.entra_tenant_id && !org.is_operator && <CreateLocalUser orgId={org.id} />}
 
