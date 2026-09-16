@@ -1,11 +1,12 @@
 import uuid
 from collections.abc import Sequence
 
-from sqlalchemy import func, select, tuple_
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.enums import AuthMethod, SignInResult
 from app.models.sign_in_event import SignInEvent
+from app.services.pagination import keyset_paginate
 
 
 async def list_sign_in_events(
@@ -17,29 +18,26 @@ async def list_sign_in_events(
     result: SignInResult | None,
     auth_method: AuthMethod | None,
 ) -> Sequence[SignInEvent]:
-    """Keyset-paginated on (created_at, id), same shape as dmarc_reports_by_day,
-    rather than OFFSET — this table only grows, and an admin scrolling through
-    pages shouldn't see rows shift around as new sign-ins land between requests."""
+    """Keyset-paginated on (created_at, id) via keyset_paginate — see
+    app/services/pagination.py. has_more is still computed by the router
+    the same way it always was (len(events) == limit)."""
     query = select(SignInEvent).where(SignInEvent.organization_id == organization_id)
     if result is not None:
         query = query.where(SignInEvent.result == result)
     if auth_method is not None:
         query = query.where(SignInEvent.auth_method == auth_method)
 
+    anchor_query = None
     if before_id is not None:
-        anchor = (
-            await db.execute(
-                select(SignInEvent.created_at, SignInEvent.id).where(
-                    SignInEvent.id == before_id, SignInEvent.organization_id == organization_id
-                )
-            )
-        ).first()
-        if anchor is not None:
-            query = query.where(tuple_(SignInEvent.created_at, SignInEvent.id) < anchor)
+        anchor_query = select(SignInEvent.created_at, SignInEvent.id).where(
+            SignInEvent.id == before_id, SignInEvent.organization_id == organization_id
+        )
 
-    query = query.order_by(SignInEvent.created_at.desc(), SignInEvent.id.desc()).limit(limit)
-    result_rows = await db.execute(query)
-    return result_rows.scalars().all()
+    rows, _has_more = await keyset_paginate(
+        db, query, order_column=SignInEvent.created_at, id_column=SignInEvent.id,
+        anchor_query=anchor_query, limit=limit,
+    )
+    return rows
 
 
 async def count_sign_in_events_for_org(db: AsyncSession, organization_id: uuid.UUID) -> int:
