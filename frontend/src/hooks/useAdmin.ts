@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient, type UseQueryOptions } from "@ta
 
 import { api } from "../api/client";
 import { queryKeys } from "./queryKeys";
+import { useCursorPage } from "./useCursorPage";
 
 export interface AdminOrganization {
   id: string;
@@ -26,6 +27,12 @@ export interface AdminOrganization {
   domain_count: number;
   job_error_count_7d: number;
   last_report_at: string | null;
+}
+
+export interface AdminOrganizationsPage {
+  organizations: AdminOrganization[];
+  has_more: boolean;
+  summary: { total: number; active: number; suspended: number; orgs_with_job_errors_7d: number };
 }
 
 export interface UpdateStatus {
@@ -60,11 +67,21 @@ export interface AdminJobRunsSummary {
   reports_processed_today: number;
 }
 
-export function useAdminOrganizations() {
-  return useQuery({
-    queryKey: queryKeys.admin.organizations,
-    queryFn: () => api.get<AdminOrganization[]>("/admin/organizations"),
-  });
+export function useAdminOrganizations(search: string) {
+  return useCursorPage<AdminOrganizationsPage>(
+    queryKeys.admin.organizations(search),
+    (cursor) => {
+      const qs = new URLSearchParams();
+      if (search) qs.set("search", search);
+      if (cursor) qs.set("before_id", cursor);
+      return api.get<AdminOrganizationsPage>(`/admin/organizations${qs.toString() ? `?${qs.toString()}` : ""}`);
+    },
+    (lastPage) => {
+      if (!lastPage.has_more) return undefined;
+      const orgs = lastPage.organizations;
+      return orgs[orgs.length - 1]?.id;
+    },
+  );
 }
 
 type AdminUpdatesOptions = Pick<UseQueryOptions<UpdateStatus>, "enabled" | "staleTime">;
@@ -87,7 +104,7 @@ export function useAdminJobRuns(filters: string) {
 
 function useInvalidateAdminOrganizations() {
   const queryClient = useQueryClient();
-  return () => queryClient.invalidateQueries({ queryKey: queryKeys.admin.organizations });
+  return () => queryClient.invalidateQueries({ queryKey: queryKeys.admin.organizationsAll });
 }
 
 export function useCreateAdminOrganization(onSuccess?: () => void, onError?: (error: Error) => void) {
