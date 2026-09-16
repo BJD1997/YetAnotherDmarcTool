@@ -156,8 +156,9 @@ async def test_tls_rpt_reports_with_filters(api):
     body = response.json()["reports"]
     assert len(body) == 3
 
-    # Test: filter by days (last 10 days)
-    response = await client.get(f"/api/domains/{domain.id}/dmarc/tls-rpt/reports?days=10")
+    # Test: filter by date range (last 10 days)
+    date_from = (now - timedelta(days=10)).strftime("%Y-%m-%d")
+    response = await client.get(f"/api/domains/{domain.id}/dmarc/tls-rpt/reports?date_from={date_from}")
     assert response.status_code == 200
     body = response.json()["reports"]
     assert len(body) == 2  # Only reports from last 10 days
@@ -177,13 +178,121 @@ async def test_tls_rpt_reports_with_filters(api):
     assert len(body) == 2  # Only reports with failures (org1 old + org2 recent)
     assert all(b["failed_session_count"] > 0 for b in body)
 
-    # Test: combined filters (days + org_name + failures_only)
-    response = await client.get(f"/api/domains/{domain.id}/dmarc/tls-rpt/reports?days=10&org_name=sender2&failures_only=true")
+    # Test: combined filters (date range + org_name + failures_only)
+    response = await client.get(
+        f"/api/domains/{domain.id}/dmarc/tls-rpt/reports?date_from={date_from}&org_name=sender2&failures_only=true"
+    )
     assert response.status_code == 200
     body = response.json()["reports"]
     assert len(body) == 1
     assert body[0]["org_name"] == "sender2.com"
     assert body[0]["failed_session_count"] == 7
+
+
+async def test_tls_rpt_reports_arbitrary_date_range_narrows_results(api):
+    """A genuinely arbitrary date_from/date_to pair (not one of the old
+    7/30/90-day presets) should narrow results to exactly the reports
+    whose date_range_begin falls in [date_from 00:00 UTC, date_to+1
+    00:00 UTC) — the whole point of replacing the days= preset filter."""
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    domain = await _add_domain(owner_factory, org)
+    now = datetime.now(timezone.utc)
+
+    too_old = now - timedelta(days=30)
+    in_range_older = now - timedelta(days=20)
+    in_range_newer = now - timedelta(days=15)
+    too_recent = now - timedelta(days=3)
+
+    async with owner_factory() as db:
+        for label, begin in [
+            ("too_old", too_old),
+            ("in_range_older", in_range_older),
+            ("in_range_newer", in_range_newer),
+            ("too_recent", too_recent),
+        ]:
+            db.add(
+                TlsRptReport(
+                    organization_id=org.id,
+                    domain_id=domain.id,
+                    org_name=f"{label}.com",
+                    policy_domain=domain.name,
+                    policy_type=TlsRptPolicyType.tlsa,
+                    date_range_begin=begin,
+                    date_range_end=begin + timedelta(days=1),
+                    summary_success_count=10,
+                    summary_failure_count=0,
+                    failure_details=[],
+                    received_at=begin,
+                    created_at=begin,
+                )
+            )
+        await db.commit()
+    await login_as(client, owner_factory, user)
+
+    # Wide margins (>=2 days) around both boundaries so the YYYY-MM-DD
+    # truncation _parse_date_range does can't flip an assertion regardless
+    # of what time of day this test happens to run at.
+    date_from = (now - timedelta(days=22)).strftime("%Y-%m-%d")
+    date_to = (now - timedelta(days=13)).strftime("%Y-%m-%d")
+
+    response = await client.get(
+        f"/api/domains/{domain.id}/dmarc/tls-rpt/reports?date_from={date_from}&date_to={date_to}"
+    )
+    assert response.status_code == 200
+    names = {r["org_name"] for r in response.json()["reports"]}
+    assert names == {"in_range_older.com", "in_range_newer.com"}
+
+    # /summary and /by-sender share the same date-range vocabulary.
+    summary = await client.get(
+        f"/api/domains/{domain.id}/dmarc/tls-rpt/summary?date_from={date_from}&date_to={date_to}"
+    )
+    assert summary.status_code == 200
+    assert summary.json()["total_reports"] == 2
+
+    by_sender = await client.get(
+        f"/api/domains/{domain.id}/dmarc/tls-rpt/by-sender?date_from={date_from}&date_to={date_to}"
+    )
+    assert by_sender.status_code == 200
+    assert {s["org_name"] for s in by_sender.json()} == {"in_range_older.com", "in_range_newer.com"}
+
+
+async def test_tls_rpt_reports_date_to_boundary_is_inclusive_of_whole_day(api):
+    """Same boundary precision check as the DMARC side (see
+    test_dmarc_reports.py's test_dmarc_reports_by_day_date_to_boundary_is_
+    inclusive_of_whole_day): `until` must be `date_to + 1 day` at 00:00
+    UTC, not `date_to` itself. A report exactly AT midnight of date_to is
+    INCLUDED; one exactly at midnight the day AFTER date_to is EXCLUDED.
+    dns_checks.py's _parse_date_range is a separate (deliberately
+    duplicated) implementation from dmarc_reports.py's, so it needs its
+    own boundary coverage rather than relying on the DMARC test."""
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    domain = await _add_domain(owner_factory, org)
+
+    on_boundary = datetime(2026, 6, 15, 0, 0, 0, tzinfo=timezone.utc)  # exactly date_to's midnight
+    past_boundary = datetime(2026, 6, 16, 0, 0, 0, tzinfo=timezone.utc)  # exactly the day after
+
+    async with owner_factory() as db:
+        for label, begin in [("on-boundary.com", on_boundary), ("past-boundary.com", past_boundary)]:
+            db.add(
+                TlsRptReport(
+                    organization_id=org.id, domain_id=domain.id, org_name=label,
+                    policy_domain=domain.name, policy_type=TlsRptPolicyType.tlsa,
+                    date_range_begin=begin, date_range_end=begin + timedelta(days=1),
+                    summary_success_count=5, summary_failure_count=0, failure_details=[],
+                    received_at=begin, created_at=begin,
+                )
+            )
+        await db.commit()
+    await login_as(client, owner_factory, user)
+
+    response = await client.get(
+        f"/api/domains/{domain.id}/dmarc/tls-rpt/reports?date_from=2026-05-01&date_to=2026-06-15"
+    )
+    assert response.status_code == 200
+    names = {r["org_name"] for r in response.json()["reports"]}
+    assert names == {"on-boundary.com"}  # the day-after report must be excluded
 
 
 async def test_tls_rpt_reports_paginated(api):

@@ -22,6 +22,7 @@ def _apply_report_filters(
     query,
     *,
     since: datetime | None,
+    until: datetime | None,
     disposition: Disposition | None,
     spf_result: AuthResult | None,
     dkim_result: AuthResult | None,
@@ -33,6 +34,8 @@ def _apply_report_filters(
     DmarcAggregateReport and DmarcAggregateRecord."""
     if since is not None:
         query = query.where(DmarcAggregateReport.date_range_begin >= since)
+    if until is not None:
+        query = query.where(DmarcAggregateReport.date_range_begin < until)
     if disposition is not None:
         query = query.where(DmarcAggregateRecord.disposition == disposition)
     if spf_result is not None:
@@ -53,6 +56,7 @@ async def list_report_records_by_day(
     limit: int,
     before_id: UUID | None,
     since: datetime | None,
+    until: datetime | None,
     disposition: Disposition | None,
     spf_result: AuthResult | None,
     dkim_result: AuthResult | None,
@@ -82,7 +86,7 @@ async def list_report_records_by_day(
         .where(DmarcAggregateRecord.domain_id == domain_id)
     )
     query = _apply_report_filters(
-        query, since=since, disposition=disposition, spf_result=spf_result, dkim_result=dkim_result,
+        query, since=since, until=until, disposition=disposition, spf_result=spf_result, dkim_result=dkim_result,
         reporter=reporter, source_ip=source_ip,
     )
 
@@ -99,6 +103,39 @@ async def list_report_records_by_day(
         anchor_query=anchor_query, limit=limit, scalar=False,
     )
     return rows
+
+
+async def count_report_records_by_day(
+    db: AsyncSession,
+    domain_id: UUID,
+    *,
+    since: datetime | None,
+    until: datetime | None,
+    disposition: Disposition | None,
+    spf_result: AuthResult | None,
+    dkim_result: AuthResult | None,
+    reporter: str | None,
+    source_ip: str | None,
+) -> int:
+    """Unpaginated COUNT(*) at the same row granularity as
+    list_report_records_by_day (one DmarcAggregateRecord per row) — the
+    "Showing X of Y" total for the /reports/by-day endpoint. Callers should
+    only invoke this on the first page (before_id is None): computing a
+    filtered COUNT(*) again on every "Load more" click is wasted work once
+    the total for this filter set is already known client-side, same
+    first-page-only guard as Admin Organizations' org_summary_stats (see
+    its call site in app/routers/platform_admin.py)."""
+    query = (
+        select(func.count())
+        .select_from(DmarcAggregateRecord)
+        .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
+        .where(DmarcAggregateRecord.domain_id == domain_id)
+    )
+    query = _apply_report_filters(
+        query, since=since, until=until, disposition=disposition, spf_result=spf_result, dkim_result=dkim_result,
+        reporter=reporter, source_ip=source_ip,
+    )
+    return (await db.execute(query)).scalar_one()
 
 
 async def get_record_detail(
@@ -407,6 +444,7 @@ async def report_totals(
     domain_id: UUID,
     *,
     since: datetime | None,
+    until: datetime | None,
     disposition: Disposition | None,
     spf_result: AuthResult | None,
     dkim_result: AuthResult | None,
@@ -442,7 +480,7 @@ async def report_totals(
         .where(DmarcAggregateRecord.domain_id == domain_id)
     )
     query = _apply_report_filters(
-        query, since=since, disposition=disposition, spf_result=spf_result, dkim_result=dkim_result,
+        query, since=since, until=until, disposition=disposition, spf_result=spf_result, dkim_result=dkim_result,
         reporter=reporter, source_ip=source_ip,
     )
     return (await db.execute(query)).one()
@@ -453,6 +491,7 @@ async def top_failing_source_row(
     domain_id: UUID,
     *,
     since: datetime | None,
+    until: datetime | None,
     disposition: Disposition | None,
     spf_result: AuthResult | None,
     dkim_result: AuthResult | None,
@@ -474,7 +513,7 @@ async def top_failing_source_row(
         .limit(1)
     )
     query = _apply_report_filters(
-        query, since=since, disposition=disposition, spf_result=spf_result, dkim_result=dkim_result,
+        query, since=since, until=until, disposition=disposition, spf_result=spf_result, dkim_result=dkim_result,
         reporter=reporter, source_ip=source_ip,
     )
     return (await db.execute(query)).first()
@@ -493,6 +532,7 @@ async def report_records_grouped(
     by: str,
     *,
     since: datetime | None,
+    until: datetime | None,
     disposition: Disposition | None,
     spf_result: AuthResult | None,
     dkim_result: AuthResult | None,
@@ -523,7 +563,7 @@ async def report_records_grouped(
         .group_by(group_col)
     )
     query = _apply_report_filters(
-        query, since=since, disposition=disposition, spf_result=spf_result, dkim_result=dkim_result,
+        query, since=since, until=until, disposition=disposition, spf_result=spf_result, dkim_result=dkim_result,
         reporter=reporter, source_ip=source_ip,
     )
     return (await db.execute(query)).all()

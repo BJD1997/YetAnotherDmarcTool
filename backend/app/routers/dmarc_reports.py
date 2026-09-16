@@ -1,4 +1,5 @@
 import itertools
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -26,6 +27,35 @@ from app.services.rating.score import DomainRating
 from app.services.source_identification.service_identifier import identify_many
 
 router = APIRouter(tags=["dmarc-reports"])
+
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _parse_date_range(date_from: str | None, date_to: str | None) -> tuple[datetime | None, datetime | None]:
+    """Parses the Reports page's `date_from`/`date_to` (YYYY-MM-DD) query
+    params into UTC datetime boundaries: `since` is date_from at 00:00:00
+    UTC; `until` is the day AFTER date_to at 00:00:00 UTC, so the whole of
+    date_to is included as an exclusive upper bound (matching
+    _apply_report_filters' `< until`). A malformed or missing string is
+    treated as absent rather than raising — same lenient-query-param
+    convention every other filter on this router already follows (e.g.
+    `disposition`/`spf_result` simply no-op when absent)."""
+    since = None
+    if date_from is not None and _DATE_RE.match(date_from):
+        try:
+            since = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            since = None
+
+    until = None
+    if date_to is not None and _DATE_RE.match(date_to):
+        try:
+            day = datetime.strptime(date_to, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            until = day + timedelta(days=1)
+        except ValueError:
+            until = None
+
+    return since, until
 
 
 @router.get("/domains/{domain_id}/dmarc/summary")
@@ -274,9 +304,10 @@ async def dmarc_posture(
 @router.get("/domains/{domain_id}/dmarc/reports/by-day")
 async def dmarc_reports_by_day(
     domain_id: uuid.UUID,
-    limit: int = Query(300, ge=1, le=1000),
+    limit: int = Query(50, ge=1, le=200),
     before_id: uuid.UUID | None = Query(None),
-    days: int | None = Query(None, ge=1, le=365),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
     disposition: Disposition | None = Query(None),
     spf_result: AuthResult | None = Query(None),
     dkim_result: AuthResult | None = Query(None),
@@ -293,12 +324,25 @@ async def dmarc_reports_by_day(
     # session is separate from the one get_current_user set RLS context on.
     await set_org_context(db, user.organization_id)
     await get_owned_domain(db, domain_id, user.organization_id)
-    since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
+    since, until = _parse_date_range(date_from, date_to)
 
     rows = await dmarc_reports_repo.list_report_records_by_day(
-        db, domain_id, limit=limit, before_id=before_id, since=since, disposition=disposition,
+        db, domain_id, limit=limit, before_id=before_id, since=since, until=until, disposition=disposition,
         spf_result=spf_result, dkim_result=dkim_result, reporter=reporter, source_ip=source_ip,
     )
+
+    # "Showing X of Y" on the Reports page needs a total — but only for the
+    # first page. A filtered COUNT(*) recomputed on every "Load more" click
+    # would be wasted work once the total for this filter set is already
+    # known client-side; same before_id is None guard as Admin
+    # Organizations' summary stats (see org_summary_stats' call site in
+    # app/routers/platform_admin.py).
+    total: int | None = None
+    if before_id is None:
+        total = await dmarc_reports_repo.count_report_records_by_day(
+            db, domain_id, since=since, until=until, disposition=disposition,
+            spf_result=spf_result, dkim_result=dkim_result, reporter=reporter, source_ip=source_ip,
+        )
 
     # Resolve every distinct source_ip on this page to its identified
     # sending service (same cache-first lookup service_breakdown uses), so
@@ -335,13 +379,14 @@ async def dmarc_reports_by_day(
             }
         )
 
-    return {"days": days_out, "has_more": len(rows) == limit}
+    return {"days": days_out, "has_more": len(rows) == limit, "total": total}
 
 
 @router.get("/domains/{domain_id}/dmarc/reports/summary")
 async def dmarc_reports_summary(
     domain_id: uuid.UUID,
-    days: int | None = Query(None, ge=1, le=365),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
     disposition: Disposition | None = Query(None),
     spf_result: AuthResult | None = Query(None),
     dkim_result: AuthResult | None = Query(None),
@@ -357,9 +402,9 @@ async def dmarc_reports_summary(
     # session is separate from the one get_current_user set RLS context on.
     await set_org_context(db, user.organization_id)
     await get_owned_domain(db, domain_id, user.organization_id)
-    since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
+    since, until = _parse_date_range(date_from, date_to)
     filter_kwargs = dict(
-        since=since, disposition=disposition, spf_result=spf_result, dkim_result=dkim_result,
+        since=since, until=until, disposition=disposition, spf_result=spf_result, dkim_result=dkim_result,
         reporter=reporter, source_ip=source_ip,
     )
 
@@ -395,7 +440,8 @@ async def dmarc_reports_summary(
 async def dmarc_reports_grouped(
     domain_id: uuid.UUID,
     by: str = Query(..., pattern="^(source|reporter|disposition)$"),
-    days: int | None = Query(None, ge=1, le=365),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
     disposition: Disposition | None = Query(None),
     spf_result: AuthResult | None = Query(None),
     dkim_result: AuthResult | None = Query(None),
@@ -410,10 +456,10 @@ async def dmarc_reports_grouped(
     # session is separate from the one get_current_user set RLS context on.
     await set_org_context(db, user.organization_id)
     await get_owned_domain(db, domain_id, user.organization_id)
-    since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
+    since, until = _parse_date_range(date_from, date_to)
 
     rows = await dmarc_reports_repo.report_records_grouped(
-        db, domain_id, by, since=since, disposition=disposition, spf_result=spf_result,
+        db, domain_id, by, since=since, until=until, disposition=disposition, spf_result=spf_result,
         dkim_result=dkim_result, reporter=reporter, source_ip=source_ip,
     )
 

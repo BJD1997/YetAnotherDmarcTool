@@ -96,7 +96,8 @@ export interface TlsRptSummary {
 }
 
 export interface TlsRptFilters {
-  days?: number;
+  date_from?: string;
+  date_to?: string;
   org_name?: string;
   result_type?: string;
   failures_only?: boolean;
@@ -134,10 +135,12 @@ export interface DmarcDayGroup {
 export interface DmarcReportsByDay {
   days: DmarcDayGroup[];
   has_more: boolean;
+  total: number | null;
 }
 
 export interface ReportsFilters {
-  days?: number;
+  date_from?: string;
+  date_to?: string;
   disposition?: "none" | "quarantine" | "reject";
   spf_result?: "pass" | "fail";
   dkim_result?: "pass" | "fail";

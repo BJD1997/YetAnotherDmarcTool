@@ -1,3 +1,4 @@
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -27,6 +28,35 @@ from app.services.dns_checks.scheduled_recheck import run_and_persist_checks
 from app.services.dns_checks.tls_rpt_check import check_tls_rpt_rua_destination, fetch_current_tls_rpt_record
 
 router = APIRouter(tags=["dns-checks"])
+
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _parse_date_range(date_from: str | None, date_to: str | None) -> tuple[datetime | None, datetime | None]:
+    """Parses the TLS-RPT tabs' `date_from`/`date_to` (YYYY-MM-DD) query
+    params into UTC datetime boundaries — same semantics (and same
+    lenient, non-erroring handling of a malformed/missing string) as
+    app/routers/dmarc_reports.py's own _parse_date_range. Deliberately
+    duplicated rather than shared: filter-building already isn't shared
+    between the DMARC and TLS-RPT modules in this codebase (compare
+    _apply_report_filters vs _apply_tls_rpt_filters in the two
+    repositories), so this small helper follows the same precedent."""
+    since = None
+    if date_from is not None and _DATE_RE.match(date_from):
+        try:
+            since = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            since = None
+
+    until = None
+    if date_to is not None and _DATE_RE.match(date_to):
+        try:
+            day = datetime.strptime(date_to, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            until = day + timedelta(days=1)
+        except ValueError:
+            until = None
+
+    return since, until
 
 
 def _result_out(r: DnsCheckResult) -> dict:
@@ -90,25 +120,29 @@ async def _fetch_tls_rpt_rows(
     db: AsyncSession,
     domain_id: uuid.UUID,
     *,
-    days: int | None,
+    since: datetime | None,
+    until: datetime | None,
     org_name: str | None,
     result_type: str | None,
     failures_only: bool,
 ) -> list[dict]:
     """Shared filter/fetch for all three /dmarc/tls-rpt/* endpoints below —
     same _apply_report_filters-style vocabulary the DMARC reports endpoints
-    use (dmarc_reports.py), applied to RFC 8460 SMTP TLS reports. days/
-    org_name/failures_only filter in SQL; result_type filters in Python
-    after fetch (failure_details is a JSONB array — filtering its contents
-    in SQL needs jsonb_array_elements, not worth it at this domain's real
-    data volume: hundreds of rows over years, not raw message counts).
-    A row that qualifies on result_type still returns its full
-    failure_details, not just the matching entries — the point of drilling
-    into one report is seeing everything it said, not a pre-filtered slice.
-    Returns newest-first."""
-    since = datetime.now(timezone.utc) - timedelta(days=days) if days is not None else None
+    use (dmarc_reports.py), applied to RFC 8460 SMTP TLS reports. since/
+    until/org_name/failures_only filter in SQL; result_type filters in
+    Python after fetch (failure_details is a JSONB array — filtering its
+    contents in SQL needs jsonb_array_elements, not worth it at this
+    domain's real data volume: hundreds of rows over years, not raw
+    message counts). A row that qualifies on result_type still returns its
+    full failure_details, not just the matching entries — the point of
+    drilling into one report is seeing everything it said, not a
+    pre-filtered slice. Returns newest-first.
+
+    `since`/`until` are computed once by the calling endpoint (via
+    _parse_date_range) and threaded straight through — not recomputed
+    here."""
     reports = await list_tls_rpt_reports_for_domain(
-        db, domain_id, since=since, org_name=org_name, failures_only=failures_only
+        db, domain_id, since=since, until=until, org_name=org_name, failures_only=failures_only
     )
 
     rows = []
@@ -124,7 +158,8 @@ async def _fetch_tls_rpt_rows_page(
     db: AsyncSession,
     domain_id: uuid.UUID,
     *,
-    days: int | None,
+    since: datetime | None,
+    until: datetime | None,
     org_name: str | None,
     result_type: str | None,
     failures_only: bool,
@@ -144,10 +179,14 @@ async def _fetch_tls_rpt_rows_page(
     (and "Load more" silently disappear) whenever result_type filters out
     every row on a page, even though more matching history exists further
     back. The frontend must page on this field, not on the last visible
-    row's id."""
-    since = datetime.now(timezone.utc) - timedelta(days=days) if days is not None else None
+    row's id.
+
+    `since`/`until` are computed once by the calling endpoint (via
+    _parse_date_range) and threaded straight through — not recomputed
+    here."""
     reports, has_more = await list_tls_rpt_reports_for_domain_page(
-        db, domain_id, since=since, org_name=org_name, failures_only=failures_only, limit=limit, before_id=before_id
+        db, domain_id, since=since, until=until, org_name=org_name, failures_only=failures_only,
+        limit=limit, before_id=before_id,
     )
 
     rows = []
@@ -164,7 +203,8 @@ async def _fetch_tls_rpt_rows_page(
 @router.get("/domains/{domain_id}/dmarc/tls-rpt/summary")
 async def tls_rpt_summary(
     domain_id: uuid.UUID,
-    days: int | None = Query(None, ge=1, le=3650),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
     org_name: str | None = Query(None),
     result_type: str | None = Query(None),
     failures_only: bool = Query(False),
@@ -172,8 +212,9 @@ async def tls_rpt_summary(
     user: User = Depends(get_current_user),
 ) -> dict:
     await get_owned_domain(db, domain_id, user.organization_id)
+    since, until = _parse_date_range(date_from, date_to)
     rows = await _fetch_tls_rpt_rows(
-        db, domain_id, days=days, org_name=org_name, result_type=result_type, failures_only=failures_only
+        db, domain_id, since=since, until=until, org_name=org_name, result_type=result_type, failures_only=failures_only
     )
 
     total_success = sum(r["successful_session_count"] for r in rows)
@@ -195,7 +236,8 @@ async def tls_rpt_summary(
 @router.get("/domains/{domain_id}/dmarc/tls-rpt/reports")
 async def tls_rpt_reports(
     domain_id: uuid.UUID,
-    days: int | None = Query(None, ge=1, le=3650),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
     org_name: str | None = Query(None),
     result_type: str | None = Query(None),
     failures_only: bool = Query(False),
@@ -211,8 +253,9 @@ async def tls_rpt_reports(
     complete result set to compute correct totals/aggregates, not a page
     of it."""
     await get_owned_domain(db, domain_id, user.organization_id)
+    since, until = _parse_date_range(date_from, date_to)
     rows, has_more, next_before_id = await _fetch_tls_rpt_rows_page(
-        db, domain_id, days=days, org_name=org_name, result_type=result_type,
+        db, domain_id, since=since, until=until, org_name=org_name, result_type=result_type,
         failures_only=failures_only, limit=limit, before_id=before_id,
     )
     return {"reports": rows, "has_more": has_more, "next_before_id": next_before_id}
@@ -221,7 +264,8 @@ async def tls_rpt_reports(
 @router.get("/domains/{domain_id}/dmarc/tls-rpt/by-sender")
 async def tls_rpt_by_sender(
     domain_id: uuid.UUID,
-    days: int | None = Query(None, ge=1, le=3650),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
     org_name: str | None = Query(None),
     result_type: str | None = Query(None),
     failures_only: bool = Query(False),
@@ -229,8 +273,9 @@ async def tls_rpt_by_sender(
     user: User = Depends(get_current_user),
 ) -> list[dict]:
     await get_owned_domain(db, domain_id, user.organization_id)
+    since, until = _parse_date_range(date_from, date_to)
     rows = await _fetch_tls_rpt_rows(
-        db, domain_id, days=days, org_name=org_name, result_type=result_type, failures_only=failures_only
+        db, domain_id, since=since, until=until, org_name=org_name, result_type=result_type, failures_only=failures_only
     )
 
     senders: dict[str, dict] = {}
