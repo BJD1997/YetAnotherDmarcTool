@@ -2,7 +2,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import case, func, or_, select, tuple_
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +15,7 @@ from app.models.enums import AuthResult, Disposition, SenderReviewStatus
 from app.models.sender_review import SenderReview
 from app.models.source_ip_identity import SourceIpIdentity
 from app.models.tls_rpt import TlsRptReport
+from app.services.pagination import keyset_paginate
 
 
 def _apply_report_filters(
@@ -85,19 +86,19 @@ async def list_report_records_by_day(
         reporter=reporter, source_ip=source_ip,
     )
 
+    anchor_query = None
     if before_id is not None:
-        anchor = (
-            await db.execute(
-                select(DmarcAggregateReport.date_range_begin, DmarcAggregateRecord.id)
-                .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
-                .where(DmarcAggregateRecord.id == before_id, DmarcAggregateRecord.domain_id == domain_id)
-            )
-        ).first()
-        if anchor is not None:
-            query = query.where(tuple_(DmarcAggregateReport.date_range_begin, DmarcAggregateRecord.id) < anchor)
+        anchor_query = (
+            select(DmarcAggregateReport.date_range_begin, DmarcAggregateRecord.id)
+            .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
+            .where(DmarcAggregateRecord.id == before_id, DmarcAggregateRecord.domain_id == domain_id)
+        )
 
-    query = query.order_by(DmarcAggregateReport.date_range_begin.desc(), DmarcAggregateRecord.id.desc()).limit(limit)
-    return (await db.execute(query)).all()
+    rows, _has_more = await keyset_paginate(
+        db, query, order_column=DmarcAggregateReport.date_range_begin, id_column=DmarcAggregateRecord.id,
+        anchor_query=anchor_query, limit=limit, scalar=False,
+    )
+    return rows
 
 
 async def get_record_detail(
