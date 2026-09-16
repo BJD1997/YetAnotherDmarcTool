@@ -9,6 +9,7 @@ from app.models.dns_check import DnsCheckResult
 from app.models.domain import Domain
 from app.models.enums import CheckType, DomainVerificationStatus
 from app.models.tls_rpt import TlsRptReport
+from app.services.pagination import keyset_paginate
 
 
 async def count_dns_checks_for_org(db: AsyncSession, organization_id: UUID) -> int:
@@ -108,6 +109,41 @@ async def list_tls_rpt_reports_for_domain(
     query = query.order_by(TlsRptReport.date_range_begin.desc())
     result = await db.execute(query)
     return result.scalars().all()
+
+
+async def list_tls_rpt_reports_for_domain_page(
+    db: AsyncSession,
+    domain_id: UUID,
+    *,
+    since: datetime | None,
+    org_name: str | None,
+    failures_only: bool,
+    limit: int,
+    before_id: UUID | None,
+) -> tuple[Sequence[TlsRptReport], bool]:
+    """Paginated sibling of list_tls_rpt_reports_for_domain, used only by
+    the /reports row-by-row list. /summary and /by-sender need the
+    complete result set to compute correct totals/aggregates and must
+    keep calling the unpaginated function above — do not repoint them at
+    this one."""
+    query = select(TlsRptReport).where(TlsRptReport.domain_id == domain_id)
+    if since is not None:
+        query = query.where(TlsRptReport.date_range_begin >= since)
+    if org_name is not None:
+        query = query.where(TlsRptReport.org_name.ilike(f"%{org_name}%"))
+    if failures_only:
+        query = query.where(TlsRptReport.summary_failure_count > 0)
+
+    anchor_query = None
+    if before_id is not None:
+        anchor_query = select(TlsRptReport.date_range_begin, TlsRptReport.id).where(
+            TlsRptReport.id == before_id, TlsRptReport.domain_id == domain_id
+        )
+
+    return await keyset_paginate(
+        db, query, order_column=TlsRptReport.date_range_begin, id_column=TlsRptReport.id,
+        anchor_query=anchor_query, limit=limit,
+    )
 
 
 async def list_domains_due_for_check(db: AsyncSession, cutoff: datetime) -> Sequence[UUID]:
