@@ -1,9 +1,15 @@
-import { useState } from "react";
-import { Check, Copy, Plus, Trash2, UserPlus } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Check, ChevronDown, ChevronRight, Copy, Plus, Trash2, UserPlus } from "lucide-react";
 import { ApiError } from "../../api/client";
 import { useAdminAuth } from "../../auth/AdminAuthContext";
+import { LoadMoreButton } from "../../components/shared/LoadMoreButton";
 import { ReportFreshnessValue } from "../../components/overview/widgets";
-import { useAdminOrganizations, useChangeAdminPassword, useCreateAdminOrganization, useCreateAdminUser, useDeleteAdminOrganization, useSetAdminMailboxConnection, useUpdateAdminOrganization, type AdminOrganization } from "../../hooks/useAdmin";
+import { Stat } from "../../components/domain/shared";
+import {
+  useAdminOrganizations, useChangeAdminPassword, useCreateAdminOrganization, useCreateAdminUser,
+  useDeleteAdminOrganization, useSetAdminMailboxConnection, useUpdateAdminOrganization,
+  type AdminOrganization, type AdminOrganizationsPage,
+} from "../../hooks/useAdmin";
 import { useClipboardFeedback } from "../../hooks/useClipboardFeedback";
 
 const STATUS_ROLE: Record<AdminOrganization["status"], "good" | "serious"> = {
@@ -13,19 +19,32 @@ const STATUS_ROLE: Record<AdminOrganization["status"], "good" | "serious"> = {
 
 export default function AdminOrganizations() {
   const { admin } = useAdminAuth();
-  const { data: orgs, isLoading } = useAdminOrganizations();
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
+  // Debounce: the input itself always reflects every keystroke immediately
+  // (bound to searchInput below), but the query-triggering `search` state
+  // only catches up 300ms after typing pauses, so a fast typist doesn't
+  // fire a request per character.
+  useEffect(() => {
+    const timeout = setTimeout(() => setSearch(searchInput), 300);
+    return () => clearTimeout(timeout);
+  }, [searchInput]);
+  const query = useAdminOrganizations(search);
+  const pages = query.data?.pages ?? [];
+  const orgs = pages.flatMap((p) => p.organizations);
+  // The summary is computed server-side over the whole filtered set on
+  // every page fetch, not per page — the first page's copy is as current
+  // as any other.
+  const summary = pages[0]?.summary;
 
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [tenantId, setTenantId] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   const createOrg = useCreateAdminOrganization(
-    () => {
-      setName("");
-      setTenantId("");
-      setError(null);
-    },
-    (err) => setError(err instanceof ApiError ? err.message : "failed to create organization"),
+    () => { setName(""); setTenantId(""); setCreateError(null); },
+    (err) => setCreateError(err instanceof ApiError ? err.message : "failed to create organization"),
   );
 
   return (
@@ -61,22 +80,112 @@ export default function AdminOrganizations() {
           Providing the tenant ID now activates the org immediately — the client can then sign in, approve consent,
           and set their own mailbox from inside their dashboard, no further steps needed here.
         </p>
-        {error && (
+        {createError && (
           <div className="alert alert--critical" style={{ marginTop: "0.75rem", marginBottom: 0 }}>
-            {error}
+            {createError}
           </div>
         )}
       </div>
 
-      {isLoading && <p className="muted">Loading…</p>}
-      {(orgs ?? []).map((org) => (
-        <OrgCard key={org.id} org={org} />
-      ))}
+      <SummaryBar summary={summary} isLoading={query.isLoading} />
+
+      <div className="card">
+        <input
+          className="input"
+          placeholder="Search organizations by name"
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+        />
+      </div>
+
+      {query.isLoading && <p className="muted">Loading…</p>}
+      {query.isSuccess && orgs.length === 0 && <p className="empty-state">No organizations match your search.</p>}
+
+      {orgs.length > 0 && (
+        <div className="card" style={{ padding: 0 }}>
+          {orgs.map((org) => (
+            <OrgRow
+              key={org.id}
+              org={org}
+              expanded={expandedId === org.id}
+              onToggle={() => setExpandedId(expandedId === org.id ? null : org.id)}
+            />
+          ))}
+        </div>
+      )}
+
+      <LoadMoreButton hasNextPage={query.hasNextPage} isFetchingNextPage={query.isFetchingNextPage} onClick={() => query.fetchNextPage()} />
     </section>
   );
 }
 
-function OrgCard({ org }: { org: AdminOrganization }) {
+function SummaryBar({ summary, isLoading }: { summary: AdminOrganizationsPage["summary"] | undefined; isLoading: boolean }) {
+  if (isLoading) return <p className="muted">Loading summary…</p>;
+  if (!summary) return null;
+  return (
+    <div className="card">
+      <div className="stat-row">
+        <Stat label="Organizations" value={summary.total.toLocaleString()} />
+        <Stat label="Active" value={summary.active.toLocaleString()} />
+        <Stat label="Suspended" value={summary.suspended.toLocaleString()} />
+        <Stat label="With job errors (7d)" value={summary.orgs_with_job_errors_7d.toLocaleString()} />
+      </div>
+    </div>
+  );
+}
+
+function OrgRow({ org, expanded, onToggle }: { org: AdminOrganization; expanded: boolean; onToggle: () => void }) {
+  return (
+    <div style={{ borderBottom: "1px solid var(--border)" }}>
+      <div
+        onClick={onToggle}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            if (e.key === " ") e.preventDefault();
+            onToggle();
+          }
+        }}
+        style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0.65rem 1.1rem", cursor: "pointer", gap: "0.75rem", flexWrap: "wrap" }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+          <strong style={{ fontSize: "0.92rem" }}>{org.name}</strong>
+          <span className={`badge badge--${STATUS_ROLE[org.status]}`}>{org.status}</span>
+          {org.is_operator && <span className="badge badge--neutral">operator</span>}
+        </div>
+        <div className="chip-row" style={{ fontSize: "0.8rem" }}>
+          <span className="muted">
+            {org.domain_count} domain{org.domain_count === 1 ? "" : "s"}
+          </span>
+          <span className="muted">
+            last report:{" "}
+            {org.last_report_at ? (
+              <>
+                <ReportFreshnessValue hours={(Date.now() - new Date(org.last_report_at).getTime()) / 3_600_000} /> ago
+              </>
+            ) : (
+              "never"
+            )}
+          </span>
+          {org.job_error_count_7d > 0 && (
+            <span className="badge badge--critical">
+              {org.job_error_count_7d} job error{org.job_error_count_7d === 1 ? "" : "s"} (7d)
+            </span>
+          )}
+        </div>
+      </div>
+      {expanded && (
+        <div style={{ padding: "0 1.1rem 1rem", background: "var(--plane)", borderTop: "1px solid var(--border)" }}>
+          <OrgDetail org={org} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function OrgDetail({ org }: { org: AdminOrganization }) {
   const [tenantId, setTenantId] = useState(org.entra_tenant_id ?? "");
   const [mailbox, setMailbox] = useState(org.mailbox_connection?.mailbox_address ?? "");
 
@@ -93,9 +202,9 @@ function OrgCard({ org }: { org: AdminOrganization }) {
     : "neutral";
 
   return (
-    <div className="card">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <strong style={{ fontSize: "1.05rem" }}>{org.name}</strong>
+    <div style={{ paddingTop: "0.75rem" }}>
+      <div className="field-row">
+        <span className="muted" style={{ fontSize: "0.78rem" }}>Status</span>
         <select
           className="input"
           value={org.status}
@@ -104,31 +213,6 @@ function OrgCard({ org }: { org: AdminOrganization }) {
           <option value="active">active</option>
           <option value="suspended">suspended</option>
         </select>
-      </div>
-      <div style={{ marginTop: "0.4rem" }}>
-        <span className={`badge badge--${STATUS_ROLE[org.status]}`}>{org.status}</span>
-        {org.is_operator && <span className="badge badge--neutral" style={{ marginLeft: "0.4rem" }}>operator</span>}
-      </div>
-
-      <div className="chip-row" style={{ marginTop: "0.6rem", fontSize: "0.8rem" }}>
-        <span className="muted">
-          {org.domain_count} domain{org.domain_count === 1 ? "" : "s"}
-        </span>
-        <span className="muted">
-          last report:{" "}
-          {org.last_report_at ? (
-            <>
-              <ReportFreshnessValue hours={(Date.now() - new Date(org.last_report_at).getTime()) / 3_600_000} /> ago
-            </>
-          ) : (
-            "never"
-          )}
-        </span>
-        {org.job_error_count_7d > 0 && (
-          <span className="badge badge--critical">
-            {org.job_error_count_7d} job error{org.job_error_count_7d === 1 ? "" : "s"} (7d)
-          </span>
-        )}
       </div>
 
       <div style={{ display: "flex", gap: "3rem", marginTop: "1rem", flexWrap: "wrap" }}>
@@ -194,9 +278,10 @@ function OrgCard({ org }: { org: AdminOrganization }) {
       {/* No consent-links block here anymore — dashboard SSO consent
           happens automatically at first sign-in (Microsoft handles it
           inline), and the Mail Access link is already surfaced inside the
-          client's own portal once they're in (see MailboxConnectionStatusBanner
-          in Domains.tsx), so there's nothing left for the platform admin to
-          relay out-of-band. */}
+          client's own portal once they're in (see MailboxConnectionSection,
+          rendered from Settings' GeneralTab.tsx and from Onboarding.tsx),
+          so there's nothing left for the platform admin to relay
+          out-of-band. */}
 
       {!org.entra_tenant_id && !org.is_operator && <CreateLocalUser orgId={org.id} />}
 

@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pyotp
 import pytest
@@ -316,7 +317,7 @@ async def test_list_organizations_includes_aggregates(api):
     response = await client.get("/api/admin/organizations")
 
     assert response.status_code == 200
-    body = response.json()
+    body = response.json()["organizations"]
     assert len(body) == 2
     for org in body:
         assert org["domain_count"] == 0
@@ -372,7 +373,7 @@ async def test_list_organizations_aggregates_reflect_real_data(api):
     response = await client.get("/api/admin/organizations")
 
     assert response.status_code == 200
-    body = response.json()
+    body = response.json()["organizations"]
     org = next(o for o in body if o["id"] == org_id)
     assert org["domain_count"] == 1
     assert org["job_error_count_7d"] == 1
@@ -384,6 +385,144 @@ async def test_list_organizations_aggregates_reflect_real_data(api):
     assert other_org["last_report_at"] is None
 
 
+async def test_list_organization_names_unpaginated(api):
+    """Regression test for Fix 2: the /organizations/names picker/lookup
+    endpoint must return every organization as a bare list, never a page
+    of it — AdminJobRuns' org filter dropdown and name lookup broke on a
+    real platform with 200+ orgs because it was reading the paginated
+    /organizations endpoint's first 50-row page and never called
+    fetchNextPage for it."""
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+    async with owner_factory() as db:
+        from app.db.rls import set_platform_admin_context
+        await set_platform_admin_context(db, is_admin=True)
+        for i in range(60):
+            db.add(Organization(name=f"Org {i:03d}"))
+        await db.commit()
+
+    response = await client.get("/api/admin/organizations/names")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body, list)
+    assert len(body) == 60
+    assert {org["name"] for org in body} == {f"Org {i:03d}" for i in range(60)}
+    assert all(set(org.keys()) == {"id", "name"} for org in body)
+
+
+async def test_list_organization_names_requires_admin(api):
+    client, _owner_factory = api
+    response = await client.get("/api/admin/organizations/names")
+    assert response.status_code == 401
+
+
+async def test_organizations_names_route_not_shadowed_by_org_id_route(api):
+    """/organizations/names must resolve to the dedicated names route, not
+    be swallowed by GET /organizations/{org_id} trying (and failing) to
+    parse "names" as a UUID — this is the exact placement bug the fix's
+    route ordering guards against."""
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+
+    response = await client.get("/api/admin/organizations/names")
+
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+
+async def test_list_organizations_paginated_and_searchable(api):
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+    async with owner_factory() as db:
+        from app.db.rls import set_platform_admin_context
+        from app.models.organization import Organization
+        await set_platform_admin_context(db, is_admin=True)
+        for name in ["Zeta Corp", "Alpha Corp", "Beta Corp"]:
+            db.add(Organization(name=name))
+        await db.commit()
+
+    page1 = await client.get("/api/admin/organizations", params={"limit": 2})
+    assert page1.status_code == 200
+    body1 = page1.json()
+    # Ascending alphabetical, not newest-first.
+    assert [o["name"] for o in body1["organizations"]] == ["Alpha Corp", "Beta Corp"]
+    assert body1["has_more"] is True
+    assert body1["summary"]["total"] == 3
+
+    last_id = body1["organizations"][-1]["id"]
+    page2 = await client.get("/api/admin/organizations", params={"limit": 2, "before_id": last_id})
+    body2 = page2.json()
+    assert [o["name"] for o in body2["organizations"]] == ["Zeta Corp"]
+    assert body2["has_more"] is False
+    # The summary bar is only ever read from the first page (see
+    # AdminOrganizations.tsx) — org_summary_stats is skipped on later pages
+    # rather than computed and discarded.
+    assert body2["summary"] is None
+
+    search = await client.get("/api/admin/organizations", params={"search": "zeta"})
+    assert [o["name"] for o in search.json()["organizations"]] == ["Zeta Corp"]
+    assert search.json()["summary"]["total"] == 1
+
+
+async def test_organizations_summary_job_errors_respects_search_filter(api):
+    """The orgs_with_job_errors_7d subquery must be scoped by the same
+    `search` filter as the org listing itself, not counted globally —
+    flagged during the pagination review as the easiest part of this
+    combination to get wrong. Seeds one org matching the search term with a
+    recent job failure and a second, non-matching org that also has one, and
+    checks the count reflects only the matching org."""
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+    now = datetime.now(timezone.utc)
+    async with owner_factory() as db:
+        from app.db.rls import set_platform_admin_context
+        from app.models.enums import JobStatus, JobType
+        from app.models.job_run import JobRun
+        await set_platform_admin_context(db, is_admin=True)
+        matching_org = Organization(name="Acme Corp")
+        other_org = Organization(name="Globex Inc")
+        db.add(matching_org)
+        db.add(other_org)
+        await db.flush()
+        db.add(
+            JobRun(
+                organization_id=matching_org.id, job_type=JobType.mailbox_poll, status=JobStatus.failure,
+                started_at=now - timedelta(hours=1), finished_at=now,
+            )
+        )
+        db.add(
+            JobRun(
+                organization_id=other_org.id, job_type=JobType.mailbox_poll, status=JobStatus.failure,
+                started_at=now - timedelta(hours=1), finished_at=now,
+            )
+        )
+        await db.commit()
+
+    response = await client.get("/api/admin/organizations", params={"search": "acme"})
+    body = response.json()
+    assert [o["name"] for o in body["organizations"]] == ["Acme Corp"]
+    assert body["summary"]["orgs_with_job_errors_7d"] == 1
+
+
+async def test_organizations_summary_counts_status_and_errors(api):
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+    async with owner_factory() as db:
+        from app.db.rls import set_platform_admin_context
+        from app.models.organization import Organization
+        from app.models.enums import OrganizationStatus
+        await set_platform_admin_context(db, is_admin=True)
+        db.add(Organization(name="Active One", status=OrganizationStatus.active))
+        db.add(Organization(name="Suspended One", status=OrganizationStatus.suspended))
+        await db.commit()
+
+    response = await client.get("/api/admin/organizations")
+    summary = response.json()["summary"]
+    assert summary["active"] >= 1
+    assert summary["suspended"] == 1
+
+
 async def test_job_runs_empty(api):
     client, owner_factory = api
     await login_as_platform_admin(client, owner_factory)
@@ -391,7 +530,39 @@ async def test_job_runs_empty(api):
     response = await client.get("/api/admin/job-runs")
 
     assert response.status_code == 200
-    assert response.json() == []
+    assert response.json() == {"job_runs": [], "has_more": False}
+
+
+async def test_job_runs_paginated(api):
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+    org, _user = await seed_org_and_user(owner_factory)
+    now = datetime.now(timezone.utc)
+    async with owner_factory() as db:
+        from app.db.rls import set_platform_admin_context
+        from app.models.enums import JobStatus, JobType
+        from app.models.job_run import JobRun
+        await set_platform_admin_context(db, is_admin=True)
+        for i in range(3):
+            db.add(
+                JobRun(
+                    organization_id=org.id, job_type=JobType.mailbox_poll, status=JobStatus.success,
+                    started_at=now - timedelta(hours=3 - i), finished_at=now - timedelta(hours=3 - i) + timedelta(minutes=1),
+                )
+            )
+        await db.commit()
+
+    page1 = await client.get("/api/admin/job-runs", params={"limit": 2})
+    assert page1.status_code == 200
+    body1 = page1.json()
+    assert len(body1["job_runs"]) == 2
+    assert body1["has_more"] is True
+
+    last_id = body1["job_runs"][-1]["id"]
+    page2 = await client.get("/api/admin/job-runs", params={"limit": 2, "before_id": last_id})
+    body2 = page2.json()
+    assert len(body2["job_runs"]) == 1
+    assert body2["has_more"] is False
 
 
 async def test_job_runs_summary_empty(api):

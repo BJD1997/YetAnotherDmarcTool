@@ -6,6 +6,7 @@ import type { TlsRptFilters, TlsRptReportRow, TlsRptSenderSummary, TlsRptSummary
 import { TLS_RPT_RESULT_TYPES, tlsRptFilterQuery } from "../../api/dmarc";
 import { DATE_RANGE_PRESETS } from "../../api/overview";
 import { Stat } from "../../components/domain/shared";
+import { LoadMoreButton } from "../../components/shared/LoadMoreButton";
 import { useTlsReportRows, useTlsReportSummary, useTlsReportsBySender } from "../../hooks/useTlsReports";
 
 const GROUPINGS = [
@@ -40,7 +41,8 @@ export default function DomainTlsReports() {
   const reportsQuery = useTlsReportRows(domainId, filterQS, grouping === "day");
   const bySenderQuery = useTlsReportsBySender(domainId, filterQS, grouping === "sender");
 
-  const days = groupByDay(reportsQuery.data ?? []);
+  const allRows = reportsQuery.data?.pages.flatMap((p) => p.reports) ?? [];
+  const days = groupByDay(allRows);
 
   return (
     <section>
@@ -119,6 +121,12 @@ export default function DomainTlsReports() {
               ))}
             </div>
           ))}
+
+          <LoadMoreButton
+            hasNextPage={reportsQuery.hasNextPage}
+            isFetchingNextPage={reportsQuery.isFetchingNextPage}
+            onClick={() => reportsQuery.fetchNextPage()}
+          />
         </>
       ) : (
         <BySenderTable rows={bySenderQuery.data} isLoading={bySenderQuery.isLoading} />

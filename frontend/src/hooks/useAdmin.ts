@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient, type UseQueryOptions } from "@ta
 
 import { api } from "../api/client";
 import { queryKeys } from "./queryKeys";
+import { useCursorPage } from "./useCursorPage";
 
 export interface AdminOrganization {
   id: string;
@@ -26,6 +27,12 @@ export interface AdminOrganization {
   domain_count: number;
   job_error_count_7d: number;
   last_report_at: string | null;
+}
+
+export interface AdminOrganizationsPage {
+  organizations: AdminOrganization[];
+  has_more: boolean;
+  summary: { total: number; active: number; suspended: number; orgs_with_job_errors_7d: number };
 }
 
 export interface UpdateStatus {
@@ -60,10 +67,29 @@ export interface AdminJobRunsSummary {
   reports_processed_today: number;
 }
 
-export function useAdminOrganizations() {
+export function useAdminOrganizations(search: string) {
+  return useCursorPage<AdminOrganizationsPage>(
+    queryKeys.admin.organizations(search),
+    (cursor) => {
+      const qs = new URLSearchParams();
+      if (search) qs.set("search", search);
+      if (cursor) qs.set("before_id", cursor);
+      return api.get<AdminOrganizationsPage>(`/admin/organizations${qs.toString() ? `?${qs.toString()}` : ""}`);
+    },
+    (lastPage) => {
+      if (!lastPage.has_more) return undefined;
+      const orgs = lastPage.organizations;
+      return orgs[orgs.length - 1]?.id;
+    },
+  );
+}
+
+export interface AdminOrganizationName { id: string; name: string }
+
+export function useAdminOrganizationNames() {
   return useQuery({
-    queryKey: queryKeys.admin.organizations,
-    queryFn: () => api.get<AdminOrganization[]>("/admin/organizations"),
+    queryKey: queryKeys.admin.organizationNames,
+    queryFn: () => api.get<AdminOrganizationName[]>("/admin/organizations/names"),
   });
 }
 
@@ -81,13 +107,26 @@ export function useAdminJobRunsSummary() {
   return useQuery({ queryKey: queryKeys.admin.jobRunsSummary, queryFn: () => api.get<AdminJobRunsSummary>("/admin/job-runs/summary") });
 }
 
+export interface AdminJobRunsPage {
+  job_runs: AdminJobRun[];
+  has_more: boolean;
+}
+
 export function useAdminJobRuns(filters: string) {
-  return useQuery({ queryKey: queryKeys.admin.jobRuns(filters), queryFn: () => api.get<AdminJobRun[]>(`/admin/job-runs?${filters}`) });
+  return useCursorPage<AdminJobRunsPage>(
+    queryKeys.admin.jobRuns(filters),
+    (cursor) => {
+      const qs = new URLSearchParams(filters);
+      if (cursor) qs.set("before_id", cursor);
+      return api.get<AdminJobRunsPage>(`/admin/job-runs?${qs.toString()}`);
+    },
+    (lastPage) => (lastPage.has_more ? lastPage.job_runs[lastPage.job_runs.length - 1]?.id : undefined),
+  );
 }
 
 function useInvalidateAdminOrganizations() {
   const queryClient = useQueryClient();
-  return () => queryClient.invalidateQueries({ queryKey: queryKeys.admin.organizations });
+  return () => queryClient.invalidateQueries({ queryKey: queryKeys.admin.organizationsAll });
 }
 
 export function useCreateAdminOrganization(onSuccess?: () => void, onError?: (error: Error) => void) {

@@ -29,9 +29,11 @@ from app.repositories.platform_admin import (
     get_platform_admin_by_email,
     get_unused_admin_recovery_code,
     job_runs_summary_stats,
+    list_all_organization_names,
     list_all_organizations,
     list_job_runs,
     org_aggregates,
+    org_summary_stats,
 )
 from app.schemas.platform_admin import (
     AdminEnrollOtpConfirmRequest,
@@ -304,11 +306,28 @@ async def change_password(
 
 @router.get("/organizations")
 async def list_organizations(
+    limit: int = Query(50, ge=1, le=200),
+    before_id: uuid.UUID | None = Query(None),
+    search: str | None = Query(None),
     db: AsyncSession = Depends(get_db), _admin: AdminPrincipal = Depends(get_current_platform_admin)
-) -> list[dict]:
-    orgs = await list_all_organizations(db)
+) -> dict:
+    """`summary` is only populated on the first page (`before_id is None`)
+    — it's `None` on every subsequent page, since the frontend only ever
+    reads the first page's copy (see AdminOrganizations.tsx) and computing
+    it again per "Load more" click would be wasted work."""
+    orgs, has_more = await list_all_organizations(db, limit=limit, before_id=before_id, search=search)
     aggregates = await org_aggregates(db, [org.id for org in orgs])
-    return [await _org_out(db, org, aggregates=aggregates.get(org.id)) for org in orgs]
+    # The summary bar is computed once over the whole filtered set, which is
+    # only actually shown for the first page (AdminOrganizations.tsx reads
+    # only pages[0]?.summary) — skip the aggregate queries on every
+    # subsequent "Load more" click, since their result would just be
+    # discarded by the caller.
+    summary = await org_summary_stats(db, search=search) if before_id is None else None
+    return {
+        "organizations": [await _org_out(db, org, aggregates=aggregates.get(org.id)) for org in orgs],
+        "has_more": has_more,
+        "summary": summary,
+    }
 
 
 @router.post("/organizations", status_code=status.HTTP_201_CREATED)
@@ -322,6 +341,17 @@ async def create_organization(
     await db.commit()
     await db.refresh(org)
     return await _org_out(db, org)
+
+
+@router.get("/organizations/names")
+async def list_organization_names(
+    db: AsyncSession = Depends(get_db), _admin: AdminPrincipal = Depends(get_current_platform_admin)
+) -> list[dict]:
+    """Unpaginated id+name pairs for picker/lookup UI — see
+    list_all_organization_names. Registered before /organizations/{org_id}
+    so "names" is never mistaken for an org_id path segment."""
+    rows = await list_all_organization_names(db)
+    return [{"id": str(row.id), "name": row.name} for row in rows]
 
 
 @router.get("/organizations/{org_id}")
@@ -493,37 +523,41 @@ async def upsert_mailbox_connection(
 
 @router.get("/job-runs")
 async def list_job_runs_route(
-    limit: int = 50,
+    limit: int = Query(50, ge=1, le=200),
+    before_id: uuid.UUID | None = Query(None),
     organization_id: uuid.UUID | None = Query(None),
     job_type: JobType | None = Query(None),
     status_filter: JobStatus | None = Query(None, alias="status"),
     since_days: int | None = Query(None, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
     _admin: AdminPrincipal = Depends(get_current_platform_admin),
-) -> list[dict]:
-    limit = max(1, min(limit, 200))
-    runs = await list_job_runs(
+) -> dict:
+    runs, has_more = await list_job_runs(
         db,
         limit=limit,
+        before_id=before_id,
         organization_id=organization_id,
         job_type=job_type,
         status_filter=status_filter,
         since_days=since_days,
     )
-    return [
-        {
-            "id": str(run.id),
-            "job_type": run.job_type.value,
-            "organization_id": str(run.organization_id) if run.organization_id else None,
-            "domain_id": str(run.domain_id) if run.domain_id else None,
-            "status": run.status.value,
-            "started_at": run.started_at.isoformat(),
-            "finished_at": run.finished_at.isoformat() if run.finished_at else None,
-            "error_message": run.error_message,
-            "stats": run.stats,
-        }
-        for run in runs
-    ]
+    return {
+        "job_runs": [
+            {
+                "id": str(run.id),
+                "job_type": run.job_type.value,
+                "organization_id": str(run.organization_id) if run.organization_id else None,
+                "domain_id": str(run.domain_id) if run.domain_id else None,
+                "status": run.status.value,
+                "started_at": run.started_at.isoformat(),
+                "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+                "error_message": run.error_message,
+                "stats": run.stats,
+            }
+            for run in runs
+        ],
+        "has_more": has_more,
+    }
 
 
 @router.get("/job-runs/summary")

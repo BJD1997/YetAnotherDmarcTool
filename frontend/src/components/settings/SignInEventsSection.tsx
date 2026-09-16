@@ -1,13 +1,16 @@
 import { useState } from "react";
 import { useSignInEvents } from "../../hooks/useSignInEvents";
-
-const LIMIT = 50;
+import { LoadMoreButton } from "../shared/LoadMoreButton";
 
 export default function SignInEventsSection() {
   const [resultFilter, setResultFilter] = useState("");
   const [authMethodFilter, setAuthMethodFilter] = useState("");
 
-  const params = new URLSearchParams({ limit: String(LIMIT) });
+  // No explicit limit param — the backend's own default (50, see
+  // /sign-in-events' `limit: int = Query(50, ...)`) is relied on, matching
+  // the other four paginated hooks (DMARC by-day, TLS-RPT, Admin
+  // Organizations, Admin Job Runs), none of which set it explicitly either.
+  const params = new URLSearchParams();
   if (resultFilter) params.set("result", resultFilter);
   if (authMethodFilter) params.set("auth_method", authMethodFilter);
   const filterQS = params.toString();
@@ -75,16 +78,11 @@ export default function SignInEventsSection() {
         </div>
       )}
 
-      {query.hasNextPage && (
-        <button
-          className="btn btn--secondary"
-          style={{ marginTop: "0.75rem" }}
-          onClick={() => query.fetchNextPage()}
-          disabled={query.isFetchingNextPage}
-        >
-          {query.isFetchingNextPage ? "Loading…" : "Load more"}
-        </button>
-      )}
+      <LoadMoreButton
+        hasNextPage={query.hasNextPage}
+        isFetchingNextPage={query.isFetchingNextPage}
+        onClick={() => query.fetchNextPage()}
+      />
     </div>
   );
 }
