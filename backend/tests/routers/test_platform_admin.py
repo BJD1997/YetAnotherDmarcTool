@@ -455,10 +455,54 @@ async def test_list_organizations_paginated_and_searchable(api):
     body2 = page2.json()
     assert [o["name"] for o in body2["organizations"]] == ["Zeta Corp"]
     assert body2["has_more"] is False
+    # The summary bar is only ever read from the first page (see
+    # AdminOrganizations.tsx) — org_summary_stats is skipped on later pages
+    # rather than computed and discarded.
+    assert body2["summary"] is None
 
     search = await client.get("/api/admin/organizations", params={"search": "zeta"})
     assert [o["name"] for o in search.json()["organizations"]] == ["Zeta Corp"]
     assert search.json()["summary"]["total"] == 1
+
+
+async def test_organizations_summary_job_errors_respects_search_filter(api):
+    """The orgs_with_job_errors_7d subquery must be scoped by the same
+    `search` filter as the org listing itself, not counted globally —
+    flagged during the pagination review as the easiest part of this
+    combination to get wrong. Seeds one org matching the search term with a
+    recent job failure and a second, non-matching org that also has one, and
+    checks the count reflects only the matching org."""
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+    now = datetime.now(timezone.utc)
+    async with owner_factory() as db:
+        from app.db.rls import set_platform_admin_context
+        from app.models.enums import JobStatus, JobType
+        from app.models.job_run import JobRun
+        await set_platform_admin_context(db, is_admin=True)
+        matching_org = Organization(name="Acme Corp")
+        other_org = Organization(name="Globex Inc")
+        db.add(matching_org)
+        db.add(other_org)
+        await db.flush()
+        db.add(
+            JobRun(
+                organization_id=matching_org.id, job_type=JobType.mailbox_poll, status=JobStatus.failure,
+                started_at=now - timedelta(hours=1), finished_at=now,
+            )
+        )
+        db.add(
+            JobRun(
+                organization_id=other_org.id, job_type=JobType.mailbox_poll, status=JobStatus.failure,
+                started_at=now - timedelta(hours=1), finished_at=now,
+            )
+        )
+        await db.commit()
+
+    response = await client.get("/api/admin/organizations", params={"search": "acme"})
+    body = response.json()
+    assert [o["name"] for o in body["organizations"]] == ["Acme Corp"]
+    assert body["summary"]["orgs_with_job_errors_7d"] == 1
 
 
 async def test_organizations_summary_counts_status_and_errors(api):

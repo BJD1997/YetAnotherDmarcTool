@@ -311,9 +311,18 @@ async def list_organizations(
     search: str | None = Query(None),
     db: AsyncSession = Depends(get_db), _admin: AdminPrincipal = Depends(get_current_platform_admin)
 ) -> dict:
+    """`summary` is only populated on the first page (`before_id is None`)
+    — it's `None` on every subsequent page, since the frontend only ever
+    reads the first page's copy (see AdminOrganizations.tsx) and computing
+    it again per "Load more" click would be wasted work."""
     orgs, has_more = await list_all_organizations(db, limit=limit, before_id=before_id, search=search)
     aggregates = await org_aggregates(db, [org.id for org in orgs])
-    summary = await org_summary_stats(db, search=search)
+    # The summary bar is computed once over the whole filtered set, which is
+    # only actually shown for the first page (AdminOrganizations.tsx reads
+    # only pages[0]?.summary) — skip the aggregate queries on every
+    # subsequent "Load more" click, since their result would just be
+    # discarded by the caller.
+    summary = await org_summary_stats(db, search=search) if before_id is None else None
     return {
         "organizations": [await _org_out(db, org, aggregates=aggregates.get(org.id)) for org in orgs],
         "has_more": has_more,
