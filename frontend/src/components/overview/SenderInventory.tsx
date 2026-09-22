@@ -1,9 +1,10 @@
-import { useState } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useRef, useState, type RefObject } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { ChevronDown, ChevronRight, Pencil, Plus } from "lucide-react";
 import type { Domain } from "../../api/types";
 import type { SenderInventoryRow, SenderReviewStatus, SenderReviewUpdate, SenderSourceIp } from "../../api/overview";
 import { useAuth } from "../../auth/AuthContext";
+import { useInView } from "../../hooks/useInView";
 import { useSenderInventory, useUpdateSenderReview } from "../../hooks/useOverviewResources";
 import { ServiceBadge, riskScore, passRateStyle } from "../domain/shared";
 
@@ -30,15 +31,24 @@ const DEFAULT_WINDOW_DAYS: number | null = 90;
 
 type FilterKey = "all" | "failing" | "unknown" | "approved" | "needs_owner" | "spoofed" | "rdns" | "archived";
 
-const FILTERS: { key: FilterKey; label: string }[] = [
-  { key: "all", label: "All" },
-  { key: "failing", label: "Failing" },
-  { key: "unknown", label: "Unknown" },
-  { key: "approved", label: "Approved" },
-  { key: "needs_owner", label: "Needs owner" },
-  { key: "spoofed", label: "Likely spoofed" },
-  { key: "rdns", label: "rDNS issues" },
-  { key: "archived", label: "Archived" },
+// The threshold "Failing" filters on — surfaced in its tooltip below since
+// the number itself is otherwise invisible in the UI (a sender at 60% pass
+// not appearing under "Failing" looks arbitrary without it).
+const FAILING_MAX_PASS_PCT = 50;
+
+const FILTERS: { key: FilterKey; label: string; title: string }[] = [
+  { key: "all", label: "All", title: "Every sender in this range" },
+  { key: "failing", label: "Failing", title: `DMARC pass rate below ${FAILING_MAX_PASS_PCT}%` },
+  { key: "unknown", label: "Unknown", title: "Not yet reviewed (status: pending)" },
+  { key: "approved", label: "Approved", title: "Reviewed and approved as legitimate" },
+  { key: "needs_owner", label: "Needs owner", title: "No owner assigned yet, regardless of review status" },
+  {
+    key: "spoofed",
+    label: "Likely spoofed",
+    title: "Mostly rejected/quarantined and essentially unauthenticated, and not yet approved",
+  },
+  { key: "rdns", label: "rDNS issues", title: "Approved senders without forward-confirmed reverse DNS" },
+  { key: "archived", label: "Archived", title: "Reviewed and archived — hidden from every other filter" },
 ];
 
 function matchesFilter(row: MergedRow, filter: FilterKey): boolean {
@@ -46,7 +56,7 @@ function matchesFilter(row: MergedRow, filter: FilterKey): boolean {
     case "all":
       return true;
     case "failing":
-      return row.dmarc_pass_pct !== null && row.dmarc_pass_pct < 50;
+      return row.dmarc_pass_pct !== null && row.dmarc_pass_pct < FAILING_MAX_PASS_PCT;
     case "unknown":
       return row.status === "pending";
     case "approved":
@@ -54,7 +64,13 @@ function matchesFilter(row: MergedRow, filter: FilterKey): boolean {
     case "needs_owner":
       return row.owner === null;
     case "spoofed":
-      return row.likely_spoofed;
+      // Matches the "likely spoofed" badge's own condition (see
+      // SenderInventoryRowView below) — a sender a human has already
+      // reviewed and approved isn't "likely" anything anymore regardless
+      // of the traffic pattern that originally flagged it, so showing it
+      // under this filter (while the badge itself stays hidden for it)
+      // was a real inconsistency, not just a cosmetic one.
+      return row.likely_spoofed && row.status === "pending";
     case "rdns":
       // Only meaningful for senders you've claimed as your own — a spoofer with
       // no reverse DNS is expected, not a problem to fix.
@@ -67,27 +83,56 @@ function matchesFilter(row: MergedRow, filter: FilterKey): boolean {
 export default function SenderInventory({ domainId, domains }: { domainId: string | null; domains: Domain[] }) {
   const { user } = useAuth();
   const canManage = user?.role === "org_admin";
+  const [searchParams] = useSearchParams();
+  // Action-queue items about a specific sender link straight here with
+  // ?highlight={service_label} — that sender must be visible regardless of
+  // whatever filter/window happens to be active, or the link would land the
+  // user on a page that looks like it dropped the very thing they clicked
+  // through for.
+  const highlightLabel = searchParams.get("highlight");
   const [filter, setFilter] = useState<FilterKey>("all");
   const [showBlockedGroup, setShowBlockedGroup] = useState(false);
-  const [windowDays, setWindowDays] = useState<number | null>(DEFAULT_WINDOW_DAYS);
+  const [windowDays, setWindowDays] = useState<number | null>(highlightLabel ? null : DEFAULT_WINDOW_DAYS);
+  const { ref: cardRef, inView } = useInView<HTMLDivElement>();
+  const highlightedRowRef = useRef<HTMLTableRowElement | null>(null);
 
   const targetDomains = domainId ? domains.filter((d) => d.id === domainId) : domains;
-  const { data, isLoading } = useSenderInventory(targetDomains, windowDays, riskScore);
+  // This is the heaviest query on the Overview page (DNS-bound identify_many
+  // on the backend), so it's deferred until the card actually scrolls into
+  // view instead of joining the rest of the page's opening request burst.
+  // isPending (not isLoading) covers both "still waiting to come into view"
+  // and "actively fetching" — isLoading alone is false while the query sits
+  // disabled pre-view, which would otherwise show the empty state early.
+  const { data, isPending } = useSenderInventory(targetDomains, windowDays, riskScore, inView);
   const updateReview = useUpdateSenderReview();
 
   const allRows = data ?? [];
+  const isLoading = isPending;
+  const isHighlighted = (r: SenderInventoryRow) => r.service_label === highlightLabel;
   // Archived senders are hidden everywhere except the explicit "Archived"
-  // filter — that's the whole point of archiving one.
+  // filter — that's the whole point of archiving one. The highlighted row
+  // is exempt from both that and the active chip filter (see above).
   const filteredRows = allRows.filter(
-    (r) => matchesFilter(r, filter) && (filter === "archived" || r.status !== "archived"),
+    (r) => isHighlighted(r) || (matchesFilter(r, filter) && (filter === "archived" || r.status !== "archived")),
   );
-  const rows = filteredRows.filter((r) => !(r.status === "blocked" && r.volume < BLOCKED_LOW_VOLUME_THRESHOLD));
+  const rows = filteredRows.filter((r) => isHighlighted(r) || !(r.status === "blocked" && r.volume < BLOCKED_LOW_VOLUME_THRESHOLD));
   const collapsedBlockedRows = filteredRows.filter(
-    (r) => r.status === "blocked" && r.volume < BLOCKED_LOW_VOLUME_THRESHOLD,
+    (r) => !isHighlighted(r) && r.status === "blocked" && r.volume < BLOCKED_LOW_VOLUME_THRESHOLD,
   );
+  // Same "all" vs "archived" distinction filteredRows applies, so a filter's
+  // count always matches how many rows clicking it would actually show.
+  const filterCounts = Object.fromEntries(
+    FILTERS.map((f) => [f.key, allRows.filter((r) => matchesFilter(r, f.key) && (f.key === "archived" || r.status !== "archived")).length]),
+  ) as Record<FilterKey, number>;
+
+  useEffect(() => {
+    if (highlightLabel && highlightedRowRef.current) {
+      highlightedRowRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [highlightLabel, rows.length]);
 
   return (
-    <div className="card">
+    <div className="card" ref={cardRef}>
       <div className="card-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem" }}>
         <h3>Sender inventory</h3>
         <select
@@ -105,11 +150,12 @@ export default function SenderInventory({ domainId, domains }: { domainId: strin
         </select>
       </div>
       {!isLoading && allRows.length > 0 && (
-        <div className="chip-row" style={{ marginBottom: "0.9rem" }}>
+        <div className="chip-row" style={{ marginBottom: "0.4rem" }}>
           {FILTERS.map((f) => (
             <button
               key={f.key}
               className="btn btn--ghost btn--sm"
+              title={f.title}
               style={
                 filter === f.key
                   ? { background: "var(--accent-wash)", color: "var(--accent)" }
@@ -117,10 +163,15 @@ export default function SenderInventory({ domainId, domains }: { domainId: strin
               }
               onClick={() => setFilter(f.key)}
             >
-              {f.label}
+              {f.label} ({filterCounts[f.key]})
             </button>
           ))}
         </div>
+      )}
+      {!isLoading && allRows.length > 0 && (
+        <p className="muted" style={{ fontSize: "0.8rem", marginBottom: "0.6rem" }}>
+          Showing {rows.length + collapsedBlockedRows.length} of {allRows.length} senders
+        </p>
       )}
       {isLoading && <p className="muted">Loading…</p>}
       {!isLoading && allRows.length === 0 && <p className="empty-state">No senders observed in this range.</p>}
@@ -147,6 +198,8 @@ export default function SenderInventory({ domainId, domains }: { domainId: strin
                   row={r}
                   showDomain={!domainId}
                   canManage={canManage}
+                  highlighted={isHighlighted(r)}
+                  rowRef={isHighlighted(r) ? highlightedRowRef : undefined}
                   onUpdate={(body) => updateReview.mutate({ domain_id: r.domain_id, service_label: r.service_label, body })}
                 />
               ))}
@@ -231,13 +284,17 @@ function SenderInventoryRowView({
   showDomain,
   canManage,
   onUpdate,
+  highlighted = false,
+  rowRef,
 }: {
   row: MergedRow;
   showDomain: boolean;
   canManage: boolean;
   onUpdate: (body: Partial<Pick<SenderReviewUpdate, "status" | "owner">>) => void;
+  highlighted?: boolean;
+  rowRef?: RefObject<HTMLTableRowElement | null>;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(highlighted);
   const [editingStatus, setEditingStatus] = useState(false);
   const [editingOwner, setEditingOwner] = useState(false);
   const [ownerDraft, setOwnerDraft] = useState(row.owner ?? "");
@@ -248,7 +305,7 @@ function SenderInventoryRowView({
 
   return (
     <>
-      <tr>
+      <tr ref={rowRef} style={highlighted ? { background: "var(--accent-wash)" } : undefined}>
         <td>
           <div style={{ display: "flex", alignItems: "center" }}>
             {canExpand ? (
