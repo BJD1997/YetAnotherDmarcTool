@@ -74,6 +74,7 @@ export default function DomainReports() {
     source_ip: params.get("source_ip") || undefined,
   };
   const filterQS = reportsFilterQuery(filters);
+  const hasActiveFilters = Object.values(filters).some((v) => v !== undefined);
 
   // Applies one or more param changes atomically against the CURRENT `params`
   // snapshot. setFilter (single key) is a thin wrapper around this — the
@@ -139,6 +140,7 @@ export default function DomainReports() {
         filters={filters}
         grouping={grouping}
         onFilterChange={setFilter}
+        onFiltersChange={setFilters}
         onDateRangeChange={(from, to) => setFilters({ date_from: from, date_to: to })}
         onGroupingChange={(g) => setFilter("group", g)}
       />
@@ -148,7 +150,13 @@ export default function DomainReports() {
       {grouping === "day" ? (
         <>
           {daysQuery.isLoading && <p className="muted">Loading…</p>}
-          {daysQuery.isSuccess && days.length === 0 && <p className="empty-state">No reports match these filters.</p>}
+          {daysQuery.isSuccess && days.length === 0 && (
+            <p className="empty-state">
+              {hasActiveFilters
+                ? "No reports match these filters."
+                : "No DMARC reports received yet for this domain — check DNS checks and the connected mailbox."}
+            </p>
+          )}
 
           {total != null && (
             <p className="muted" style={{ fontSize: "0.85rem" }}>
@@ -190,7 +198,16 @@ export default function DomainReports() {
                     }}
                   >
                     <div
+                      role="button"
+                      tabIndex={0}
+                      aria-expanded={expandedId === row.record_id}
                       onClick={() => setExpandedId(expandedId === row.record_id ? null : row.record_id)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setExpandedId(expandedId === row.record_id ? null : row.record_id);
+                        }
+                      }}
                       style={{
                         display: "flex",
                         justifyContent: "space-between",
@@ -234,7 +251,7 @@ export default function DomainReports() {
           )}
         </>
       ) : (
-        <GroupedTable grouping={grouping} rows={groupedQuery.data} isLoading={groupedQuery.isLoading} />
+        <GroupedTable grouping={grouping} rows={groupedQuery.data} isLoading={groupedQuery.isLoading} hasActiveFilters={hasActiveFilters} />
       )}
     </section>
   );
@@ -251,12 +268,14 @@ function FilterBar({
   filters,
   grouping,
   onFilterChange,
+  onFiltersChange,
   onDateRangeChange,
   onGroupingChange,
 }: {
   filters: ReportsFilters;
   grouping: Grouping;
   onFilterChange: (key: string, value: string) => void;
+  onFiltersChange: (updates: Record<string, string>) => void;
   onDateRangeChange: (from: string, to: string) => void;
   onGroupingChange: (grouping: Grouping) => void;
 }) {
@@ -329,22 +348,22 @@ function FilterBar({
         style={{ marginBottom: "0.6rem" }}
         onSubmit={(e) => {
           e.preventDefault();
-          onFilterChange("reporter", reporter);
-          onFilterChange("source_ip", sourceIp);
+          // Batched, not two onFilterChange calls: each one rebuilds the URL
+          // from the same pre-navigation params snapshot (see setFilters'
+          // own docstring above), so two sequential calls here would have
+          // the second silently clobber the first's change — exactly what
+          // made the reporter filter never reach the URL.
+          onFiltersChange({ reporter, source_ip: sourceIp });
         }}
       >
-        <input
-          className="input"
-          placeholder="Filter by reporter (e.g. google)"
-          value={reporter}
-          onChange={(e) => setReporter(e.target.value)}
-        />
-        <input
-          className="input"
-          placeholder="Filter by source IP"
-          value={sourceIp}
-          onChange={(e) => setSourceIp(e.target.value)}
-        />
+        <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.85rem" }}>
+          Reporter
+          <input className="input" placeholder="e.g. google" value={reporter} onChange={(e) => setReporter(e.target.value)} />
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.85rem" }}>
+          Source IP
+          <input className="input" placeholder="e.g. 203.0.113.10" value={sourceIp} onChange={(e) => setSourceIp(e.target.value)} />
+        </label>
         <button type="submit" className="btn btn--secondary btn--sm">
           Apply
         </button>
@@ -403,17 +422,25 @@ function GroupedTable({
   grouping,
   rows,
   isLoading,
+  hasActiveFilters,
 }: {
   grouping: Grouping;
   rows: DmarcReportsGroupedRow[] | undefined;
   isLoading: boolean;
+  hasActiveFilters: boolean;
 }) {
   const columnLabel = grouping === "source" ? "Source" : grouping === "reporter" ? "Reporter" : "Disposition";
 
   return (
     <div className="card">
       {isLoading && <p className="muted">Loading…</p>}
-      {!isLoading && (rows ?? []).length === 0 && <p className="empty-state">No reports match these filters.</p>}
+      {!isLoading && (rows ?? []).length === 0 && (
+        <p className="empty-state">
+          {hasActiveFilters
+            ? "No reports match these filters."
+            : "No DMARC reports received yet for this domain — check DNS checks and the connected mailbox."}
+        </p>
+      )}
       {!isLoading && (rows ?? []).length > 0 && (
         <div className="table-wrap">
           <table className="table">

@@ -30,6 +30,12 @@ export default function DomainTlsReports() {
     failures_only: params.get("failures_only") === "1",
   };
   const filterQS = tlsRptFilterQuery(filters);
+  const hasActiveFilters =
+    filters.date_from !== undefined ||
+    filters.date_to !== undefined ||
+    filters.org_name !== undefined ||
+    filters.result_type !== undefined ||
+    filters.failures_only === true;
 
   // Applies one or more param changes atomically against the CURRENT `params`
   // snapshot. setFilter (single key) is a thin wrapper around this — the
@@ -78,7 +84,13 @@ export default function DomainTlsReports() {
       {grouping === "day" ? (
         <>
           {reportsQuery.isLoading && <p className="muted">Loading…</p>}
-          {reportsQuery.isSuccess && days.length === 0 && <p className="empty-state">No TLS-RPT reports match these filters.</p>}
+          {reportsQuery.isSuccess && days.length === 0 && (
+            <p className="empty-state">
+              {hasActiveFilters
+                ? "No TLS-RPT reports match these filters."
+                : "No TLS-RPT reports received yet for this domain."}
+            </p>
+          )}
 
           {summaryQuery.data && reportsQuery.data && (
             <p className="muted" style={{ fontSize: "0.85rem" }}>
@@ -110,7 +122,16 @@ export default function DomainTlsReports() {
               {day.rows.map((row) => (
                 <div key={row.id} style={{ borderBottom: "1px solid var(--border)" }}>
                   <div
+                    role="button"
+                    tabIndex={0}
+                    aria-expanded={expandedId === row.id}
                     onClick={() => setExpandedId(expandedId === row.id ? null : row.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setExpandedId(expandedId === row.id ? null : row.id);
+                      }
+                    }}
                     style={{
                       display: "flex",
                       justifyContent: "space-between",
@@ -154,7 +175,7 @@ export default function DomainTlsReports() {
           />
         </>
       ) : (
-        <BySenderTable rows={bySenderQuery.data} isLoading={bySenderQuery.isLoading} />
+        <BySenderTable rows={bySenderQuery.data} isLoading={bySenderQuery.isLoading} hasActiveFilters={hasActiveFilters} />
       )}
     </section>
   );
@@ -299,12 +320,10 @@ function FilterBar({
           onFilterChange("org_name", orgName);
         }}
       >
-        <input
-          className="input"
-          placeholder="Filter by reporting org (e.g. google)"
-          value={orgName}
-          onChange={(e) => setOrgName(e.target.value)}
-        />
+        <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.85rem" }}>
+          Reporting org
+          <input className="input" placeholder="e.g. google" value={orgName} onChange={(e) => setOrgName(e.target.value)} />
+        </label>
         <button type="submit" className="btn btn--secondary btn--sm">
           Apply
         </button>
@@ -357,11 +376,23 @@ function SummaryBar({ summary, isLoading }: { summary: TlsRptSummary | undefined
   );
 }
 
-function BySenderTable({ rows, isLoading }: { rows: TlsRptSenderSummary[] | undefined; isLoading: boolean }) {
+function BySenderTable({
+  rows,
+  isLoading,
+  hasActiveFilters,
+}: {
+  rows: TlsRptSenderSummary[] | undefined;
+  isLoading: boolean;
+  hasActiveFilters: boolean;
+}) {
   return (
     <div className="card">
       {isLoading && <p className="muted">Loading…</p>}
-      {!isLoading && (rows ?? []).length === 0 && <p className="empty-state">No TLS-RPT reports match these filters.</p>}
+      {!isLoading && (rows ?? []).length === 0 && (
+        <p className="empty-state">
+          {hasActiveFilters ? "No TLS-RPT reports match these filters." : "No TLS-RPT reports received yet for this domain."}
+        </p>
+      )}
       {!isLoading && (rows ?? []).length > 0 && (
         <div className="table-wrap">
           <table className="table">
