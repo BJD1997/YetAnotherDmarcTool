@@ -598,7 +598,8 @@ a.issue-row:hover {
   flex-direction: column;
 }
 
-.dropdown-menu button {
+.dropdown-menu button,
+.dropdown-menu a {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -610,9 +611,11 @@ a.issue-row:hover {
   color: var(--ink-primary);
   font-size: 0.85rem;
   text-align: left;
+  text-decoration: none;
   cursor: pointer;
 }
-.dropdown-menu button:hover {
+.dropdown-menu button:hover,
+.dropdown-menu a:hover {
   background: var(--plane);
 }
 .dropdown-menu button:disabled {

@@ -61,27 +61,24 @@ export default function OverviewTab() {
       {summary && summary.report_count > 0 && (
         <div className="card">
           <div className="stat-row" style={{ marginBottom: topFix ? "0.9rem" : 0 }}>
+            {/* "Configuration score" (weighted across DNS checks, policy strength, AND
+                pass rate — see score.py) is a different measurement than the raw
+                "DMARC pass rate" stat next to it. Both used to render as a bare "X%"
+                tile with only a small label distinguishing them — easy to misread as
+                two disagreeing pass rates. Score keeps its own "/100" unit (matching
+                DomainRatingCard below) instead of "%" so it can't be mistaken for one. */}
             {rating && !rating.not_verified && !rating.insufficient_data && rating.score !== null && (
-              <Stat label={`Grade ${rating.grade}`} value={`${rating.score}%`} />
+              <Stat label="Configuration score" value={`${rating.score}/100 (${rating.grade})`} />
             )}
-            <Stat label="DMARC pass rate" value={passRate !== null ? `${passRate}%` : "—"} />
+            <Stat
+              label="DMARC pass rate"
+              value={passRate !== null ? `${passRate}% of ${summary.total_message_count.toLocaleString()} msgs` : "—"}
+            />
             <Stat label="Failing messages" value={summary.dmarc_fail_count} />
             <Stat label="Current policy" value={summary.current_policy ? `p=${summary.current_policy}` : "—"} />
           </div>
           {topFix && (
-            <div
-              className={`alert alert--${topFix.severity}`}
-              style={{ marginBottom: 0, display: "flex", gap: "0.6rem", alignItems: "flex-start" }}
-            >
-              {(() => {
-                const Icon = SEVERITY_ICON[topFix.severity];
-                return <Icon style={{ flexShrink: 0, marginTop: "0.15rem", width: 16, height: 16 }} />;
-              })()}
-              <div>
-                <div style={{ fontWeight: 600 }}>Top recommended fix: {topFix.title}</div>
-                <div style={{ marginTop: "0.15rem" }}>{topFix.action_hint}</div>
-              </div>
-            </div>
+            <TopFixAlert topFix={topFix} />
           )}
         </div>
       )}
@@ -99,7 +96,7 @@ export default function OverviewTab() {
             <h3>Fixes</h3>
           </div>
           {fixes.slice(0, 3).map((item, i) => (
-            <IssueRow key={i} item={item} />
+            <IssueRow key={i} item={item} linkTo={item.link_path ?? undefined} />
           ))}
           <Link to="fixes" className="btn btn--ghost btn--sm" style={{ marginTop: "0.5rem" }}>
             View all fixes ({fixes.length})
@@ -108,5 +105,28 @@ export default function OverviewTab() {
         </div>
       )}
     </>
+  );
+}
+
+function TopFixAlert({ topFix }: { topFix: ActionItem }) {
+  const Icon = SEVERITY_ICON[topFix.severity];
+  const body = (
+    <>
+      {<Icon style={{ flexShrink: 0, marginTop: "0.15rem", width: 16, height: 16 }} />}
+      <div>
+        <div style={{ fontWeight: 600 }}>Top recommended fix: {topFix.title}</div>
+        <div style={{ marginTop: "0.15rem" }}>{topFix.action_hint}</div>
+      </div>
+    </>
+  );
+  const style = { marginBottom: 0, display: "flex", gap: "0.6rem", alignItems: "flex-start" } as const;
+  return topFix.link_path ? (
+    <Link to={topFix.link_path} className={`alert alert--${topFix.severity}`} style={{ ...style, textDecoration: "none" }}>
+      {body}
+    </Link>
+  ) : (
+    <div className={`alert alert--${topFix.severity}`} style={style}>
+      {body}
+    </div>
   );
 }

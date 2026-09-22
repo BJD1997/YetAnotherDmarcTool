@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import {
-  Eye,
   FileText,
   Users,
   ShieldCheck,
@@ -53,7 +52,7 @@ export default function Domains() {
           </p>
         </div>
         {canManage && (
-          <Link to="/settings" className="btn btn--secondary btn--sm">
+          <Link to="/settings/domains" className="btn btn--secondary btn--sm">
             <SettingsIcon />
             Add domain
           </Link>
@@ -63,7 +62,7 @@ export default function Domains() {
       {isLoading && <p className="muted">Loading…</p>}
       {!isLoading && apexDomains.length === 0 && (
         <p className="empty-state">
-          No domains yet. {canManage && <Link to="/settings">Add one in Settings.</Link>}
+          No domains yet. {canManage && <Link to="/settings/domains">Add one in Settings.</Link>}
         </p>
       )}
 
@@ -73,10 +72,16 @@ export default function Domains() {
             <thead>
               <tr>
                 <th>Domain</th>
-                <th>Grade</th>
+                <th title="Weighted score across DNS checks, policy strength, and DMARC pass rate — not a raw pass rate itself.">
+                  Grade
+                </th>
                 <th>Policy</th>
-                <th>Messages</th>
-                <th>Failed</th>
+                <th title="Last 90 days, excluding traffic from senders you've marked blocked — the same population the grade is scored on.">
+                  Messages (90d)
+                </th>
+                <th title="Last 90 days, excluding traffic from senders you've marked blocked — the same population the grade is scored on.">
+                  Failed (90d)
+                </th>
                 <th>Last report</th>
                 <th>Checks</th>
                 <th></th>
@@ -213,7 +218,7 @@ function DomainRow({
         <td>
           {ranked?.grade && (
             <span className={`badge badge--${gradeRole(ranked.grade)}`}>
-              {ranked.grade} · {ranked.score}%
+              {ranked.grade} · {ranked.score}/100
             </span>
           )}
           {!ranked?.grade && <span className="muted">—</span>}
@@ -265,43 +270,53 @@ function DomainRow({
           )}
         </td>
         <td>
+          {/* The domain name (first column) already links to the domain's
+              overview page — a separate "View" icon here was a redundant
+              link to the same place. At the width the browser review used,
+              4-5 individual icon buttons wrapped onto multiple lines and
+              made rows very tall; consolidating the secondary actions into
+              one menu keeps the row a fixed, compact height at any width,
+              per the review's own suggested direction, rather than
+              reflowing/hiding icons at specific breakpoints. */}
           <div className="chip-row" style={{ justifyContent: "flex-end" }}>
-            <Link to={`/domains/${domain.id}`} className="icon-btn" title="View">
-              <Eye />
-            </Link>
-            {hasReports && (
-              <Link to={`/domains/${domain.id}/reports`} className="icon-btn" title="Reports">
-                <FileText />
-              </Link>
-            )}
-            <Link to={`/domains/${domain.id}/senders`} className="icon-btn" title="Senders">
-              <Users />
-            </Link>
-            <Link to={`/domains/${domain.id}/dns`} className="icon-btn" title="DNS checks">
-              <ShieldCheck />
-            </Link>
-            {canManage && (
-              <div style={{ position: "relative" }}>
-                <button className="icon-btn" onClick={() => setMenuOpen((v) => !v)} title="More actions">
-                  <MoreVertical />
-                </button>
-                {menuOpen && (
-                  <>
-                    <div style={{ position: "fixed", inset: 0, zIndex: 19 }} onClick={() => setMenuOpen(false)} />
-                    <div className="dropdown-menu">
-                      <button onClick={() => toggleActive.mutate({ is_active: !domain.is_active })} disabled={toggleActive.isPending}>
-                        {domain.is_active ? <Archive size={14} /> : <ArchiveRestore size={14} />}
-                        {domain.is_active ? "Archive" : "Unarchive"}
-                      </button>
-                      <button onClick={handleRemove} disabled={deleteDomain.isPending}>
-                        <Trash2 size={14} />
-                        Remove
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
+            <div style={{ position: "relative" }}>
+              <button className="icon-btn" onClick={() => setMenuOpen((v) => !v)} title="Actions">
+                <MoreVertical />
+              </button>
+              {menuOpen && (
+                <>
+                  <div style={{ position: "fixed", inset: 0, zIndex: 19 }} onClick={() => setMenuOpen(false)} />
+                  <div className="dropdown-menu">
+                    {hasReports && (
+                      <Link to={`/domains/${domain.id}/reports`} onClick={() => setMenuOpen(false)}>
+                        <FileText size={14} />
+                        Reports
+                      </Link>
+                    )}
+                    <Link to={`/domains/${domain.id}/senders`} onClick={() => setMenuOpen(false)}>
+                      <Users size={14} />
+                      Senders
+                    </Link>
+                    <Link to={`/domains/${domain.id}/dns`} onClick={() => setMenuOpen(false)}>
+                      <ShieldCheck size={14} />
+                      DNS checks
+                    </Link>
+                    {canManage && (
+                      <>
+                        <button onClick={() => toggleActive.mutate({ is_active: !domain.is_active })} disabled={toggleActive.isPending}>
+                          {domain.is_active ? <Archive size={14} /> : <ArchiveRestore size={14} />}
+                          {domain.is_active ? "Archive" : "Unarchive"}
+                        </button>
+                        <button onClick={handleRemove} disabled={deleteDomain.isPending}>
+                          <Trash2 size={14} />
+                          Remove
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         </td>
       </tr>

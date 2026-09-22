@@ -450,7 +450,7 @@ function WaitingRoomStep({ domain, onBack }: { domain: Domain | undefined; onBac
         While you wait
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-        <Link to="/settings" className="chip-row" style={{ textDecoration: "none" }}>
+        <Link to="/settings/domains" className="chip-row" style={{ textDecoration: "none" }}>
           <ArrowRight size={14} /> Add another domain
         </Link>
         {domain && (

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useOutletContext } from "react-router-dom";
+import { useOutletContext, useSearchParams } from "react-router-dom";
 import { RefreshCw, Trash2, Plus, Wand2, ChevronDown, ChevronRight, Copy, Check } from "lucide-react";
 import { ApiError } from "../../api/client";
 import type { Domain } from "../../api/types";
@@ -88,7 +88,11 @@ export default function DnsChecksTab() {
   const { data: checks, isLoading } = useDnsChecks(domainId);
   const { data: connection } = useMailboxConnection();
   const [error, setError] = useState<string | null>(null);
-  const [showPolicyBuilder, setShowPolicyBuilder] = useState(false);
+  const [params] = useSearchParams();
+  // Action-queue items link straight here with ?open=policy-builder for a
+  // DMARC-record-related fix — auto-open instead of making the user find
+  // and click the button themselves after landing on the tab.
+  const [showPolicyBuilder, setShowPolicyBuilder] = useState(() => params.get("open") === "policy-builder");
   const [showMtaStsBuilder, setShowMtaStsBuilder] = useState(false);
   const [showTlsRptBuilder, setShowTlsRptBuilder] = useState(false);
   const [filter, setFilter] = useState<StatusFilter>("attention");

@@ -70,6 +70,14 @@ export interface ActionItem {
   title: string;
   action_hint: string;
   domain_id: string | null;
+  // The specific check/sender/builder this item is about — e.g.
+  // "/domains/{id}/senders?highlight={label}" — not just the domain's
+  // general overview page. Null only for the rare item with no more
+  // specific destination than that already gives.
+  link_path: string | null;
+  // The concrete underlying finding, e.g. a DNS check's own summary text —
+  // not every item traces back to one specific finding, so this is often null.
+  evidence: string | null;
 }
 
 export type SenderReviewStatus = "pending" | "approved" | "ignored" | "blocked" | "archived";
