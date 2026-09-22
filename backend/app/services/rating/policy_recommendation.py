@@ -106,13 +106,25 @@ def _build_base_recommendation(
 
     if pass_rate_pct is None or pass_rate_pct < READY_TO_ENFORCE_MIN_PASS_PCT:
         failed = round(total * (1 - (pass_rate_pct or 0) / 100))
+        fail_pct = round(100 - (pass_rate_pct or 0), 1)
+        if current_policy in ("quarantine", "reject"):
+            # Already enforcing at this level — "before enforcing" doesn't
+            # make sense here (you're already enforcing). Also makes explicit
+            # that approving a sender marks it reviewed, it does not fix why
+            # its messages are failing DMARC.
+            reasoning = (
+                f"Stay at p={current_policy}. {failed} of {total} messages are failing DMARC ({fail_pct}% fail "
+                "rate) — review and fix these senders' authentication. Approving a sender marks it as expected, "
+                "it does not fix its SPF/DKIM failures."
+            )
+        else:
+            reasoning = (
+                f"Stay at monitor-only for now. {failed} of {total} messages are failing DMARC ({fail_pct}% fail "
+                "rate) — fix or approve the senders responsible before enforcing."
+            )
         return {
             "policy": current_policy or "none",
-            "reasoning": (
-                f"Stay at {f'p={current_policy}' if current_policy else 'monitor-only'} for now. {failed} of "
-                f"{total} messages are failing DMARC ({round(100 - (pass_rate_pct or 0), 1)}% fail rate) — fix "
-                "or approve the senders responsible before enforcing."
-            ),
+            "reasoning": reasoning,
             "blocked": True,
             "blocking_reason": f"DMARC pass rate is {pass_rate_pct or 0}%, below the {READY_TO_ENFORCE_MIN_PASS_PCT}% bar.",
         }

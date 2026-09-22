@@ -13,11 +13,7 @@ from app.models.domain import Domain
 from app.models.enums import CheckType, DomainMailProfile, DomainVerificationStatus
 from app.models.organization import Organization
 from app.models.user import User
-from app.repositories.dmarc_reports import (
-    count_reports_for_domain,
-    failed_message_volume_for_domain,
-    last_report_received_at_for_domain,
-)
+from app.repositories.dmarc_reports import count_reports_for_domain, last_report_received_at_for_domain
 from app.repositories.domains import count_subdomains, get_owned_domain, list_domains_for_org
 from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.repositories.organizations import get_organization
@@ -151,6 +147,7 @@ async def ranked_domains(db: AsyncSession = Depends(get_db), user: User = Depend
         grade: str | None = None
         insufficient_data = True
         message_volume = 0
+        failed_volume = 0
         check_status_counts = {"pass": 0, "warn": 0, "fail": 0, "error": 0}
         ready_to_enforce = False
         current_policy: str | None = None
@@ -167,7 +164,7 @@ async def ranked_domains(db: AsyncSession = Depends(get_db), user: User = Depend
         if not not_verified:
             findings_by_type = await latest_findings_by_type(db, domain.id)
             check_status_counts = tally_worst_status(findings_by_type)
-            rating, message_volume = await compute_domain_rating(db, domain, findings_by_type=findings_by_type)
+            rating, message_volume, failed_volume = await compute_domain_rating(db, domain, findings_by_type=findings_by_type)
             score = rating.score
             grade = rating.grade
             insufficient_data = rating.insufficient_data
@@ -191,7 +188,12 @@ async def ranked_domains(db: AsyncSession = Depends(get_db), user: User = Depend
                     rua_status = rua_result.status
 
         last_report_at = await last_report_received_at_for_domain(db, domain.id)
-        failed_volume = await failed_message_volume_for_domain(db, domain.id)
+        # failed_volume comes from compute_domain_rating above, NOT a
+        # separate all-time query — it used to be failed_message_volume_
+        # for_domain(db, domain.id), which is unwindowed and doesn't
+        # exclude blocked-sender traffic like message_volume does. Two
+        # different populations shown in the same row is how "491 messages,
+        # 9,102 failed" (failed > total) could happen at all.
 
         items.append(
             {

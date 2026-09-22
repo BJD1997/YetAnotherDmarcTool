@@ -51,12 +51,18 @@ async def latest_findings_by_type(db: AsyncSession, domain_id: uuid.UUID) -> dic
 
 async def compute_domain_rating(
     db: AsyncSession, domain: Domain, findings_by_type: dict[CheckType, list] | None = None
-) -> tuple[DomainRating, int]:
-    """Returns (rating, total_message_count) — callers that need message
-    volume for their own weighting/thresholds would otherwise have to
-    re-run the same sum query themselves. `findings_by_type` can be passed
-    in by a caller that already fetched it (e.g. for check_status_counts on
-    /domains/ranked) to avoid querying it twice."""
+) -> tuple[DomainRating, int, int]:
+    """Returns (rating, total_message_count, failed_message_count) — both
+    over the same RATING_WINDOW_DAYS/blocked-excluded population the rating
+    itself is scored on. Callers that need message volume for their own
+    weighting/thresholds would otherwise have to re-run the same sum query
+    themselves — this used to return failed counts from a *different*,
+    all-time, unfiltered query at one call site (/domains/ranked), which is
+    how "491 messages, 9,102 failed" (impossible under one population) could
+    happen: two different populations shown side by side as if comparable.
+    `findings_by_type` can be passed in by a caller that already fetched it
+    (e.g. for check_status_counts on /domains/ranked) to avoid querying it
+    twice."""
     total_count, pass_count = await _windowed_totals(db, domain.id)
 
     if findings_by_type is None:
@@ -68,7 +74,7 @@ async def compute_domain_rating(
         total_message_count=total_count,
         mail_profile=domain.mail_profile,
     )
-    return rating, total_count
+    return rating, total_count, total_count - pass_count
 
 
 @dataclasses.dataclass
@@ -99,7 +105,7 @@ async def domain_policy_readiness(
         return PolicyReadiness(False, False, latest_policy, None, None, 0)
 
     if rating is None or total_volume is None:
-        rating, total_volume = await compute_domain_rating(db, domain)
+        rating, total_volume, _failed = await compute_domain_rating(db, domain)
 
     if rating.insufficient_data or total_volume < READY_TO_ENFORCE_MIN_VOLUME:
         return PolicyReadiness(True, False, latest_policy, next_rung, None, total_volume)
