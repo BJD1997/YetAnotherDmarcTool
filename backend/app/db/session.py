@@ -4,14 +4,28 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.config import settings
 
-engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+engine = create_async_engine(
+    settings.database_url,
+    pool_pre_ping=True,
+    pool_size=settings.db_pool_size,
+    max_overflow=settings.db_max_overflow,
+)
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
 # Optional read-replica engine, built only if configured — falls back to the
 # primary otherwise (see get_read_db below). A streaming replica physically
 # rejects writes, so any accidental write through this session fails loudly
 # with a clear Postgres error rather than silently succeeding unexpectedly.
-_read_engine = create_async_engine(settings.database_read_url, pool_pre_ping=True) if settings.database_read_url else None
+_read_engine = (
+    create_async_engine(
+        settings.database_read_url,
+        pool_pre_ping=True,
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
+    )
+    if settings.database_read_url
+    else None
+)
 _read_session_factory = async_sessionmaker(_read_engine, expire_on_commit=False) if _read_engine else async_session_factory
 
 

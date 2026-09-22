@@ -11,6 +11,19 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+asyncpg://dmarc:dmarc@db:5432/dmarc"
 
+    # SQLAlchemy's own defaults (pool_size=5, max_overflow=10 -> 15
+    # concurrent connections max) are too small for a real deployment: a
+    # single SPA page navigation routinely fires several parallel API
+    # calls, each needing its own connection for the duration of the
+    # request. Hit in production (2026-09-16) as a burst of
+    # "QueuePool limit of size 5 overflow 10 reached, connection timed
+    # out, timeout 30.00" errors during ordinary admin-console browsing —
+    # every request queuing behind an exhausted pool is what "the portal
+    # is very slow" looks like from the outside. Applies to both the
+    # primary engine and the optional read-replica engine (app/db/session.py).
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+
     # Sessions (Phase 1)
     session_cookie_name: str = "dmarc_session"
     platform_admin_session_cookie_name: str = "dmarc_admin_session"
