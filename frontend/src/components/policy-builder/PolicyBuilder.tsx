@@ -23,6 +23,45 @@ const RUA_STATUS_TEXT: Record<string, { text: string; role: "good" | "warning" |
 // np= IS included — it's DMARCbis-native (RFC 9989), not deprecated: the
 // policy for subdomains that don't exist in DNS at all, distinct from sp=
 // (subdomains that exist but lack their own DMARC record).
+const VALID_POLICIES: DmarcPolicy[] = ["none", "quarantine", "reject"];
+
+// A published record's tags come from a generic key=value parser (see
+// backend/app/services/dns_checks/dmarc_record.py's parse_dmarc_tags) with
+// no validation — a malformed or unrecognized value (a typo, an old draft
+// tag) must fall back rather than get carried into the generated record
+// unexamined.
+function asPolicy(value: string | undefined): DmarcPolicy | undefined {
+  return VALID_POLICIES.includes(value as DmarcPolicy) ? (value as DmarcPolicy) : undefined;
+}
+
+function asPolicyOrBlank(value: string | undefined): DmarcPolicy | "" {
+  return asPolicy(value) ?? "";
+}
+
+// RFC 7489: adkim=/aspf= default to relaxed ("r") when the tag is absent —
+// so a record that omits it is correctly relaxed, not "unset."
+function asAlignment(value: string | undefined): "r" | "s" {
+  return value === "s" ? "s" : "r";
+}
+
+const POLICY_STRENGTH: Record<DmarcPolicy, number> = { none: 0, quarantine: 1, reject: 2 };
+
+// Blank sp=/np= means "inherit the parent policy" — the weakest possible
+// reading for a strength comparison, same as an explicit p=none would be.
+function policyStrength(value: DmarcPolicy | ""): number {
+  return value ? POLICY_STRENGTH[value] : 0;
+}
+
+// True when the generated value is weaker than what's already published —
+// used to make a relaxation explicit rather than silent, per the same
+// pattern already used below for a dropped pct=. A current tag this app
+// doesn't recognize, or no current record at all, isn't a relaxation of
+// anything.
+function isRelaxation(current: string | undefined, generated: DmarcPolicy | ""): boolean {
+  const currentPolicy = asPolicy(current);
+  return currentPolicy !== undefined && policyStrength(generated) < policyStrength(currentPolicy);
+}
+
 function buildRecord(opts: {
   policy: DmarcPolicy;
   sp: DmarcPolicy | "";
@@ -78,11 +117,23 @@ export default function PolicyBuilder({ domainId, domainName, onClose }: { domai
     (err) => setHostedAddressError(err instanceof ApiError ? err.message : "couldn't generate a hosted address"),
   );
 
-  // Seed the form from the recommendation exactly once, when it first loads.
+  // Seed the form from the domain's CURRENTLY PUBLISHED record where one
+  // exists, falling back to the recommendation only for fields it doesn't
+  // have (a brand new domain with no record yet, or a tag the record
+  // doesn't set). Applying the recommendation is a deliberate action (the
+  // "Use recommendation" button below) — the starting state must not
+  // silently discard an existing, valid, already-published tag this
+  // builder doesn't independently generate a recommendation for (sp=,
+  // adkim=, aspf=) or only conditionally does (np=), which is exactly what
+  // happened when this used to seed from data.recommendation instead.
   useEffect(() => {
     if (data) {
-      setPolicy(data.recommendation.policy);
-      setNp(data.recommendation.np ?? "");
+      const tags = data.current_record?.tags;
+      setPolicy(asPolicy(tags?.p) ?? data.recommendation.policy);
+      setSp(asPolicyOrBlank(tags?.sp));
+      setNp(asPolicyOrBlank(tags?.np) || (data.recommendation.np ?? ""));
+      setAdkim(asAlignment(tags?.adkim));
+      setAspf(asAlignment(tags?.aspf));
       const org = data.org_mailbox_address;
       const others = data.rua_destination.current_targets.filter((t) => !org || t.toLowerCase() !== org.toLowerCase());
       setSelectedRua(org ? [org, ...others] : others);
@@ -106,6 +157,13 @@ export default function PolicyBuilder({ domainId, domainName, onClose }: { domai
   const generated = data ? buildRecord({ policy, sp, np, adkim, aspf, rua: selectedRua }) : "";
   const ruaInfo = data ? RUA_STATUS_TEXT[data.rua_destination.status] : null;
   const currentHasPct = !!data?.current_record?.tags.pct;
+  const relaxations = data
+    ? [
+        isRelaxation(data.current_record?.tags.p, policy) && `p=${data.current_record?.tags.p} → p=${policy || "none"}`,
+        isRelaxation(data.current_record?.tags.sp, sp) && `sp=${data.current_record?.tags.sp} → sp=${sp || "(same as main policy)"}`,
+        isRelaxation(data.current_record?.tags.np, np) && `np=${data.current_record?.tags.np} → np=${np || "(same as subdomain policy)"}`,
+      ].filter((x): x is string => !!x)
+    : [];
   const orgMailbox = data?.org_mailbox_address ?? null;
   const otherTargets = data
     ? data.rua_destination.current_targets.filter((t) => !orgMailbox || t.toLowerCase() !== orgMailbox.toLowerCase())
@@ -207,6 +265,19 @@ export default function PolicyBuilder({ domainId, domainName, onClose }: { domai
               </div>
             )}
 
+            {relaxations.length > 0 && (
+              <div className="alert alert--warning">
+                <div style={{ fontWeight: 600 }}>This weakens your current policy</div>
+                <ul style={{ margin: "0.25rem 0 0", paddingLeft: "1.2rem" }}>
+                  {relaxations.map((r) => (
+                    <li key={r}>
+                      <code>{r}</code>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             <div className={`alert alert--${data.recommendation.blocked ? "warning" : "good"}`}>
               <div style={{ fontWeight: 600 }}>
                 Recommendation: p={data.recommendation.policy}
@@ -299,6 +370,7 @@ export default function PolicyBuilder({ domainId, domainName, onClose }: { domai
                 Generated record
               </div>
               <div
+                data-testid="generated-record"
                 style={{
                   fontFamily: "monospace",
                   fontSize: "0.82rem",
