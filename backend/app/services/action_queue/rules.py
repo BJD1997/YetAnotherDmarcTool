@@ -16,6 +16,7 @@ domains and retuned, not treated as settled."""
 import dataclasses
 import uuid
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,7 +33,13 @@ from app.repositories.dns_checks import latest_dns_check_results_of_type_for_dom
 from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.services.dns_checks.dmarc_record import check_rua_destination, fetch_current_dmarc_record
 from app.services.dns_checks.resolver import DnsLookupError
-from app.services.rating.domain_rating import _windowed_totals, compute_domain_rating, domain_policy_readiness
+from app.services.rating.domain_rating import (
+    _windowed_totals,
+    compute_domain_rating,
+    domain_policy_readiness,
+    latest_findings_by_type,
+)
+from app.services.rating.score import worst_status
 
 UNKNOWN_SENDER_VOLUME_THRESHOLD = 50
 STALE_MAILBOX_DAYS = 10
@@ -66,6 +73,53 @@ class ActionItem:
     title: str  # one line, metric baked in, e.g. "example.com: 60% compliance"
     action_hint: str  # one short imperative line, e.g. "Open DNS/authentication checks"
     domain_id: str | None
+    # Where clicking this item should actually go — the specific check, sender,
+    # or builder it's about, not just the domain's general overview page. A
+    # frontend route, e.g. "/domains/{id}/senders?highlight={label}" or
+    # "/domains/{id}/dns?open=policy-builder". None only for the rare item with
+    # no more specific destination than the domain page itself already gives.
+    link_path: str | None = None
+    # The concrete underlying finding driving this item, e.g. a DNS check's
+    # own summary text — "Open DNS/authentication checks" alone doesn't say
+    # WHICH check or why. None when the title/action_hint already say
+    # everything there is (most rules), or when the item isn't traceable to
+    # one specific finding.
+    evidence: str | None = None
+
+
+def _sender_link(domain_id: uuid.UUID, service_label: str) -> str:
+    return f"/domains/{domain_id}/senders?highlight={quote(service_label, safe='')}"
+
+
+# Reverse of score.py's WEIGHTS/_DIRECT_CHECK_FACTORS keys, so a rating
+# factor that dragged the score down can be traced back to the specific
+# DnsCheckResult rows it was computed from.
+_FACTOR_TO_CHECK_TYPE: dict[str, CheckType] = {
+    "spf": CheckType.spf,
+    "dkim": CheckType.dkim,
+    "mx": CheckType.mx,
+    "starttls": CheckType.starttls,
+    "mta_sts": CheckType.mta_sts,
+    "dane": CheckType.dane,
+    "tls_rpt": CheckType.tls_rpt,
+    "dmarc_policy": CheckType.dmarc,
+}
+
+
+def _worst_finding_summary(findings_by_type: dict[CheckType, list], factor: str) -> str | None:
+    """The specific finding text behind the lowest-scoring rating factor —
+    e.g. dmarc_policy's actual DnsCheckResult.summary ("...doesn't authorize
+    it — most receivers will refuse to send reports there"), not just the
+    factor's own bare status keyword ("fail")."""
+    check_type = _FACTOR_TO_CHECK_TYPE.get(factor)
+    if check_type is None:
+        return None
+    findings = findings_by_type.get(check_type) or []
+    if not findings:
+        return None
+    overall_worst = worst_status([f.status for f in findings])
+    worst_finding = next((f for f in findings if f.status == overall_worst), None)
+    return worst_finding.summary if worst_finding is not None else None
 
 
 async def reviewed_service_labels(db: AsyncSession, domain_id: uuid.UUID) -> set[str]:
@@ -90,16 +144,16 @@ def unreviewed_high_volume_senders(services: list[dict], reviewed_labels: set[st
     ]
 
 
-async def unknown_sender_above_threshold(db: AsyncSession, domain: Domain, services: list[dict]) -> list[ActionItem]:
+def unknown_sender_above_threshold(domain: Domain, services: list[dict], reviewed_labels: set[str]) -> list[ActionItem]:
     """Takes an already-computed `services` breakdown (the caller computes
     it once per domain and shares it with sender_alignment_issue too)
     rather than calling service_breakdown itself — avoids running the same
     PTR-identification aggregation twice per domain per action-queue
-    request."""
+    request. Same reasoning for `reviewed_labels`: the caller fetches it
+    once per domain and shares it with likely_spoofed_sender, rather than
+    this and likely_spoofed_sender each independently re-querying it."""
     if not services:
         return []
-
-    reviewed_labels = await reviewed_service_labels(db, domain.id)
 
     items = []
     for s in unreviewed_high_volume_senders(services, reviewed_labels):
@@ -110,22 +164,23 @@ async def unknown_sender_above_threshold(db: AsyncSession, domain: Domain, servi
                 title=f'{domain.name}: unreviewed sender "{s["service_label"]}" ({s["volume"]:,} msgs)',
                 action_hint="Review in Sender Inventory",
                 domain_id=str(domain.id),
+                link_path=_sender_link(domain.id, s["service_label"]),
             )
         )
     return items
 
 
-async def likely_spoofed_sender(db: AsyncSession, domain: Domain, services: list[dict]) -> list[ActionItem]:
+def likely_spoofed_sender(domain: Domain, services: list[dict], reviewed_labels: set[str]) -> list[ActionItem]:
     """Flags services service_breakdown already marked likely_spoofed (see
     dmarc_analytics.py — mostly rejected/quarantined and essentially
     unauthenticated on both mechanisms) that haven't been reviewed yet.
     Deliberately no volume floor unlike unreviewed_high_volume_senders —
     a handful of spoofed messages is still worth a look, unlike a handful
-    of messages from an otherwise-plausible unreviewed sender."""
+    of messages from an otherwise-plausible unreviewed sender. Takes
+    `reviewed_labels` precomputed for the same reason services is —
+    see unknown_sender_above_threshold's docstring."""
     if not services:
         return []
-
-    reviewed_labels = await reviewed_service_labels(db, domain.id)
 
     items = []
     for s in services:
@@ -138,6 +193,7 @@ async def likely_spoofed_sender(db: AsyncSession, domain: Domain, services: list
                 title=f'{domain.name}: likely spoofed sender "{s["service_label"]}" ({s["volume"]:,} msgs)',
                 action_hint="Review in Sender Inventory — approve if legitimate, or block to confirm",
                 domain_id=str(domain.id),
+                link_path=_sender_link(domain.id, s["service_label"]),
             )
         )
     return items
@@ -171,6 +227,7 @@ async def mailbox_stopped_receiving_reports(db: AsyncSession, organization_id: u
             title=f"Mailbox: no reports in {STALE_MAILBOX_DAYS}d despite healthy sync",
             action_hint="Check senders' rua= or mailbox delivery",
             domain_id=None,
+            link_path="/settings",
         )
     ]
 
@@ -186,6 +243,7 @@ async def domain_ready_for_stricter_policy(db: AsyncSession, domain: Domain) -> 
             title=f"{domain.name}: ready for p={r.next_rung}",
             action_hint=f"{r.pass_rate_pct}% pass rate over {r.total_volume:,} msgs — open Policy Builder",
             domain_id=str(domain.id),
+            link_path=f"/domains/{domain.id}/dns?open=policy-builder",
         )
     ]
 
@@ -217,6 +275,7 @@ async def enforcement_readiness_notice(db: AsyncSession, domains: list[Domain]) 
             title=f"{eligible_count} domain{'s' if eligible_count != 1 else ''} could tighten policy",
             action_hint="See Domains Needing Attention for what's blocking them",
             domain_id=None,
+            link_path="/domains",
         )
     ]
 
@@ -228,12 +287,18 @@ async def low_compliance_domain(db: AsyncSession, domain: Domain) -> list[Action
     surface individually."""
     if domain.verification_status != DomainVerificationStatus.verified:
         return []
-    rating, _total = await compute_domain_rating(db, domain)
+    findings_by_type = await latest_findings_by_type(db, domain.id)
+    rating, _total, _failed = await compute_domain_rating(db, domain, findings_by_type=findings_by_type)
     if rating.insufficient_data or rating.score is None:
         return []
     if rating.score >= LOW_COMPLIANCE_SERIOUS_BELOW:
         return []
     severity = "critical" if rating.score < LOW_COMPLIANCE_CRITICAL_BELOW else "serious"
+    # "Open DNS/authentication checks" alone doesn't say which check or why —
+    # cite the actual finding behind whichever factor dragged the score down
+    # the most, so the item is useful without a click.
+    worst_factor = min(rating.factors, key=lambda f: f.score_pct, default=None)
+    evidence = _worst_finding_summary(findings_by_type, worst_factor.factor) if worst_factor is not None else None
     return [
         ActionItem(
             severity=severity,
@@ -241,6 +306,8 @@ async def low_compliance_domain(db: AsyncSession, domain: Domain) -> list[Action
             title=f"{domain.name}: {rating.score}% compliance (grade {rating.grade})",
             action_hint="Open DNS/authentication checks",
             domain_id=str(domain.id),
+            link_path=f"/domains/{domain.id}/dns",
+            evidence=evidence,
         )
     ]
 
@@ -265,8 +332,9 @@ async def high_volume_failure(db: AsyncSession, domain: Domain) -> list[ActionIt
             severity=severity,
             category=CATEGORY_HIGH_VOLUME_FAILURE,
             title=f"{domain.name}: {failed:,} failing messages ({round(failed_pct, 1)}%)",
-            action_hint="Review the Outbound email table for the worst sender",
+            action_hint="Review Senders for the worst sender",
             domain_id=str(domain.id),
+            link_path=f"/domains/{domain.id}/senders",
         )
     ]
 
@@ -292,6 +360,7 @@ def sender_alignment_issue(domain: Domain, services: list[dict]) -> list[ActionI
                 title=f'{domain.name} sender "{s["service_label"]}": {spf_pct}% SPF / {dkim_pct}% DKIM',
                 action_hint="Fix SPF/DKIM alignment",
                 domain_id=str(domain.id),
+                link_path=_sender_link(domain.id, s["service_label"]),
             )
         )
     return items
@@ -317,6 +386,7 @@ async def spf_lookup_limit_risk(db: AsyncSession, domain: Domain) -> list[Action
                 title=f"{domain.name}: SPF near lookup limit ({lookup_count}/{limit})",
                 action_hint="Simplify SPF includes",
                 domain_id=str(domain.id),
+                link_path=f"/domains/{domain.id}/dns",
             )
         )
     return items
@@ -347,6 +417,7 @@ async def rua_destination_broken(db: AsyncSession, domain: Domain, mailbox_addre
             title=title,
             action_hint="Open Policy Builder to fix rua=",
             domain_id=str(domain.id),
+            link_path=f"/domains/{domain.id}/dns?open=policy-builder",
         )
     ]
 
@@ -375,5 +446,6 @@ async def parked_domain_not_locked_down(domain: Domain) -> list[ActionItem]:
             title=f"{domain.name}: marked {label} but not locked to p=reject",
             action_hint="Open Policy Builder to lock down now — no legitimate senders to protect",
             domain_id=str(domain.id),
+            link_path=f"/domains/{domain.id}/dns?open=policy-builder",
         )
     ]

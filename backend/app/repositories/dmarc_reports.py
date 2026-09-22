@@ -182,18 +182,6 @@ async def last_report_received_at_for_org(db: AsyncSession, organization_id: UUI
     return result.scalar_one_or_none()
 
 
-async def failed_message_volume_for_domain(db: AsyncSession, domain_id: UUID) -> int:
-    dmarc_pass = (DmarcAggregateRecord.dkim_result == AuthResult.pass_) | (
-        DmarcAggregateRecord.spf_result == AuthResult.pass_
-    )
-    result = await db.execute(
-        select(func.coalesce(func.sum(case((~dmarc_pass, DmarcAggregateRecord.count), else_=0)), 0)).where(
-            DmarcAggregateRecord.domain_id == domain_id
-        )
-    )
-    return result.scalar_one()
-
-
 async def list_auth_results_for_domain(db: AsyncSession, domain_id: UUID) -> Sequence[tuple]:
     result = await db.execute(
         select(DmarcAggregateRecord.auth_results, DmarcAggregateRecord.report_id, DmarcAggregateRecord.count).where(
@@ -309,6 +297,11 @@ async def list_sender_reviews_for_domain(db: AsyncSession, domain_id: UUID) -> S
     return result.scalars().all()
 
 
+async def list_sender_reviews_for_domains(db: AsyncSession, domain_ids: Sequence[UUID]) -> Sequence[SenderReview]:
+    result = await db.execute(select(SenderReview).where(SenderReview.domain_id.in_(domain_ids)))
+    return result.scalars().all()
+
+
 async def list_reviewed_service_labels_for_domain(db: AsyncSession, domain_id: UUID) -> set[str]:
     """service_labels with an explicit approved/ignored/blocked review row
     for this domain — a service is "unreviewed" if it's missing here
@@ -347,6 +340,33 @@ async def upsert_missing_sender_reviews(
                 "status": SenderReviewStatus.pending.value,
             }
             for label in service_labels
+        ]
+    )
+    stmt = stmt.on_conflict_do_nothing(index_elements=["domain_id", "service_label"])
+    await db.execute(stmt)
+    await db.flush()
+
+
+async def upsert_missing_sender_reviews_multi(
+    db: AsyncSession, organization_id: UUID, missing: list[tuple[UUID, str]]
+) -> None:
+    """Same lazy-create as upsert_missing_sender_reviews, batched across
+    domains: one INSERT for every (domain_id, service_label) pair across
+    all requested domains that doesn't already have a review row, still
+    ON CONFLICT DO NOTHING for the same cross-tab/cross-request race
+    tolerance."""
+    if not missing:
+        return
+    stmt = pg_insert(SenderReview).values(
+        [
+            {
+                "id": uuid4(),
+                "organization_id": organization_id,
+                "domain_id": domain_id,
+                "service_label": label,
+                "status": SenderReviewStatus.pending.value,
+            }
+            for domain_id, label in missing
         ]
     )
     stmt = stmt.on_conflict_do_nothing(index_elements=["domain_id", "service_label"])
@@ -406,9 +426,10 @@ async def dmarc_trend_by_day(
 async def failed_message_volume_for_org_since(
     db: AsyncSession, organization_id: UUID, since: datetime, *, domain_id: UUID | None = None
 ) -> int:
-    """Distinct from failed_message_volume_for_domain above: that one is
-    domain-scoped/all-time (used by the Domains list card); this is
-    org-wide-or-domain-scoped AND date-windowed, for /dmarc/posture."""
+    """Org-wide-or-domain-scoped AND date-windowed, for /dmarc/posture — the
+    Domains list card gets its failed count from compute_domain_rating
+    instead (same windowed/blocked-excluded population the rating itself
+    is scored on, not a separate all-time query)."""
     dmarc_pass = (DmarcAggregateRecord.dkim_result == AuthResult.pass_) | (
         DmarcAggregateRecord.spf_result == AuthResult.pass_
     )
@@ -712,6 +733,46 @@ async def per_source_ip_volume_breakdown(
         )
         .where(DmarcAggregateRecord.domain_id == domain_id)
         .group_by(DmarcAggregateRecord.source_ip)
+    )
+    if since is not None:
+        query = query.join(
+            DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id
+        ).where(DmarcAggregateReport.date_range_begin >= since)
+    return (await db.execute(query)).all()
+
+
+async def per_source_ip_volume_breakdown_multi(
+    db: AsyncSession, domain_ids: Sequence[UUID], *, since: datetime | None = None
+) -> Sequence:
+    """Same aggregation as per_source_ip_volume_breakdown, across several
+    domains in one query grouped by (domain_id, source_ip) instead of one
+    query per domain — the batched sibling that lets the Overview page's
+    sender-inventory fan-out hold a single DB connection instead of one per
+    domain for the duration of dmarc_analytics.service_breakdown_multi's
+    identify_many call (see that function's docstring for why this matters:
+    identify_many can burn several seconds of DNS-bound work per call while
+    the connection stays checked out)."""
+    dmarc_pass = (DmarcAggregateRecord.dkim_result == AuthResult.pass_) | (
+        DmarcAggregateRecord.spf_result == AuthResult.pass_
+    )
+
+    def _sum_where(condition):
+        return func.sum(case((condition, DmarcAggregateRecord.count), else_=0))
+
+    query = (
+        select(
+            DmarcAggregateRecord.domain_id,
+            DmarcAggregateRecord.source_ip,
+            func.sum(DmarcAggregateRecord.count),
+            _sum_where(DmarcAggregateRecord.spf_result == AuthResult.pass_),
+            _sum_where(DmarcAggregateRecord.dkim_result == AuthResult.pass_),
+            _sum_where(dmarc_pass),
+            _sum_where(DmarcAggregateRecord.disposition == Disposition.none),
+            _sum_where(DmarcAggregateRecord.disposition == Disposition.quarantine),
+            _sum_where(DmarcAggregateRecord.disposition == Disposition.reject),
+        )
+        .where(DmarcAggregateRecord.domain_id.in_(domain_ids))
+        .group_by(DmarcAggregateRecord.domain_id, DmarcAggregateRecord.source_ip)
     )
     if since is not None:
         query = query.join(

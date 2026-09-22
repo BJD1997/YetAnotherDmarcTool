@@ -23,19 +23,36 @@ export function useOverviewActionQueue(domainId: string | null) {
 
 interface MergedSenderInventoryRow extends SenderInventoryRow { domain_id: string; domain_name: string }
 
-export function useSenderInventory(domains: Domain[], days: number | null, sortRisk: (row: SenderInventoryRow) => number) {
+export function useSenderInventory(
+  domains: Domain[],
+  days: number | null,
+  sortRisk: (row: SenderInventoryRow) => number,
+  ready = true,
+) {
   const ids = domains.map((domain) => domain.id).join(",");
   return useQuery({
     queryKey: queryKeys.senderInventory.list(ids, days),
     queryFn: async () => {
-      const suffix = days === null ? "" : `?days=${days}`;
-      const results = await Promise.all(domains.map(async (domain) => {
-        const rows = await api.get<SenderInventoryRow[]>(`/domains/${domain.id}/dmarc/sender-inventory${suffix}`);
-        return rows.map((row): MergedSenderInventoryRow => ({ ...row, domain_id: domain.id, domain_name: domain.name }));
-      }));
-      return results.flat().sort((a, b) => sortRisk(b) - sortRisk(a));
+      // One batched call instead of one per domain: N concurrent per-domain
+      // requests each held a DB connection for the duration of the backend's
+      // DNS-bound sender-identification work, which is the same shape of
+      // load that forced the pool size up (see config.py's db_pool_size
+      // comment) — see sender_inventory_multi's docstring on the backend.
+      const daysParam = days === null ? "" : `&days=${days}`;
+      const domainIdsParam = domains.map((domain) => `domain_ids=${domain.id}`).join("&");
+      const byDomain = await api.get<Record<string, SenderInventoryRow[]>>(`/dmarc/sender-inventory?${domainIdsParam}${daysParam}`);
+      const domainNames = new Map(domains.map((domain) => [domain.id, domain.name]));
+      const results: MergedSenderInventoryRow[] = Object.entries(byDomain).flatMap(([domainId, rows]) =>
+        rows.map((row) => ({ ...row, domain_id: domainId, domain_name: domainNames.get(domainId) ?? "" }))
+      );
+      return results.sort((a, b) => sortRisk(b) - sortRisk(a));
     },
-    enabled: domains.length > 0,
+    // `ready` gates this behind the Overview page's viewport lazy-load (see
+    // SenderInventory.tsx's useInView) — this is the heaviest of the page's
+    // parallel queries (DNS-bound identify_many), so keeping it out of the
+    // initial load burst until the card is actually scrolled to matters more
+    // here than for the page's other, cheaper queries.
+    enabled: domains.length > 0 && ready,
   });
 }
 

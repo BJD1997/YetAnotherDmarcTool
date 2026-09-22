@@ -231,6 +231,84 @@ async def test_sender_inventory_second_call_reuses_existing_review(api):
     assert second.json()[0]["owner"] == "IT"
 
 
+async def test_sender_inventory_multi_batches_across_domains(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin)
+    await login_as(client, owner_factory, user)
+    domain_a = await _add_domain(owner_factory, org, name="a.example.com")
+    domain_b = await _add_domain(owner_factory, org, name="b.example.com")
+    report_a = await _add_aggregate_report(owner_factory, org, domain_a)
+    report_b = await _add_aggregate_report(owner_factory, org, domain_b)
+    await _add_aggregate_record(owner_factory, org, domain_a, report_a, source_ip="203.0.113.10", count=5)
+    await _add_aggregate_record(owner_factory, org, domain_b, report_b, source_ip="203.0.113.20", count=7)
+
+    response = await client.get(f"/api/dmarc/sender-inventory?domain_ids={domain_a.id}&domain_ids={domain_b.id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body.keys()) == {str(domain_a.id), str(domain_b.id)}
+    assert body[str(domain_a.id)][0]["service_label"] == "203.0.113.10"
+    assert body[str(domain_a.id)][0]["volume"] == 5
+    assert body[str(domain_a.id)][0]["status"] == "pending"
+    assert body[str(domain_b.id)][0]["service_label"] == "203.0.113.20"
+    assert body[str(domain_b.id)][0]["volume"] == 7
+
+
+async def test_sender_inventory_multi_includes_empty_domains_with_no_traffic(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin)
+    await login_as(client, owner_factory, user)
+    domain_with_traffic = await _add_domain(owner_factory, org, name="busy.example.com")
+    domain_quiet = await _add_domain(owner_factory, org, name="quiet.example.com")
+    report = await _add_aggregate_report(owner_factory, org, domain_with_traffic)
+    await _add_aggregate_record(owner_factory, org, domain_with_traffic, report, source_ip="203.0.113.10", count=5)
+
+    response = await client.get(
+        f"/api/dmarc/sender-inventory?domain_ids={domain_with_traffic.id}&domain_ids={domain_quiet.id}"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body[str(domain_with_traffic.id)]) == 1
+    assert body[str(domain_quiet.id)] == []
+
+
+async def test_sender_inventory_multi_reuses_existing_reviews(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org)
+    report = await _add_aggregate_report(owner_factory, org, domain)
+    await _add_aggregate_record(owner_factory, org, domain, report, source_ip="203.0.113.10")
+
+    first = await client.get(f"/api/dmarc/sender-inventory?domain_ids={domain.id}")
+    await client.patch(
+        f"/api/domains/{domain.id}/dmarc/sender-inventory/203.0.113.10", json={"status": "approved", "owner": "IT"}
+    )
+    second = await client.get(f"/api/dmarc/sender-inventory?domain_ids={domain.id}")
+
+    assert first.status_code == 200 and second.status_code == 200
+    assert second.json()[str(domain.id)][0]["status"] == "approved"
+    assert second.json()[str(domain.id)][0]["owner"] == "IT"
+
+
+async def test_sender_inventory_multi_drops_domain_ids_not_owned_by_org(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org)
+    report = await _add_aggregate_report(owner_factory, org, domain)
+    await _add_aggregate_record(owner_factory, org, domain, report, source_ip="203.0.113.10")
+    other_org, _other_user = await seed_org_and_user(owner_factory, entra=True)
+    other_domain = await _add_domain(owner_factory, other_org, name="other-org.example.com")
+
+    response = await client.get(f"/api/dmarc/sender-inventory?domain_ids={domain.id}&domain_ids={other_domain.id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body.keys()) == {str(domain.id)}
+
+
 async def test_update_sender_review_creates_row_when_missing(api):
     client, owner_factory = api
     org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin)

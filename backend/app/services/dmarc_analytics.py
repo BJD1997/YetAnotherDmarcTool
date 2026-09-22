@@ -10,7 +10,9 @@ from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.repositories.dmarc_reports import per_source_ip_volume_breakdown
+from collections import defaultdict
+
+from app.repositories.dmarc_reports import per_source_ip_volume_breakdown, per_source_ip_volume_breakdown_multi
 from app.services.source_identification.service_identifier import identify_many
 
 
@@ -54,43 +56,11 @@ def _fcrdns_status(ip_rows: list[dict]) -> str:
     return "fail"
 
 
-async def service_breakdown(db: AsyncSession, domain_id: uuid.UUID, *, since: datetime | None = None) -> list[dict]:
-    """Volume/alignment/disposition aggregated per-IP in SQL, then grouped by
-    identified service label in Python (simpler and more testable than an
-    awkward GROUP BY over a value that only exists after a DNS lookup).
-
-    `since` windows the breakdown to reports whose traffic period begins on or
-    after it (joining the parent report's date_range_begin, the same recency
-    basis dmarc_trend uses) — so a decommissioned host or a retired sender with
-    no recent traffic simply drops out of the inventory. None = all-time.
-
-    Does NOT commit — identify_many's cache upsert is executed but left
-    uncommitted, deliberately. A commit here would end the calling request's
-    SET LOCAL app.current_org_id scope (see app/db/rls.py), silently
-    breaking RLS for any query the caller runs afterward — which several
-    callers do (sender_inventory queries sender_reviews right after this;
-    the action-queue router calls this once per domain in a loop, and a
-    mid-loop commit would drop RLS context for every later iteration).
-    Callers must commit once, themselves, after all their own RLS-scoped
-    work for the request is done."""
-    rows = await per_source_ip_volume_breakdown(db, domain_id, since=since)
-    per_ip = [
-        {
-            "source_ip": str(ip),
-            "volume": int(volume),
-            "spf_pass": int(spf_pass),
-            "dkim_pass": int(dkim_pass),
-            "dmarc_pass": int(dmarc_pass_count),
-            "accepted": int(accepted),
-            "quarantined": int(quarantined),
-            "rejected": int(rejected),
-        }
-        for ip, volume, spf_pass, dkim_pass, dmarc_pass_count, accepted, quarantined, rejected in rows
-    ]
-    if not per_ip:
-        return []
-
-    identities = await identify_many(db, [row["source_ip"] for row in per_ip])
+def _build_services(per_ip: list[dict], identities: dict) -> list[dict]:
+    """Rolls per-source-IP rows up into per-service breakdown dicts, given
+    already-resolved identities for every IP involved. Shared by
+    service_breakdown and service_breakdown_multi so single- and
+    multi-domain callers compute the exact same shape from the same logic."""
 
     def _pct(n: int, d: int) -> float | None:
         return round(n / d * 100, 1) if d else None
@@ -169,3 +139,96 @@ async def service_breakdown(db: AsyncSession, domain_id: uuid.UUID, *, since: da
     services = [_service_dict(b) for b in by_service.values()]
     services.sort(key=lambda s: -s["volume"])
     return services
+
+
+def _rows_to_per_ip(rows) -> list[dict]:
+    return [
+        {
+            "source_ip": str(ip),
+            "volume": int(volume),
+            "spf_pass": int(spf_pass),
+            "dkim_pass": int(dkim_pass),
+            "dmarc_pass": int(dmarc_pass_count),
+            "accepted": int(accepted),
+            "quarantined": int(quarantined),
+            "rejected": int(rejected),
+        }
+        for ip, volume, spf_pass, dkim_pass, dmarc_pass_count, accepted, quarantined, rejected in rows
+    ]
+
+
+async def service_breakdown(db: AsyncSession, domain_id: uuid.UUID, *, since: datetime | None = None) -> list[dict]:
+    """Volume/alignment/disposition aggregated per-IP in SQL, then grouped by
+    identified service label in Python (simpler and more testable than an
+    awkward GROUP BY over a value that only exists after a DNS lookup).
+
+    `since` windows the breakdown to reports whose traffic period begins on or
+    after it (joining the parent report's date_range_begin, the same recency
+    basis dmarc_trend uses) — so a decommissioned host or a retired sender with
+    no recent traffic simply drops out of the inventory. None = all-time.
+
+    Does NOT commit — identify_many's cache upsert is executed but left
+    uncommitted, deliberately. A commit here would end the calling request's
+    SET LOCAL app.current_org_id scope (see app/db/rls.py), silently
+    breaking RLS for any query the caller runs afterward — which several
+    callers do (sender_inventory queries sender_reviews right after this;
+    the action-queue router calls this once per domain in a loop, and a
+    mid-loop commit would drop RLS context for every later iteration).
+    Callers must commit once, themselves, after all their own RLS-scoped
+    work for the request is done."""
+    rows = await per_source_ip_volume_breakdown(db, domain_id, since=since)
+    per_ip = _rows_to_per_ip(rows)
+    if not per_ip:
+        return []
+
+    identities = await identify_many(db, [row["source_ip"] for row in per_ip])
+    return _build_services(per_ip, identities)
+
+
+async def service_breakdown_multi(
+    db: AsyncSession, domain_ids: list[uuid.UUID], *, since: datetime | None = None
+) -> dict[uuid.UUID, list[dict]]:
+    """Batched sibling of service_breakdown for several domains in one call.
+
+    The point isn't just fewer SQL round-trips (per_source_ip_volume_breakdown_multi
+    already groups by domain_id in one query) — it's that identify_many is called
+    ONCE across the union of every domain's source IPs instead of once per domain.
+    identify_many is cache-first but can spend up to its own time_budget_seconds
+    (several seconds) doing live DNS PTR resolution on cache misses, and the
+    request's DB connection (checked out for the whole handler via Depends(get_db))
+    sits idle-but-held that entire time. The old per-domain-request fan-out meant
+    N concurrent connections could each be held that long simultaneously — the
+    same shape of bug that forced db_pool_size/db_max_overflow up in config.py.
+    Batching the identify_many call also skips redundant DNS/cache lookups for
+    IPs that send on behalf of more than one domain in the org (e.g. a shared
+    ESP), which per-domain calls could never dedupe.
+
+    Same non-commit contract as service_breakdown: caller commits once, after
+    its own RLS-scoped work is done.
+
+    Domains with no matching records (no traffic in `since`'s window, or none
+    at all) are simply absent from the returned dict — callers that need every
+    requested domain_id represented should default missing keys to []."""
+    rows = await per_source_ip_volume_breakdown_multi(db, domain_ids, since=since)
+
+    per_ip_by_domain: dict[uuid.UUID, list[dict]] = defaultdict(list)
+    for domain_id, ip, volume, spf_pass, dkim_pass, dmarc_pass_count, accepted, quarantined, rejected in rows:
+        per_ip_by_domain[domain_id].append(
+            {
+                "source_ip": str(ip),
+                "volume": int(volume),
+                "spf_pass": int(spf_pass),
+                "dkim_pass": int(dkim_pass),
+                "dmarc_pass": int(dmarc_pass_count),
+                "accepted": int(accepted),
+                "quarantined": int(quarantined),
+                "rejected": int(rejected),
+            }
+        )
+    if not per_ip_by_domain:
+        return {}
+
+    all_ips = [row["source_ip"] for domain_rows in per_ip_by_domain.values() for row in domain_rows]
+    identities = await identify_many(db, all_ips)
+
+    return {domain_id: _build_services(per_ip, identities) for domain_id, per_ip in per_ip_by_domain.items()}

@@ -9,7 +9,7 @@ from app.middleware.tenant_context import get_current_user
 from app.models.user import User
 from app.repositories.domains import get_owned_domain, list_domains_for_org
 from app.repositories.mailbox_connections import get_org_mailbox_connection
-from app.services.dmarc_analytics import service_breakdown
+from app.services.dmarc_analytics import service_breakdown_multi
 from app.services.action_queue.rules import (
     domain_ready_for_stricter_policy,
     enforcement_readiness_notice,
@@ -18,6 +18,7 @@ from app.services.action_queue.rules import (
     low_compliance_domain,
     mailbox_stopped_receiving_reports,
     parked_domain_not_locked_down,
+    reviewed_service_labels,
     rua_destination_broken,
     sender_alignment_issue,
     spf_lookup_limit_risk,
@@ -52,13 +53,21 @@ async def action_queue(
     connection = await get_org_mailbox_connection(db, user.organization_id)
     mailbox_address = connection.mailbox_address if connection is not None else None
 
+    # Computed once for every domain in one call rather than once per domain
+    # in the loop below: service_breakdown's identify_many can burn several
+    # seconds of DNS-bound work per domain while this request's one DB
+    # connection sits held (see service_breakdown_multi's own docstring) —
+    # looping it per domain here was the same shape of bug the sender-
+    # inventory endpoint had before it got the same batching treatment.
+    services_by_domain = await service_breakdown_multi(db, [d.id for d in domains]) if domains else {}
+
     for domain in domains:
-        # Computed once per domain and shared by the two rules that need a
-        # per-service breakdown, rather than each calling service_breakdown
-        # itself and doubling the aggregation query.
-        services = await service_breakdown(db, domain.id)
-        items += await unknown_sender_above_threshold(db, domain, services)
-        items += await likely_spoofed_sender(db, domain, services)
+        services = services_by_domain.get(domain.id, [])
+        # Also computed once per domain and shared by the two rules that
+        # need it, rather than each independently re-querying it.
+        reviewed_labels = await reviewed_service_labels(db, domain.id)
+        items += unknown_sender_above_threshold(domain, services, reviewed_labels)
+        items += likely_spoofed_sender(domain, services, reviewed_labels)
         items += sender_alignment_issue(domain, services)
         items += await domain_ready_for_stricter_policy(db, domain)
         items += await low_compliance_domain(db, domain)
@@ -67,10 +76,10 @@ async def action_queue(
         items += await rua_destination_broken(db, domain, mailbox_address)
         items += await parked_domain_not_locked_down(domain)
 
-    # service_breakdown resolves any not-yet-cached source IPs as it goes
-    # but never commits (see its docstring) — one commit here, after every
-    # rule has run, persists those cache rows without dropping RLS context
-    # mid-loop.
+    # service_breakdown_multi resolves any not-yet-cached source IPs as it
+    # goes but never commits (see its docstring) — one commit here, after
+    # every rule has run, persists those cache rows without dropping RLS
+    # context mid-loop.
     await db.commit()
 
     # Category first (how urgent/high-signal the kind of problem is — see

@@ -17,7 +17,7 @@ from app.repositories.domains import get_owned_domain, list_domains_for_org
 from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.schemas.dmarc_reports import SenderReviewUpdateRequest
 from app.services.action_queue.rules import reviewed_service_labels, unreviewed_high_volume_senders
-from app.services.dmarc_analytics import service_breakdown
+from app.services.dmarc_analytics import service_breakdown, service_breakdown_multi
 from app.services.dmarc_narrative import dkim_narratives, spf_narratives
 from app.services.dns_checks.dmarc_record import DmarcRecordInfo, check_rua_destination, fetch_current_dmarc_record
 from app.services.dns_checks.resolver import DnsLookupError
@@ -88,7 +88,7 @@ async def domain_rating(
     if domain.verification_status != DomainVerificationStatus.verified:
         return {"not_verified": True, "insufficient_data": True, "score": None, "grade": None, "factors": []}
 
-    rating, _total = await compute_domain_rating(db, domain)
+    rating, _total, _failed = await compute_domain_rating(db, domain)
     return {
         "not_verified": False,
         "insufficient_data": rating.insufficient_data,
@@ -156,6 +156,57 @@ async def sender_inventory(
     await db.commit()
 
     return [{**s, **_sender_review_out(reviews_by_label[s["service_label"]])} for s in services]
+
+
+@router.get("/dmarc/sender-inventory")
+async def sender_inventory_multi(
+    domain_ids: list[uuid.UUID] = Query(...),
+    days: int | None = Query(None, ge=1, le=365),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, list[dict]]:
+    """Batched sibling of GET /domains/{domain_id}/dmarc/sender-inventory for
+    the Overview page, which needs every domain's inventory on one page load.
+    Firing that as N per-domain requests meant N concurrent DB connections
+    each held for the duration of service_breakdown's DNS-bound identify_many
+    call — see service_breakdown_multi's docstring for why that's the shape
+    of bug db_pool_size/db_max_overflow in config.py was raised for. This
+    computes every requested domain's breakdown behind one connection and one
+    identify_many call instead.
+
+    Silently drops any domain_id not owned by the caller's org rather than
+    404ing, since this is an aggregate endpoint over a caller-supplied list —
+    one bad id shouldn't fail every other domain's data."""
+    owned_ids = {d.id for d in await list_domains_for_org(db, user.organization_id)}
+    valid_ids = [d for d in dict.fromkeys(domain_ids) if d in owned_ids]
+    if not valid_ids:
+        return {}
+
+    since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
+    breakdowns = await service_breakdown_multi(db, valid_ids, since=since)
+
+    review_rows = await dmarc_reports_repo.list_sender_reviews_for_domains(db, valid_ids)
+    reviews_by_domain_label = {(r.domain_id, r.service_label): r for r in review_rows}
+
+    missing = [
+        (domain_id, s["service_label"])
+        for domain_id in valid_ids
+        for s in breakdowns.get(domain_id, [])
+        if (domain_id, s["service_label"]) not in reviews_by_domain_label
+    ]
+    if missing:
+        await dmarc_reports_repo.upsert_missing_sender_reviews_multi(db, user.organization_id, missing)
+        review_rows = await dmarc_reports_repo.list_sender_reviews_for_domains(db, valid_ids)
+        reviews_by_domain_label = {(r.domain_id, r.service_label): r for r in review_rows}
+    await db.commit()
+
+    return {
+        str(domain_id): [
+            {**s, **_sender_review_out(reviews_by_domain_label[(domain_id, s["service_label"])])}
+            for s in breakdowns.get(domain_id, [])
+        ]
+        for domain_id in valid_ids
+    }
 
 
 @router.patch("/domains/{domain_id}/dmarc/sender-inventory/{service_label}")
@@ -252,7 +303,7 @@ async def dmarc_posture(
         rating: DomainRating | None = None
         total: int = 0
         if domain.verification_status == DomainVerificationStatus.verified:
-            rating, total = await compute_domain_rating(db, domain)
+            rating, total, _failed = await compute_domain_rating(db, domain)
             if not rating.insufficient_data and rating.score is not None:
                 scored.append((rating.score, total))
 
@@ -708,7 +759,7 @@ async def dmarc_policy_builder(
     else:
         rua_destination = {"status": "no_mailbox", "current_targets": []}
 
-    rating, total = await compute_domain_rating(db, domain)
+    rating, total, _failed = await compute_domain_rating(db, domain)
     readiness = await domain_policy_readiness(db, domain, rating=rating, total_volume=total)
     stability_days = await policy_stability_days(db, domain.id)
 
