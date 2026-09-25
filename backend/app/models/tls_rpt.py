@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -49,5 +49,11 @@ class TlsRptReport(UUIDPkMixin, Base):
     failure_details: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     source_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Did the email carrying this report pass DMARC for its own From domain
+    # (per the receiving mailbox's Authentication-Results)? None = not
+    # checked (ingested before 0028, or no verdict in the headers). False
+    # rows are kept but left out of every stat — see app/db/report_trust.py.
+    sender_verified: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    sender_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

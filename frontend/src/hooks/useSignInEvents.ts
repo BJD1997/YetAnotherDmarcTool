@@ -5,10 +5,11 @@ import { useCursorPage } from "./useCursorPage";
 export interface SignInEvent {
   id: string;
   created_at: string;
-  result: "success" | "failure";
+  result: "success" | "failure" | "account_change";
   auth_method: "entra" | "local";
   email: string | null;
   failure_reason: string | null;
+  actor_email: string | null;
   ip_address: string | null;
   user_agent: string | null;
 }

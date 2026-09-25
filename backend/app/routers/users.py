@@ -1,12 +1,12 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user, require_org_admin
-from app.models.enums import AuthMethod, UserRole
+from app.models.enums import AuthMethod, UserRole, UserStatus
 from app.models.user import User
 from app.repositories.organizations import get_organization
 from app.repositories.users import get_user_in_org, list_users_for_org
@@ -90,6 +90,8 @@ async def update_user(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
     if target.id == admin.id and body.role is not None and body.role != UserRole.org_admin:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "cannot demote yourself")
+    if target.id == admin.id and body.status is not None and body.status != UserStatus.active:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "cannot disable yourself")
 
     if body.role is not None:
         target.role = body.role
@@ -119,6 +121,7 @@ async def _local_teammate(db: AsyncSession, admin: User, user_id: uuid.UUID) -> 
 @router.post("/{user_id}/reset-password")
 async def reset_password(
     user_id: uuid.UUID,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_org_admin),
 ) -> dict:
@@ -130,6 +133,7 @@ async def reset_password(
     setup_link = await account_reset.issue_password_setup_link(db, target)
     await account_reset.cancel_pending_logins(db, target)
     await session_manager.revoke_user_sessions(db, target.id)
+    await account_reset.log_account_change(db, request, target, "password_reset_by_admin", actor_email=admin.email)
     await db.commit()
     return {"setup_link": setup_link}
 
@@ -137,6 +141,7 @@ async def reset_password(
 @router.post("/{user_id}/reset-mfa", status_code=status.HTTP_204_NO_CONTENT)
 async def reset_mfa(
     user_id: uuid.UUID,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_org_admin),
 ) -> None:
@@ -145,4 +150,5 @@ async def reset_mfa(
     target = await _local_teammate(db, admin, user_id)
     await account_reset.clear_mfa(db, target)
     await session_manager.revoke_user_sessions(db, target.id)
+    await account_reset.log_account_change(db, request, target, "mfa_reset_by_admin", actor_email=admin.email)
     await db.commit()

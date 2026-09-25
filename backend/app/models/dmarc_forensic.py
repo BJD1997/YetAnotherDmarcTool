@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import INET, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -50,4 +50,10 @@ class DmarcForensicReport(UUIDPkMixin, Base):
     raw_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     source_message_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Did the email carrying this report pass DMARC for its own From domain
+    # (per the receiving mailbox's Authentication-Results)? None = not
+    # checked (ingested before 0028, or no verdict in the headers). False
+    # rows are kept but left out of every stat — see app/db/report_trust.py.
+    sender_verified: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    sender_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

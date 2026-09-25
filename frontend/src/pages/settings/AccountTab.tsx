@@ -1,6 +1,8 @@
 import { useState, type FormEvent } from "react";
+import { useOutletContext } from "react-router-dom";
 import { api, ApiError } from "../../api/client";
 import type { EnrollOtpResponse } from "../../api/localAuth";
+import type { Organization } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import RecoveryCodesStep from "../../components/auth/RecoveryCodesStep";
 
@@ -231,6 +233,16 @@ function ReplaceAuthenticatorSection() {
 
 export default function AccountTab() {
   const { user } = useAuth();
+  const org = useOutletContext<Organization | undefined>();
+
+  if (org?.is_demo_read_only) {
+    return (
+      <section>
+        <h3 className="section-title">Sign-in</h3>
+        <p className="section-hint">This is a shared demo account — its password and two-factor authentication can't be changed.</p>
+      </section>
+    );
+  }
 
   if (user?.auth_method !== "local") {
     return (

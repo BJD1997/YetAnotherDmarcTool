@@ -21,6 +21,7 @@ from app.models.platform_admin import PlatformAdmin
 from app.models.platform_admin_mfa_pending_challenge import PlatformAdminMfaPendingChallenge
 from app.models.platform_admin_recovery_code import PlatformAdminRecoveryCode
 from app.models.user import User
+from app.repositories.domains import list_hosted_domain_names_for_org
 from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.repositories.organizations import get_organization
 from app.repositories.platform_admin import (
@@ -34,6 +35,7 @@ from app.repositories.platform_admin import (
     org_aggregates,
     org_summary_stats,
 )
+from app.repositories.users import get_user_in_org, list_users_for_org
 from app.schemas.platform_admin import (
     AdminEnrollOtpConfirmRequest,
     AdminLoginRequest,
@@ -45,11 +47,12 @@ from app.schemas.platform_admin import (
     OrganizationUpdateRequest,
 )
 from app.services.auth import account_reset, session_manager, totp
-from app.services.auth.rate_limit import login_limiter, otp_limiter, rate_limiter
+from app.services.auth.rate_limit import login_limiter, otp_account_limiter, otp_limiter, rate_limiter
 from app.services.auth.entra_links import entra_consent_urls
 from app.services.auth.password import dummy_verify, hash_password, verify_password
 from app.services.auth.session_manager import cookie_kwargs
 from app.services.auth.tokens import hash_token, new_opaque_token
+from app.services.cloudflare.dns_provisioner import release_authorization_records
 
 router = APIRouter(prefix="/admin", tags=["platform-admin"])
 
@@ -200,6 +203,18 @@ async def admin_verify_otp(body: AdminVerifyOtpRequest, request: Request, db: As
     if admin.otp_enrolled_at is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "TOTP not enrolled yet")
 
+    allowed, retry_after = await otp_account_limiter.check(f"admin:{admin.id}")
+    if not allowed:
+        # Too many code guesses on this account, from however many IPs:
+        # end the pending login so the password has to be proven again.
+        await db.delete(challenge)
+        await db.commit()
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "too many attempts — please wait and sign in again",
+            headers={"Retry-After": str(retry_after)},
+        )
+
     code = body.code.strip()
     if not totp.verify_code(admin.otp_secret, code):
         code_hash = totp.hash_recovery_code_for_lookup(code)
@@ -339,6 +354,15 @@ async def list_organizations(
     }
 
 
+async def _commit_org(db: AsyncSession) -> None:
+    try:
+        await db.commit()
+    except IntegrityError:
+        # entra_tenant_id is unique — one org per Microsoft tenant.
+        await db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, "that Microsoft tenant ID is already used by another organization")
+
+
 @router.post("/organizations", status_code=status.HTTP_201_CREATED)
 async def create_organization(
     body: OrganizationCreateRequest,
@@ -347,7 +371,7 @@ async def create_organization(
 ) -> dict:
     org = Organization(name=body.name, entra_tenant_id=body.entra_tenant_id, status=OrganizationStatus.active)
     db.add(org)
-    await db.commit()
+    await _commit_org(db)
     await db.refresh(org)
     return await _org_out(db, org)
 
@@ -405,7 +429,7 @@ async def update_organization(
         org.entra_tenant_id = body.entra_tenant_id
     if body.status is not None:
         org.status = body.status
-    await db.commit()
+    await _commit_org(db)
     await db.refresh(org)
     return await _org_out(db, org)
 
@@ -439,8 +463,10 @@ async def delete_organization(
     # bypass that would need repeating here.
     # Irreversible by design — the frontend requires typing the org's name
     # to confirm before this endpoint is ever called.
+    hosted_domain_names = await list_hosted_domain_names_for_org(db, org.id)
     await db.delete(org)
     await db.commit()
+    await release_authorization_records(hosted_domain_names)
 
 
 def _local_user_out(user: User) -> dict:
@@ -451,6 +477,73 @@ def _local_user_out(user: User) -> dict:
         "role": user.role.value,
         "auth_method": user.auth_method.value,
     }
+
+
+@router.get("/organizations/{org_id}/users")
+async def list_org_users(
+    org_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _admin: AdminPrincipal = Depends(get_current_platform_admin),
+) -> list[dict]:
+    if await get_organization(db, org_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "organization not found")
+    return [
+        {
+            **_local_user_out(user),
+            "status": user.status.value,
+            "mfa_enrolled": user.otp_enrolled_at is not None,
+            "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
+        }
+        for user in await list_users_for_org(db, org_id)
+    ]
+
+
+async def _resettable_user(db: AsyncSession, admin: AdminPrincipal, org_id: uuid.UUID, user_id: uuid.UUID) -> User:
+    """A local-auth user of `org_id` — the platform admin's way to help a
+    local org whose only admin is locked out. Not yourself: an operator-org
+    admin changes their own sign-in via Settings → Account, which re-checks
+    the current password."""
+    target = await get_user_in_org(db, user_id, org_id)
+    if target is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
+    if target.auth_method != AuthMethod.local:
+        raise HTTPException(status.HTTP_409_CONFLICT, "this user signs in with Microsoft — reset it in Entra instead")
+    if admin.auth_type == "operator_org" and target.id == admin.id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "use Settings → Account to change your own sign-in")
+    return target
+
+
+@router.post("/organizations/{org_id}/users/{user_id}/reset-password")
+async def admin_reset_user_password(
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin: AdminPrincipal = Depends(get_current_platform_admin),
+) -> dict:
+    target = await _resettable_user(db, admin, org_id, user_id)
+    target.password_hash = None
+    setup_link = await account_reset.issue_password_setup_link(db, target)
+    await account_reset.cancel_pending_logins(db, target)
+    await session_manager.revoke_user_sessions(db, target.id)
+    await account_reset.log_account_change(db, request, target, "password_reset_by_platform_admin", actor_email=admin.email)
+    await db.commit()
+    return {"setup_link": setup_link}
+
+
+@router.post("/organizations/{org_id}/users/{user_id}/reset-mfa", status_code=status.HTTP_204_NO_CONTENT)
+async def admin_reset_user_mfa(
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin: AdminPrincipal = Depends(get_current_platform_admin),
+) -> None:
+    target = await _resettable_user(db, admin, org_id, user_id)
+    await account_reset.clear_mfa(db, target)
+    await session_manager.revoke_user_sessions(db, target.id)
+    await account_reset.log_account_change(db, request, target, "mfa_reset_by_platform_admin", actor_email=admin.email)
+    await db.commit()
 
 
 @router.post("/organizations/{org_id}/users", status_code=status.HTTP_201_CREATED)

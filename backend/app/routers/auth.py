@@ -1,6 +1,7 @@
 import secrets
 from datetime import datetime, timedelta, timezone
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,7 +35,7 @@ from app.schemas.auth import (
 )
 from app.services.auth import account_reset, entra_oidc, pkce, session_manager, totp
 from app.services.auth.password import dummy_verify, hash_password, verify_password
-from app.services.auth.rate_limit import login_limiter, otp_limiter, rate_limiter
+from app.services.auth.rate_limit import login_limiter, otp_account_limiter, otp_limiter, rate_limiter
 from app.services.auth.session_manager import cookie_kwargs
 from app.services.auth.sign_in_log import client_network_info, record_sign_in_event
 from app.services.auth.tokens import hash_token, new_opaque_token
@@ -102,7 +103,9 @@ async def callback(request: Request, db: AsyncSession = Depends(get_db)) -> Redi
             code=code, code_verifier=verifier, redirect_uri=settings.entra_sso_redirect_uri
         )
         claims = await entra_oidc.validate_id_token(tokens["id_token"])
-    except (entra_oidc.TokenValidationError, KeyError):
+    except (entra_oidc.TokenValidationError, KeyError, httpx.HTTPError):
+        # HTTPError: Microsoft rejected the code exchange (expired/already
+        # used, e.g. the user pressed Back mid-login) or was unreachable.
         await record_sign_in_event(
             db, result=SignInResult.failure, auth_method=AuthMethod.entra,
             failure_reason="token_invalid", ip_address=ip_address, user_agent=user_agent,
@@ -153,6 +156,14 @@ async def callback(request: Request, db: AsyncSession = Depends(get_db)) -> Redi
         db.add(user)
         await db.flush()
     else:
+        if user.status != UserStatus.active:
+            await record_sign_in_event(
+                db, result=SignInResult.failure, auth_method=AuthMethod.entra,
+                organization_id=org.id, user_id=user.id, attempted_email=email, failure_reason="user_disabled",
+                ip_address=ip_address, user_agent=user_agent,
+            )
+            await db.commit()
+            return RedirectResponse("/login?error=user_disabled", status_code=302)
         user.email = email
         user.display_name = display_name
 
@@ -361,6 +372,23 @@ async def verify_otp(body: VerifyOtpRequest, request: Request, db: AsyncSession 
         await db.commit()
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "TOTP not enrolled yet")
 
+    allowed, retry_after = await otp_account_limiter.check(f"user:{user.id}")
+    if not allowed:
+        # Too many code guesses on this account, from however many IPs:
+        # end the pending login so the password has to be proven again.
+        await account_reset.cancel_pending_logins(db, user)
+        await record_sign_in_event(
+            db, result=SignInResult.failure, auth_method=AuthMethod.local,
+            organization_id=user.organization_id, user_id=user.id, attempted_email=user.email,
+            failure_reason="too_many_code_attempts", ip_address=ip_address, user_agent=user_agent,
+        )
+        await db.commit()
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "too many attempts — please wait and sign in again",
+            headers={"Retry-After": str(retry_after)},
+        )
+
     code = body.code.strip()
     if not totp.verify_code(user.otp_secret, code):
         code_hash = totp.hash_recovery_code_for_lookup(code)
@@ -555,6 +583,7 @@ async def change_password(
     await session_manager.revoke_user_sessions(
         db, user.id, keep_raw_token=request.cookies.get(settings.session_cookie_name)
     )
+    await account_reset.log_account_change(db, request, user, "password_changed")
     await db.commit()
 
 
@@ -590,5 +619,6 @@ async def mfa_reset_confirm(
     await session_manager.revoke_user_sessions(
         db, user.id, keep_raw_token=request.cookies.get(settings.session_cookie_name)
     )
+    await account_reset.log_account_change(db, request, user, "authenticator_replaced")
     await db.commit()
     return {"recovery_codes": recovery_codes}

@@ -22,6 +22,34 @@ def parse_dmarc_tags(record: str) -> dict[str, str]:
     return tags
 
 
+_VALID_POLICIES = ("none", "quarantine", "reject")
+
+
+@dataclasses.dataclass(frozen=True)
+class EffectivePolicy:
+    policy: str | None  # None = no usable value (absent all the way up, or invalid)
+    inherited: bool
+
+
+def effective_policies(tags: dict[str, str]) -> dict[str, EffectivePolicy]:
+    """Effective p/sp/np for a published record's tags (RFC 7489/9989): an
+    absent or empty sp= inherits p=, an absent or empty np= inherits sp=; a
+    present but invalid value is unknown, not inherited. The frontend
+    Policy Builder applies the same rules (dmarcInheritance.ts) — both are
+    tested against shared/dmarc-inheritance-cases.json."""
+
+    def resolve(raw: str | None, parent: EffectivePolicy) -> EffectivePolicy:
+        if not raw:
+            return EffectivePolicy(parent.policy, inherited=True)
+        value = raw.lower()
+        return EffectivePolicy(value if value in _VALID_POLICIES else None, inherited=False)
+
+    p_raw = (tags.get("p") or "").lower()
+    p = EffectivePolicy(p_raw if p_raw in _VALID_POLICIES else None, inherited=False)
+    sp = resolve(tags.get("sp"), p)
+    return {"p": p, "sp": sp, "np": resolve(tags.get("np"), sp)}
+
+
 def parse_mailto_targets(value: str) -> list[str]:
     targets = []
     for uri in value.split(","):
@@ -79,7 +107,7 @@ async def resolve_effective_policy(domain: str, parent_domain: str | None = None
         return None
     if parent_record is None:
         return None
-    return (parent_record.tags.get("sp") or parent_record.tags.get("p") or "").lower() or None
+    return effective_policies(parent_record.tags)["sp"].policy
 
 
 @dataclasses.dataclass

@@ -72,6 +72,7 @@ async def record_sign_in_event(
     user_id: UUID | None = None,
     attempted_email: str | None = None,
     failure_reason: str | None = None,
+    actor_email: str | None = None,
     created_at: datetime | None = None,
 ) -> None:
     await set_platform_admin_context(db, is_admin=True)
@@ -85,6 +86,7 @@ async def record_sign_in_event(
             auth_method=auth_method,
             result=result,
             failure_reason=failure_reason,
+            actor_email=actor_email,
             ip_address=ip_address,
             user_agent=user_agent,
             created_at=created_at or datetime.now(timezone.utc),

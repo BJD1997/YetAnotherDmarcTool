@@ -6,9 +6,9 @@ import { LoadMoreButton } from "../../components/shared/LoadMoreButton";
 import { ReportFreshnessValue } from "../../components/overview/widgets";
 import { Stat } from "../../components/domain/shared";
 import {
-  useAdminOrganizations, useChangeAdminPassword, useCreateAdminOrganization, useCreateAdminUser,
-  useDeleteAdminOrganization, useSetAdminMailboxConnection, useUpdateAdminOrganization,
-  type AdminOrganization, type AdminOrganizationsPage,
+  useAdminOrganizations, useAdminOrgUsers, useAdminResetUser, useChangeAdminPassword, useCreateAdminOrganization,
+  useCreateAdminUser, useDeleteAdminOrganization, useSetAdminMailboxConnection, useUpdateAdminOrganization,
+  type AdminOrganization, type AdminOrganizationsPage, type AdminOrgUser,
 } from "../../hooks/useAdmin";
 import { useClipboardFeedback } from "../../hooks/useClipboardFeedback";
 
@@ -285,9 +285,111 @@ function OrgDetail({ org }: { org: AdminOrganization }) {
 
       {!org.entra_tenant_id && !org.is_operator && <CreateLocalUser orgId={org.id} />}
 
+      <OrgUsersSection orgId={org.id} />
+
       <OperatorAccessSection org={org} />
 
       <DeleteOrgSection org={org} />
+    </div>
+  );
+}
+
+function OrgUsersSection({ orgId }: { orgId: string }) {
+  const { data: users, isPending } = useAdminOrgUsers(orgId);
+  const { resetPassword, resetMfa } = useAdminResetUser(orgId);
+  const { copied, copy } = useClipboardFeedback();
+  const [resetLink, setResetLink] = useState<{ email: string; link: string } | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const onError = (err: Error) => setError(err instanceof ApiError ? err.message : "reset failed");
+
+  function handleResetPassword(user: AdminOrgUser) {
+    if (!window.confirm(`Reset ${user.email}'s password? Their current password stops working immediately and they're signed out everywhere.`)) return;
+    setError(null);
+    setMessage(null);
+    resetPassword.mutate(user.id, {
+      onSuccess: (result) => setResetLink({ email: user.email, link: result.setup_link }),
+      onError,
+    });
+  }
+
+  function handleResetMfa(user: AdminOrgUser) {
+    if (!window.confirm(`Reset ${user.email}'s two-factor authentication? They're signed out and must set up a new authenticator at their next sign-in.`)) return;
+    setError(null);
+    setResetLink(null);
+    resetMfa.mutate(user.id, {
+      onSuccess: () => setMessage(`${user.email} will set up a new authenticator the next time they sign in.`),
+      onError,
+    });
+  }
+
+  return (
+    <div style={{ marginTop: "1rem", paddingTop: "0.75rem", borderTop: "1px solid var(--border)" }}>
+      <div className="stat-tile-label" style={{ marginBottom: "0.3rem" }}>
+        Users
+      </div>
+      {isPending && <p className="muted">Loading…</p>}
+      {users && users.length === 0 && <p className="muted">No users yet.</p>}
+      {users && users.length > 0 && (
+        <div className="table-wrap">
+          <table className="table">
+            <tbody>
+              {users.map((user) => (
+                <tr key={user.id}>
+                  <td>
+                    {user.email}
+                    <span className="muted"> · {user.role === "org_admin" ? "org admin" : "member"}</span>
+                    {user.status === "disabled" && <span className="muted"> · disabled</span>}
+                    {user.auth_method === "entra" && <span className="muted"> · Microsoft</span>}
+                    {user.auth_method === "local" && !user.mfa_enrolled && <span className="muted"> · no MFA yet</span>}
+                  </td>
+                  <td style={{ textAlign: "right" }}>
+                    {user.auth_method === "local" && (
+                      <div className="chip-row" style={{ justifyContent: "flex-end" }}>
+                        <button className="btn btn--ghost btn--sm" onClick={() => handleResetPassword(user)} disabled={resetPassword.isPending}>
+                          Reset password
+                        </button>
+                        {user.mfa_enrolled && (
+                          <button className="btn btn--ghost btn--sm" onClick={() => handleResetMfa(user)} disabled={resetMfa.isPending}>
+                            Reset MFA
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {resetLink && (
+        <>
+          <p className="section-hint" style={{ marginTop: "0.6rem" }}>
+            One-time setup link for {resetLink.email} — share it with them yourself. Their existing authenticator stays.
+          </p>
+          <div className="field-row">
+            <code className="input" style={{ display: "inline-block" }}>
+              {resetLink.link}
+            </code>
+            <button className="btn btn--secondary btn--sm" onClick={() => void copy(resetLink.link)}>
+              {copied ? <Check /> : <Copy />}
+              {copied ? "Copied" : "Copy link"}
+            </button>
+          </div>
+        </>
+      )}
+      {message && (
+        <div className="alert alert--good" style={{ marginTop: "0.6rem", marginBottom: 0 }}>
+          {message}
+        </div>
+      )}
+      {error && (
+        <div className="alert alert--critical" style={{ marginTop: "0.6rem", marginBottom: 0 }}>
+          {error}
+        </div>
+      )}
     </div>
   );
 }

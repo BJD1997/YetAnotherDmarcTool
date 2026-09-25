@@ -48,7 +48,7 @@ from app.models.enums import AuthMethod, OrganizationStatus, UserRole, UserStatu
 from app.models.organization import Organization
 from app.models.user import User
 from app.services.auth import session_manager
-from app.services.auth.rate_limit import login_limiter, otp_limiter
+from app.services.auth.rate_limit import login_limiter, otp_account_limiter, otp_limiter
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
 _APP_ROLE = "dmarc_app"
@@ -177,6 +177,7 @@ async def api(migrated_db):
     """
     login_limiter._memory._hits.clear()
     otp_limiter._memory._hits.clear()
+    otp_account_limiter._memory._hits.clear()
 
     owner_engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
     app_engine = create_async_engine(_app_url(), poolclass=NullPool)

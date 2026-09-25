@@ -16,7 +16,12 @@ only covers what's new/changed, rather than being folded into this checker.
 import re
 
 from app.services.dns_checks.base import Finding
-from app.services.dns_checks.dmarc_record import DMARC_PREFIX_RE, parse_dmarc_tags, parse_mailto_targets
+from app.services.dns_checks.dmarc_record import (
+    DMARC_PREFIX_RE,
+    effective_policies,
+    parse_dmarc_tags,
+    parse_mailto_targets,
+)
 from app.services.dns_checks.resolver import DnsLookupError, resolve_txt_strict
 
 
@@ -90,9 +95,9 @@ async def _check_inherited_policy(domain: str, parent_domain: str, name: str) ->
             )
         ]
 
-    tags = parse_dmarc_tags(parent_dmarc[0])
-    source_tag = "sp=" if tags.get("sp") else "p="
-    policy = (tags.get("sp") or tags.get("p") or "").lower()
+    inherited = effective_policies(parse_dmarc_tags(parent_dmarc[0]))["sp"]
+    source_tag = "p=" if inherited.inherited else "sp="
+    policy = inherited.policy
 
     if policy == "reject":
         return [Finding(status="pass", summary=f"No record of its own — inherits {source_tag}reject from {parent_domain}")]
@@ -121,7 +126,7 @@ async def _check_inherited_policy(domain: str, parent_domain: str, name: str) ->
     return [
         Finding(
             status="fail",
-            summary=f"No record of its own, and {parent_domain}'s policy has a missing/invalid p= tag: {tags.get('p')!r}",
+            summary=f"No record of its own, and {parent_domain}'s {source_tag} tag is missing or invalid",
         )
     ]
 

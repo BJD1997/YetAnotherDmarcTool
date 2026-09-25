@@ -218,14 +218,25 @@ function HostedAddressPreview({ domain }: { domain: Domain }) {
     (err) => setError(err instanceof ApiError ? err.message : "couldn't generate a hosted address"),
   );
 
+  // Hosted addresses are only issued for verified domains (they come with
+  // a DNS record in the operator's zone) — the next step verifies it.
+  const verified = domain.verification_status === "verified";
+
   useEffect(() => {
-    if (!domain.hosted_report_address && requestedFor.current !== domain.id) {
+    if (verified && !domain.hosted_report_address && requestedFor.current !== domain.id) {
       requestedFor.current = domain.id;
       generate.mutate();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [domain.id, domain.hosted_report_address]);
+  }, [domain.id, domain.hosted_report_address, verified]);
 
+  if (!verified) {
+    return (
+      <p className="section-hint" style={{ marginTop: "0.6rem", marginBottom: 0 }}>
+        Your hosted reporting address for {domain.name} is created once the domain is verified — that's the next step.
+      </p>
+    );
+  }
   if (error) {
     return (
       <p className="section-hint" style={{ color: "var(--critical-text)", marginTop: "0.6rem", marginBottom: 0 }}>

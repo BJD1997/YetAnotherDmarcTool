@@ -44,6 +44,7 @@ from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.services.graph.mailbox_poller import fetch_message_raw_mime, fetch_new_message_ids
 from app.services.ingestion import report_writer
 from app.services.ingestion.parsedmarc_adapter import UnparseableReportError, parse_report_email
+from app.services.ingestion.sender_auth import authenticate_report_sender
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,7 @@ def _empty_stats() -> dict:
         "aggregate_reports": 0,
         "forensic_reports": 0,
         "tls_rpt_policies": 0,
+        "unverified_senders": 0,
         "errors": 0,
     }
 
@@ -129,7 +131,9 @@ async def _do_poll(organization_id: uuid.UUID, tenant_id: str) -> None:
                 # every future run re-fetches this message and fails again.
                 try:
                     async with db.begin_nested():
-                        written = await report_writer.write_report(db, organization_id, parsed, message_id)
+                        written = await report_writer.write_report(
+                            db, organization_id, parsed, message_id, authenticate_report_sender(raw_mime)
+                        )
                 except Exception:
                     logger.exception("failed to store report from message %s (org %s)", message_id, organization_id)
                     stats["errors"] += 1

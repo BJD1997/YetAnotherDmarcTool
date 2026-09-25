@@ -22,6 +22,7 @@ export interface Organization {
   is_operator: boolean;
   spf_all_qualifier_mode: SpfAllQualifierMode;
   hosted_mailbox_opt_in: boolean;
+  is_demo_read_only: boolean;
   entra_consent_urls: EntraConsentUrls | null;
 }
 

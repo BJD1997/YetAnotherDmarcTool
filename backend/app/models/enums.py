@@ -94,6 +94,9 @@ class AuthMethod(str, enum.Enum):
 class SignInResult(str, enum.Enum):
     success = "success"
     failure = "failure"
+    # Not a sign-in: a password/MFA change or an admin reset, logged in the
+    # same activity feed (failure_reason holds the action, actor_email who).
+    account_change = "account_change"
 
 
 class UserStatus(str, enum.Enum):

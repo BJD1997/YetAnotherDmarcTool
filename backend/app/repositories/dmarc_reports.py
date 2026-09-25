@@ -2,7 +2,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import case, delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -822,6 +822,35 @@ async def insert_aggregate_report_if_new(db: AsyncSession, report: DmarcAggregat
     `report` object (including its DmarcAggregateRecord children, added via
     db.add_all separately) — this function only owns the idempotent insert."""
     return await _insert_if_new(db, report)
+
+
+async def delete_unverified_aggregate_duplicate(db: AsyncSession, report: DmarcAggregateReport) -> None:
+    """Clears the way for a sender-verified report: an earlier copy with the
+    same natural key whose sender failed authentication was most likely
+    forged to squat that key (its records go with it via ON DELETE CASCADE)."""
+    await db.execute(
+        delete(DmarcAggregateReport).where(
+            DmarcAggregateReport.organization_id == report.organization_id,
+            DmarcAggregateReport.org_name == report.org_name,
+            DmarcAggregateReport.report_id == report.report_id,
+            DmarcAggregateReport.policy_published_domain == report.policy_published_domain,
+            DmarcAggregateReport.sender_verified.is_(False),
+        )
+    )
+
+
+async def delete_unverified_tls_rpt_duplicate(db: AsyncSession, report: TlsRptReport) -> None:
+    """Same as delete_unverified_aggregate_duplicate, for TLS-RPT's key."""
+    await db.execute(
+        delete(TlsRptReport).where(
+            TlsRptReport.organization_id == report.organization_id,
+            TlsRptReport.policy_domain == report.policy_domain,
+            TlsRptReport.org_name == report.org_name,
+            TlsRptReport.date_range_begin == report.date_range_begin,
+            TlsRptReport.date_range_end == report.date_range_end,
+            TlsRptReport.sender_verified.is_(False),
+        )
+    )
 
 
 async def insert_forensic_report_if_new(db: AsyncSession, report: DmarcForensicReport) -> bool:

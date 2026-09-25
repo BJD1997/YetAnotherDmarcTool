@@ -29,6 +29,17 @@ export interface AdminOrganization {
   last_report_at: string | null;
 }
 
+export interface AdminOrgUser {
+  id: string;
+  email: string;
+  display_name: string | null;
+  role: "org_admin" | "member";
+  auth_method: "entra" | "local";
+  status: "active" | "disabled";
+  mfa_enrolled: boolean;
+  last_login_at: string | null;
+}
+
 export interface AdminOrganizationsPage {
   organizations: AdminOrganization[];
   has_more: boolean;
@@ -160,6 +171,28 @@ export function useCreateAdminUser(orgId: string, onSuccess?: (result: { setup_l
     onSuccess,
     onError,
   });
+}
+
+export function useAdminOrgUsers(orgId: string) {
+  return useQuery({
+    queryKey: queryKeys.admin.organizationUsers(orgId),
+    queryFn: () => api.get<AdminOrgUser[]>(`/admin/organizations/${orgId}/users`),
+  });
+}
+
+export function useAdminResetUser(orgId: string) {
+  const queryClient = useQueryClient();
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.admin.organizationUsers(orgId) });
+  const resetPassword = useMutation({
+    mutationFn: (userId: string) =>
+      api.post<{ setup_link: string }>(`/admin/organizations/${orgId}/users/${userId}/reset-password`),
+    onSuccess: invalidate,
+  });
+  const resetMfa = useMutation({
+    mutationFn: (userId: string) => api.post<void>(`/admin/organizations/${orgId}/users/${userId}/reset-mfa`),
+    onSuccess: invalidate,
+  });
+  return { resetPassword, resetMfa };
 }
 
 export function useDeleteAdminOrganization(orgId: string) {

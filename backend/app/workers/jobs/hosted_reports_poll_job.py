@@ -22,6 +22,7 @@ from app.repositories.mailbox_connections import get_or_create_hosted_reports_po
 from app.services.graph.mailbox_poller import fetch_message_raw_mime, fetch_new_message_ids
 from app.services.ingestion import report_writer
 from app.services.ingestion.parsedmarc_adapter import UnparseableReportError, parse_report_email
+from app.services.ingestion.sender_auth import authenticate_report_sender
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,7 @@ async def _do_poll() -> None:
     started_at = datetime.now(timezone.utc)
     messages_seen = 0
     unmatched = 0
+    unverified = 0
     errors = 0
 
     try:
@@ -112,7 +114,10 @@ async def _do_poll() -> None:
                 await set_org_context(db, matched_org_id)
                 try:
                     async with db.begin_nested():
-                        await report_writer.write_report(db, matched_org_id, parsed, message_id)
+                        written = await report_writer.write_report(
+                            db, matched_org_id, parsed, message_id, authenticate_report_sender(raw_mime)
+                        )
+                    unverified += written.get("unverified_senders", 0)
                 except Exception:
                     logger.exception("failed to store hosted-reports message %s (org %s)", message_id, matched_org_id)
                     errors += 1
@@ -127,7 +132,8 @@ async def _do_poll() -> None:
             state.last_sync_error = None
             await db.commit()
             logger.info(
-                "hosted reports poll: %d message(s) seen, %d unmatched, %d error(s)", messages_seen, unmatched, errors
+                "hosted reports poll: %d message(s) seen, %d unmatched, %d unverified sender(s), %d error(s)",
+                messages_seen, unmatched, unverified, errors,
             )
 
     except Exception as exc:

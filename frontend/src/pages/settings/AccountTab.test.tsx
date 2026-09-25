@@ -13,11 +13,17 @@ const authMethod = vi.hoisted(() => ({ value: "local" as "local" | "entra" }));
 vi.mock("../../auth/AuthContext", () => ({
   useAuth: () => ({ user: { auth_method: authMethod.value } }),
 }));
+const outlet = vi.hoisted(() => ({ org: undefined as { is_demo_read_only: boolean } | undefined }));
+vi.mock("react-router-dom", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("react-router-dom")>()),
+  useOutletContext: () => outlet.org,
+}));
 const postMock = vi.mocked(api.post);
 
 beforeEach(() => {
   postMock.mockReset();
   authMethod.value = "local";
+  outlet.org = undefined;
 });
 
 describe("AccountTab", () => {
@@ -65,5 +71,13 @@ describe("AccountTab", () => {
       secret: "NEWSECRET",
       code: "123456",
     });
+  });
+
+  it("doesn't offer credential changes on the shared demo account", () => {
+    outlet.org = { is_demo_read_only: true };
+    renderWithAppProviders(<AccountTab />);
+
+    expect(screen.getByText(/shared demo account/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Change password" })).not.toBeInTheDocument();
   });
 });

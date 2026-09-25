@@ -18,6 +18,8 @@ from app.models.domain import Domain
 from app.models.enums import AuthResult, Disposition, TlsRptPolicyType
 from app.models.tls_rpt import TlsRptReport
 from app.repositories.dmarc_reports import (
+    delete_unverified_aggregate_duplicate,
+    delete_unverified_tls_rpt_duplicate,
     distinct_header_froms_for_domain_or_descendants,
     insert_aggregate_report_if_new,
     insert_forensic_report_if_new,
@@ -28,6 +30,9 @@ from app.repositories.dmarc_reports import (
     update_record_domain_id_for_header_from,
 )
 from app.services.ingestion.domain_matcher import match_domain
+from app.services.ingestion.sender_auth import SenderAuth
+
+_UNCHECKED = SenderAuth(verified=None, domain=None)
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +44,7 @@ def _parse_agg_datetime(value: str) -> datetime:
 
 
 async def write_aggregate_report(
-    db: AsyncSession, organization_id: uuid.UUID, parsed: dict, source_message_id: str
+    db: AsyncSession, organization_id: uuid.UUID, parsed: dict, source_message_id: str, sender: SenderAuth = _UNCHECKED
 ) -> bool:
     """Returns True if newly written, False if this exact report was already
     ingested (natural key: organization + org_name + report_id + published domain,
@@ -64,8 +69,12 @@ async def write_aggregate_report(
         policy_aspf=policy.get("aspf"),
         source_message_id=source_message_id,
         received_at=datetime.now(timezone.utc),
+        sender_verified=sender.verified,
+        sender_domain=sender.domain,
     )
 
+    if sender.verified:
+        await delete_unverified_aggregate_duplicate(db, report)
     if not await insert_aggregate_report_if_new(db, report):
         logger.debug("duplicate aggregate report %s from %s, skipping", metadata.get("report_id"), metadata.get("org_name"))
         return False
@@ -104,6 +113,7 @@ async def write_aggregate_report(
                 envelope_to=rec["identifiers"].get("envelope_to"),
                 auth_results=rec.get("auth_results") or {},
                 policy_evaluated_reasons=rec["policy_evaluated"].get("policy_override_reasons") or None,
+                sender_verified=sender.verified,
                 created_at=now,
             )
         )
@@ -113,7 +123,7 @@ async def write_aggregate_report(
 
 
 async def write_forensic_report(
-    db: AsyncSession, organization_id: uuid.UUID, parsed: dict, source_message_id: str
+    db: AsyncSession, organization_id: uuid.UUID, parsed: dict, source_message_id: str, sender: SenderAuth = _UNCHECKED
 ) -> bool:
     reported_domain = parsed.get("reported_domain") or ""
     domain_id = await match_domain(db, organization_id, reported_domain) if reported_domain else None
@@ -132,6 +142,8 @@ async def write_forensic_report(
         raw_message=parsed.get("sample"),
         source_message_id=source_message_id,
         created_at=datetime.now(timezone.utc),
+        sender_verified=sender.verified,
+        sender_domain=sender.domain,
     )
     if not await insert_forensic_report_if_new(db, report):
         logger.debug("duplicate forensic report for message %s, skipping", source_message_id)
@@ -144,7 +156,7 @@ def _parse_tls_rpt_datetime(value: str) -> datetime:
 
 
 async def write_smtp_tls_report(
-    db: AsyncSession, organization_id: uuid.UUID, parsed: dict, source_message_id: str
+    db: AsyncSession, organization_id: uuid.UUID, parsed: dict, source_message_id: str, sender: SenderAuth = _UNCHECKED
 ) -> int:
     """A single TLS-RPT report can cover multiple policy domains — one row
     is written per policy entry. Returns the count of newly-written rows
@@ -172,7 +184,11 @@ async def write_smtp_tls_report(
             source_message_id=source_message_id,
             received_at=datetime.now(timezone.utc),
             created_at=datetime.now(timezone.utc),
+            sender_verified=sender.verified,
+            sender_domain=sender.domain,
         )
+        if sender.verified:
+            await delete_unverified_tls_rpt_duplicate(db, report)
         if await insert_tls_rpt_report_if_new(db, report):
             written += 1
         else:
@@ -182,19 +198,35 @@ async def write_smtp_tls_report(
 
 
 async def write_report(
-    db: AsyncSession, organization_id: uuid.UUID, parsed_email: dict, source_message_id: str
+    db: AsyncSession,
+    organization_id: uuid.UUID,
+    parsed_email: dict,
+    source_message_id: str,
+    sender: SenderAuth = _UNCHECKED,
 ) -> dict[str, int]:
     """Writes whichever report type parse_report_email found; returns counts
-    of newly-written rows keyed the same as the mailbox poll job's stats."""
+    of newly-written rows keyed the same as the mailbox poll job's stats,
+    plus unverified_senders when the email failed sender authentication."""
     report_type = parsed_email["report_type"]
     report = parsed_email["report"]
+    counts: dict[str, int] = {}
     if report_type == "aggregate":
-        return {"aggregate_reports": int(await write_aggregate_report(db, organization_id, report, source_message_id))}
-    if report_type == "forensic":
-        return {"forensic_reports": int(await write_forensic_report(db, organization_id, report, source_message_id))}
-    if report_type == "smtp_tls":
-        return {"tls_rpt_policies": await write_smtp_tls_report(db, organization_id, report, source_message_id)}
-    return {}
+        counts["aggregate_reports"] = int(
+            await write_aggregate_report(db, organization_id, report, source_message_id, sender)
+        )
+    elif report_type == "forensic":
+        counts["forensic_reports"] = int(
+            await write_forensic_report(db, organization_id, report, source_message_id, sender)
+        )
+    elif report_type == "smtp_tls":
+        counts["tls_rpt_policies"] = await write_smtp_tls_report(db, organization_id, report, source_message_id, sender)
+    if counts and sender.verified is False:
+        logger.warning(
+            "report in message %s failed sender authentication (From domain %s) — stored but left out of stats",
+            source_message_id, sender.domain,
+        )
+        counts["unverified_senders"] = 1
+    return counts
 
 
 async def resweep_unmatched_reports(db: AsyncSession, organization_id: uuid.UUID) -> dict:

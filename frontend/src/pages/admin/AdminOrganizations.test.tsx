@@ -161,4 +161,24 @@ describe("AdminOrganizations", () => {
     await waitFor(() => expect(api.patch).toHaveBeenCalledWith("/admin/organizations/Alpha", { is_operator: true }));
     confirmSpy.mockRestore();
   });
+
+  it("lets a platform admin reset a local user's password from the org detail", async () => {
+    getMock.mockImplementation(async (url: string) =>
+      url.includes("/users")
+        ? [{ id: "u1", email: "lone-admin@example.com", display_name: null, role: "org_admin", auth_method: "local",
+             status: "active", mfa_enrolled: true, last_login_at: null }]
+        : { organizations: [org("Alpha")], has_more: false, summary: { total: 1, active: 1, suspended: 0, orgs_with_job_errors_7d: 0 } },
+    );
+    vi.mocked(api.post).mockResolvedValueOnce({ setup_link: "https://dmarc.example/set-password?token=t" });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    renderWithAppProviders(<AdminOrganizations />);
+    fireEvent.click(await screen.findByText("Alpha"));
+    fireEvent.click(await screen.findByRole("button", { name: "Reset password" }));
+
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith("/admin/organizations/Alpha/users/u1/reset-password"));
+    expect(await screen.findByText("https://dmarc.example/set-password?token=t")).toBeInTheDocument();
+    confirmSpy.mockRestore();
+  });
 });
+

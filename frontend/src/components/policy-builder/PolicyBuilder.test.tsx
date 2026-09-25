@@ -22,6 +22,7 @@ const ORG: Organization = {
   is_operator: false,
   spf_all_qualifier_mode: "strict",
   hosted_mailbox_opt_in: false,
+  is_demo_read_only: false,
   entra_consent_urls: null,
 };
 

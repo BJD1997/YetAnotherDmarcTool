@@ -140,3 +140,8 @@ async def prune_rate_limit_hits(max_age_seconds: int = 86400) -> None:
 # platform-admin password endpoints; otp_limiter by both verify-otp endpoints.
 login_limiter = RateLimiter("login", max_events=10, window_seconds=300)
 otp_limiter = RateLimiter("otp", max_events=10, window_seconds=300)
+# Per ACCOUNT, not per IP: someone who already has the password can spread
+# code guesses over many IPs, which otp_limiter alone doesn't stop. 10
+# guesses per 15 minutes puts a 6-digit code out of reach for centuries
+# while leaving a real user plenty of room for typos.
+otp_account_limiter = RateLimiter("otp-account", max_events=10, window_seconds=900)

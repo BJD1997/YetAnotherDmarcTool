@@ -12,6 +12,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   organization_not_provisioned:
     "Your organization hasn't been set up in this dashboard yet. Contact your administrator.",
   organization_suspended: "This organization's access has been suspended. Contact your administrator.",
+  user_disabled: "Your account has been disabled. Contact an administrator of your organization.",
 };
 
 function MicrosoftMark() {

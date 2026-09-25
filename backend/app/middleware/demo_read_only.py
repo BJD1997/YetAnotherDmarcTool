@@ -10,12 +10,26 @@ from app.services.auth import session_manager
 from .csrf import UNSAFE_METHODS
 
 
+# /api/auth/ is exempt so visitors can sign in — except these, which change
+# the shared demo account's own credentials and would lock every other
+# visitor out.
+_DEMO_BLOCKED_AUTH_PATHS = ("/api/auth/change-password", "/api/auth/mfa/")
+
+
+def _blocked_for_demo(path: str) -> bool:
+    if not path.startswith("/api/") or path.startswith("/api/admin/"):
+        return False
+    if path.startswith("/api/auth/"):
+        return path.startswith(_DEMO_BLOCKED_AUTH_PATHS)
+    return True
+
+
 async def enforce_demo_read_only(request: Request, call_next):
     """Organizations flagged is_demo_read_only (see the Organization model
     — the one intended use is a published public demo login) can't perform
     any state-changing action. /api/auth/ is exempt so a demo visitor can
-    still log in/out/enroll TOTP etc.; everything else under /api/ with an
-    unsafe method is blocked.
+    still log in/out/enroll TOTP etc. (apart from _DEMO_BLOCKED_AUTH_PATHS);
+    everything else under /api/ with an unsafe method is blocked.
 
     /api/admin/ is also exempt — platform-admin auth is a completely
     separate realm from the org-scoped session this check keys off of
@@ -32,12 +46,7 @@ async def enforce_demo_read_only(request: Request, call_next):
     depend on every current and future mutating route correctly using
     those dependencies, the same reasoning restrict_mta_sts_hostname above
     is checked at this layer rather than per-route."""
-    if (
-        request.method in UNSAFE_METHODS
-        and request.url.path.startswith("/api/")
-        and not request.url.path.startswith("/api/auth/")
-        and not request.url.path.startswith("/api/admin/")
-    ):
+    if request.method in UNSAFE_METHODS and _blocked_for_demo(request.url.path):
         raw_token = request.cookies.get(settings.session_cookie_name)
         if raw_token:
             async with async_session_factory() as db:

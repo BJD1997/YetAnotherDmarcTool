@@ -4,6 +4,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import settings
+from app.db import report_trust  # noqa: F401 — registers the unverified-report filter on every session
 
 engine = create_async_engine(
     settings.database_url,

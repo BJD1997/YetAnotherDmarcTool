@@ -1,0 +1,77 @@
+{
+  "_comment": "Effective DMARC policy per tag for a published record's tags (RFC 7489/9989 inheritance: an absent or empty sp= inherits p=, an absent or empty np= inherits sp=; a present but invalid value is unknown, not inherited). Run by backend/tests/services/dns_checks/test_dmarc_inheritance_cases.py AND frontend/src/components/policy-builder/dmarcInheritance.test.ts — change a case here and both must agree.",
+  "cases": [
+    {
+      "name": "only p= published",
+      "tags": { "p": "reject" },
+      "expected": {
+        "p": { "policy": "reject", "inherited": false },
+        "sp": { "policy": "reject", "inherited": true },
+        "np": { "policy": "reject", "inherited": true }
+      }
+    },
+    {
+      "name": "sp= overrides p=, np= follows sp=",
+      "tags": { "p": "reject", "sp": "none" },
+      "expected": {
+        "p": { "policy": "reject", "inherited": false },
+        "sp": { "policy": "none", "inherited": false },
+        "np": { "policy": "none", "inherited": true }
+      }
+    },
+    {
+      "name": "all three explicit",
+      "tags": { "p": "none", "sp": "quarantine", "np": "reject" },
+      "expected": {
+        "p": { "policy": "none", "inherited": false },
+        "sp": { "policy": "quarantine", "inherited": false },
+        "np": { "policy": "reject", "inherited": false }
+      }
+    },
+    {
+      "name": "np= set without sp=",
+      "tags": { "p": "quarantine", "np": "reject" },
+      "expected": {
+        "p": { "policy": "quarantine", "inherited": false },
+        "sp": { "policy": "quarantine", "inherited": true },
+        "np": { "policy": "reject", "inherited": false }
+      }
+    },
+    {
+      "name": "empty sp= counts as absent",
+      "tags": { "p": "reject", "sp": "" },
+      "expected": {
+        "p": { "policy": "reject", "inherited": false },
+        "sp": { "policy": "reject", "inherited": true },
+        "np": { "policy": "reject", "inherited": true }
+      }
+    },
+    {
+      "name": "invalid sp= is unknown, and np= inherits that unknown",
+      "tags": { "p": "reject", "sp": "rejct" },
+      "expected": {
+        "p": { "policy": "reject", "inherited": false },
+        "sp": { "policy": null, "inherited": false },
+        "np": { "policy": null, "inherited": true }
+      }
+    },
+    {
+      "name": "invalid p= propagates as unknown",
+      "tags": { "p": "bogus" },
+      "expected": {
+        "p": { "policy": null, "inherited": false },
+        "sp": { "policy": null, "inherited": true },
+        "np": { "policy": null, "inherited": true }
+      }
+    },
+    {
+      "name": "no record at all",
+      "tags": {},
+      "expected": {
+        "p": { "policy": null, "inherited": false },
+        "sp": { "policy": null, "inherited": true },
+        "np": { "policy": null, "inherited": true }
+      }
+    }
+  ]
+}

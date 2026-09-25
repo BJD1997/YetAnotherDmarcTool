@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import INET, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -53,6 +53,12 @@ class DmarcAggregateReport(UUIDPkMixin, TimestampMixin, Base):
     policy_aspf: Mapped[str | None] = mapped_column(String(8), nullable=True)
 
     source_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Did the email carrying this report pass DMARC for its own From domain
+    # (per the receiving mailbox's Authentication-Results)? None = not
+    # checked (ingested before 0028, or no verdict in the headers). False
+    # rows are kept but left out of every stat — see app/db/report_trust.py.
+    sender_verified: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    sender_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
@@ -73,6 +79,10 @@ class DmarcAggregateRecord(UUIDPkMixin, Base):
     domain_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("domains.id", ondelete="SET NULL"), nullable=True
     )
+
+    # Copied from the parent report so stats that read records without
+    # joining their report are filtered the same way (see report_trust.py).
+    sender_verified: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
     source_ip: Mapped[str] = mapped_column(INET, nullable=False)
     count: Mapped[int] = mapped_column(Integer, nullable=False)

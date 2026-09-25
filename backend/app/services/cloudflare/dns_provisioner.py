@@ -4,15 +4,21 @@ at an operator-hosted address — the other side of the exact same mechanism
 app/services/dns_checks/dmarc.py's _check_external_destination checks for.
 Called from POST /domains/{id}/hosted-report-address every time (idempotent
 — safe to retry), not just on first creation, so a transient Cloudflare
-failure is self-healing on the next call rather than requiring new UI."""
+failure is self-healing on the next call rather than requiring new UI.
+Removed again by release_authorization_records when the last domain using
+it is deleted."""
 
 import dataclasses
 import logging
 from typing import Literal
 
 import httpx
+from sqlalchemy import select
 
 from app.config import settings
+from app.db import session as db_session
+from app.db.rls import set_platform_admin_context
+from app.models.domain import Domain
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +27,7 @@ CLOUDFLARE_API_BASE = "https://api.cloudflare.com/client/v4"
 
 @dataclasses.dataclass
 class ProvisionResult:
-    status: Literal["created", "already_exists", "unconfigured", "error"]
+    status: Literal["created", "already_exists", "removed", "unconfigured", "error"]
     detail: str | None
 
 
@@ -83,3 +89,60 @@ def _cf_error(body: dict) -> str:
     if errors:
         return "; ".join(e.get("message", str(e)) for e in errors)
     return "Cloudflare API request failed"
+
+
+async def remove_authorization_record(client_domain: str) -> ProvisionResult:
+    """Undoes ensure_authorization_record once no domain uses a hosted
+    address for `client_domain` any more — otherwise the operator's zone
+    keeps authorizing (and the hosted mailbox keeps receiving) reports for
+    domains nobody tracks here."""
+    hosted_domain = settings.hosted_reports_address_domain
+    if not hosted_domain or not settings.cloudflare_api_token or not settings.cloudflare_zone_id:
+        return ProvisionResult(status="unconfigured", detail=None)
+
+    record_name = f"{client_domain}._report._dmarc.{hosted_domain}"
+    headers = {"Authorization": f"Bearer {settings.cloudflare_api_token}"}
+    zone_id = settings.cloudflare_zone_id
+
+    try:
+        async with httpx.AsyncClient(timeout=15, headers=headers) as client:
+            existing = await client.get(
+                f"{CLOUDFLARE_API_BASE}/zones/{zone_id}/dns_records", params={"type": "TXT", "name": record_name}
+            )
+            existing_body = existing.json()
+            if existing.status_code != 200 or not existing_body.get("success"):
+                return ProvisionResult(status="error", detail=_cf_error(existing_body))
+
+            for record in existing_body.get("result", []):
+                if not record.get("content", "").strip().strip('"').startswith("v=DMARC1"):
+                    continue
+                deleted = await client.delete(f"{CLOUDFLARE_API_BASE}/zones/{zone_id}/dns_records/{record['id']}")
+                if deleted.status_code != 200:
+                    return ProvisionResult(status="error", detail=_cf_error(deleted.json()))
+            return ProvisionResult(status="removed", detail=None)
+    except httpx.HTTPError as exc:
+        logger.warning("Cloudflare cleanup failed for %s: %s", record_name, exc)
+        return ProvisionResult(status="error", detail=str(exc))
+
+
+async def release_authorization_records(domain_names: set[str]) -> None:
+    """Call after deleting domains (or a whole org): removes each name's
+    authorization record unless some other domain row — in any org, hence
+    the platform-admin context on a separate session — still has a hosted
+    address for it. Best-effort: failures are logged, never raised, since
+    the deletion itself already committed."""
+    if not domain_names:
+        return
+    async with db_session.async_session_factory() as db:
+        await set_platform_admin_context(db, is_admin=True)
+        still_used = set(
+            (
+                await db.execute(
+                    select(Domain.name).where(Domain.name.in_(domain_names), Domain.hosted_report_address.is_not(None))
+                )
+            ).scalars()
+        )
+    for name in sorted(domain_names - still_used):
+        result = await remove_authorization_record(name)
+        if result.status == "error":
+            logger.warning("couldn't remove the hosted-report authorization record for %s: %s", name, result.detail)

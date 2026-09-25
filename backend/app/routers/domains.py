@@ -18,7 +18,7 @@ from app.repositories.domains import count_subdomains, get_owned_domain, list_do
 from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.repositories.organizations import get_organization
 from app.schemas.domains import DomainCreateRequest, DomainUpdateRequest
-from app.services.cloudflare.dns_provisioner import ensure_authorization_record
+from app.services.cloudflare.dns_provisioner import ensure_authorization_record, release_authorization_records
 from app.services.dns_checks.dmarc_record import check_rua_destination
 from app.services.dns_checks.domain_verification import apply_domain_verification, verification_record_name
 from app.services.ingestion.report_writer import resweep_domain_records, resweep_unmatched_reports
@@ -285,8 +285,11 @@ async def delete_domain(
             status.HTTP_409_CONFLICT, "domain has report history — archive it instead (PATCH is_active=false)"
         )
 
+    had_hosted_address = domain.hosted_report_address is not None
     await db.delete(domain)
     await db.commit()
+    if had_hosted_address:
+        await release_authorization_records({domain.name})
 
 
 def _hosted_mailbox_available(org: Organization) -> bool:
@@ -307,6 +310,10 @@ async def get_or_create_hosted_report_address(
     own to dedicate — see app/workers/jobs/hosted_reports_poll_job.py for
     how mail sent to it gets attributed back to this domain."""
     domain = await get_owned_domain(db, domain_id, user.organization_id)
+    # The address comes with a DNS record in the operator's own zone, so
+    # only for domains this org has proven it controls.
+    if domain.verification_status != DomainVerificationStatus.verified:
+        raise HTTPException(status.HTTP_409_CONFLICT, "verify this domain before setting up a hosted reporting address")
 
     org = await get_organization(db, user.organization_id)
     if not _hosted_mailbox_available(org):

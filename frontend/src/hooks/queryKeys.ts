@@ -24,6 +24,7 @@ export const queryKeys = {
     organizationsAll: ["admin-organizations"] as const,
     organizations: (search: string) => ["admin-organizations", search] as const,
     organizationNames: ["admin-organization-names"] as const,
+    organizationUsers: (orgId: string) => ["admin-organization-users", orgId] as const,
     updates: ["admin-updates"] as const,
     jobRunsSummary: ["admin-job-runs-summary"] as const,
     jobRuns: (filters: string) => ["admin-job-runs", filters] as const,

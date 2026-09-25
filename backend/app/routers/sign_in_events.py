@@ -21,6 +21,7 @@ def _event_out(event: SignInEvent) -> dict:
         "auth_method": event.auth_method.value,
         "email": event.attempted_email,
         "failure_reason": event.failure_reason,
+        "actor_email": event.actor_email,
         "ip_address": event.ip_address,
         "user_agent": event.user_agent,
     }

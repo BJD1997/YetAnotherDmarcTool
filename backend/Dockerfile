@@ -6,6 +6,9 @@ WORKDIR /frontend
 COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm install
 COPY frontend/ ./
+# Test fixtures shared with the backend suite; `tsc -b` in the build below
+# type-checks test files too, and they import from ../shared.
+COPY shared/ /shared/
 # Single canonical copy (repo root) rather than a duplicate checked into
 # frontend/ — Vite's public/ dir is copied verbatim into dist/, so this
 # ends up served at /LICENSE by the catch-all static route in app/main.py.

@@ -1,6 +1,28 @@
 import { useState } from "react";
-import { useSignInEvents } from "../../hooks/useSignInEvents";
+import { useSignInEvents, type SignInEvent } from "../../hooks/useSignInEvents";
 import { LoadMoreButton } from "../shared/LoadMoreButton";
+
+const ACCOUNT_CHANGES: Record<string, string> = {
+  password_changed: "Changed their password",
+  authenticator_replaced: "Replaced their authenticator",
+  password_reset_by_admin: "Password reset",
+  mfa_reset_by_admin: "Two-factor authentication reset",
+  password_reset_by_platform_admin: "Password reset by platform admin",
+  mfa_reset_by_platform_admin: "Two-factor authentication reset by platform admin",
+};
+
+function reasonText(event: SignInEvent): string {
+  if (event.result === "failure") return event.failure_reason ?? "";
+  if (event.result !== "account_change") return "";
+  const action = ACCOUNT_CHANGES[event.failure_reason ?? ""] ?? event.failure_reason ?? "";
+  return event.actor_email ? `${action} (by ${event.actor_email})` : action;
+}
+
+const RESULT_BADGE: Record<SignInEvent["result"], { className: string; label: string }> = {
+  success: { className: "badge--good", label: "success" },
+  failure: { className: "badge--critical", label: "failure" },
+  account_change: { className: "badge--neutral", label: "account change" },
+};
 
 export default function SignInEventsSection() {
   const [resultFilter, setResultFilter] = useState("");
@@ -26,6 +48,7 @@ export default function SignInEventsSection() {
           <option value="">Any result</option>
           <option value="success">Success</option>
           <option value="failure">Failure</option>
+          <option value="account_change">Account change</option>
         </select>
         <select className="input" value={authMethodFilter} onChange={(e) => setAuthMethodFilter(e.target.value)}>
           <option value="">Any method</option>
@@ -60,9 +83,9 @@ export default function SignInEventsSection() {
                       <span className="badge badge--neutral">{event.auth_method === "entra" ? "Microsoft" : "local"}</span>
                     </td>
                     <td>
-                      <span className={`badge ${event.result === "success" ? "badge--good" : "badge--critical"}`}>{event.result}</span>
+                      <span className={`badge ${RESULT_BADGE[event.result].className}`}>{RESULT_BADGE[event.result].label}</span>
                     </td>
-                    <td className="muted">{event.result === "failure" ? event.failure_reason : ""}</td>
+                    <td className="muted">{reasonText(event)}</td>
                     <td className="muted">{event.ip_address ?? "—"}</td>
                     <td className="muted" style={{ maxWidth: "16rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={event.user_agent ?? undefined}>
                       {event.user_agent ?? "—"}
