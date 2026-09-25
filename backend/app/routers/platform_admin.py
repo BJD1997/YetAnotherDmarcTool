@@ -17,7 +17,6 @@ from app.middleware.tenant_context import (
 from app.models.enums import AuthMethod, ConsentStatus, JobStatus, JobType, OrganizationStatus
 from app.models.mailbox_connection import MailboxConnection
 from app.models.organization import Organization
-from app.models.password_setup_token import PasswordSetupToken
 from app.models.platform_admin import PlatformAdmin
 from app.models.platform_admin_mfa_pending_challenge import PlatformAdminMfaPendingChallenge
 from app.models.platform_admin_recovery_code import PlatformAdminRecoveryCode
@@ -45,7 +44,7 @@ from app.schemas.platform_admin import (
     OrganizationCreateRequest,
     OrganizationUpdateRequest,
 )
-from app.services.auth import session_manager, totp
+from app.services.auth import account_reset, session_manager, totp
 from app.services.auth.rate_limit import login_limiter, otp_limiter, rate_limiter
 from app.services.auth.entra_links import entra_consent_urls
 from app.services.auth.password import dummy_verify, hash_password, verify_password
@@ -229,9 +228,14 @@ async def admin_verify_otp(body: AdminVerifyOtpRequest, request: Request, db: As
     return response
 
 
+_ALREADY_ENROLLED = "two-factor authentication is already set up — sign in with your authenticator code"
+
+
 @router.post("/enroll-otp")
 async def admin_enroll_otp(request: Request, db: AsyncSession = Depends(get_db)) -> dict:
     admin, _challenge = await _get_pending_admin(request, db)
+    if admin.otp_enrolled_at is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, _ALREADY_ENROLLED)
     secret = totp.generate_secret()
     uri = totp.provisioning_uri(secret, admin.email)
     return {"secret": secret, "qr_code_data_uri": totp.qr_code_data_uri(uri)}
@@ -242,6 +246,11 @@ async def admin_enroll_otp_confirm(
     body: AdminEnrollOtpConfirmRequest, request: Request, db: AsyncSession = Depends(get_db)
 ) -> JSONResponse:
     admin, challenge = await _get_pending_admin(request, db)
+
+    # Same trust-on-first-use guard as the user flow in auth.py — without it
+    # a password alone could replace this cross-tenant account's second factor.
+    if admin.otp_enrolled_at is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, _ALREADY_ENROLLED)
 
     if not totp.verify_code(body.secret, body.code):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "code didn't match — check your authenticator app and try again")
@@ -366,16 +375,30 @@ async def get_organization_route(
     return await _org_out(db, org)
 
 
+async def _is_callers_org(db: AsyncSession, admin: AdminPrincipal, org: Organization) -> bool:
+    caller = await db.get(User, admin.id)
+    return caller is not None and caller.organization_id == org.id
+
+
 @router.patch("/organizations/{org_id}")
 async def update_organization(
     org_id: uuid.UUID,
     body: OrganizationUpdateRequest,
     db: AsyncSession = Depends(get_db),
-    _admin: AdminPrincipal = Depends(get_current_platform_admin),
+    admin: AdminPrincipal = Depends(get_current_platform_admin),
 ) -> dict:
     org = await get_organization(db, org_id)
     if org is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "organization not found")
+    if body.is_operator is not None:
+        # An operator-org admin revoking their own org's access would lock
+        # themselves out mid-session; the break-glass login can still do it.
+        if not body.is_operator and admin.auth_type == "operator_org" and await _is_callers_org(db, admin, org):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "you can't remove admin console access from your own organization — ask another operator or use the break-glass login",
+            )
+        org.is_operator = body.is_operator
     if body.name is not None:
         org.name = body.name
     if body.entra_tenant_id is not None:
@@ -399,8 +422,8 @@ async def delete_organization(
     if org.is_operator:
         # The operator org is what lets its own org_admins reach /admin/*
         # without the local break-glass login — deleting it out from under
-        # them isn't something to allow by accident. Unset is_operator on
-        # another org first if the operator designation needs to move.
+        # them isn't something to allow by accident. Remove its operator
+        # access first if it really needs deleting.
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "cannot delete the operator organization")
 
     # No ORM-level cascade is configured (Organization has no relationship()s
@@ -465,16 +488,7 @@ async def create_local_user(
         await db.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, "a user with this email already exists")
 
-    raw_token, token_hash = new_opaque_token()
-    now = datetime.now(timezone.utc)
-    db.add(
-        PasswordSetupToken(
-            user_id=user.id,
-            token_hash=token_hash,
-            created_at=now,
-            expires_at=now + timedelta(hours=settings.password_setup_token_timeout_hours),
-        )
-    )
+    setup_link = await account_reset.issue_password_setup_link(db, user)
     # refresh() must run before commit() — users is RLS-protected, and
     # commit ends the SET LOCAL app.is_platform_admin context this
     # transaction needs for the refresh's SELECT to see the row at all
@@ -483,7 +497,7 @@ async def create_local_user(
     await db.refresh(user)
     await db.commit()
 
-    return {**_local_user_out(user), "setup_link": f"{settings.public_base_url}/set-password?token={raw_token}"}
+    return {**_local_user_out(user), "setup_link": setup_link}
 
 
 @router.post("/organizations/{org_id}/mailbox-connection", status_code=status.HTTP_201_CREATED)

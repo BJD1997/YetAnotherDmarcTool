@@ -181,6 +181,22 @@ async def write_smtp_tls_report(
     return written
 
 
+async def write_report(
+    db: AsyncSession, organization_id: uuid.UUID, parsed_email: dict, source_message_id: str
+) -> dict[str, int]:
+    """Writes whichever report type parse_report_email found; returns counts
+    of newly-written rows keyed the same as the mailbox poll job's stats."""
+    report_type = parsed_email["report_type"]
+    report = parsed_email["report"]
+    if report_type == "aggregate":
+        return {"aggregate_reports": int(await write_aggregate_report(db, organization_id, report, source_message_id))}
+    if report_type == "forensic":
+        return {"forensic_reports": int(await write_forensic_report(db, organization_id, report, source_message_id))}
+    if report_type == "smtp_tls":
+        return {"tls_rpt_policies": await write_smtp_tls_report(db, organization_id, report, source_message_id)}
+    return {}
+
+
 async def resweep_unmatched_reports(db: AsyncSession, organization_id: uuid.UUID) -> dict:
     """Re-runs match_domain() against every report currently sitting in the
     "unmatched" bucket (domain_id IS NULL) for this org, re-linking anything

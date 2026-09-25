@@ -2,6 +2,7 @@ import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -106,6 +107,15 @@ def _validate_and_refresh(session):
 
 def revoke_session(session) -> None:
     session.revoked_at = _now()
+
+
+async def revoke_user_sessions(db: AsyncSession, user_id, *, keep_raw_token: str | None = None) -> None:
+    """Signs a user out everywhere — after a password or MFA change/reset —
+    optionally sparing the session making the change (keep_raw_token)."""
+    stmt = update(UserSession).where(UserSession.user_id == user_id, UserSession.revoked_at.is_(None))
+    if keep_raw_token is not None:
+        stmt = stmt.where(UserSession.session_token_hash != _hash_token(keep_raw_token))
+    await db.execute(stmt.values(revoked_at=_now()))
 
 
 def cookie_kwargs() -> dict:

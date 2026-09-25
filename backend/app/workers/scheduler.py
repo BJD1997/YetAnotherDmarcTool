@@ -26,7 +26,7 @@ import uuid
 
 from app.config import settings
 from app.db.rls import set_platform_admin_context
-from app.db.session import async_session_factory
+from app.db.session import assert_rls_enforced, async_session_factory
 from app.repositories.mailbox_connections import list_orgs_with_granted_mailbox_connections
 from app.services.auth.rate_limit import prune_rate_limit_hits
 from app.services.dns_checks.domain_verification import run_domain_verification_sweep
@@ -165,6 +165,7 @@ async def _heartbeat_loop(leader: LeaderLock) -> None:
 
 
 async def main() -> None:
+    await assert_rls_enforced()
     worker_id = f"{socket.gethostname()}:{os.getpid()}"[:64]
     _register_handlers()
     start_health_server(settings.worker_health_port)

@@ -285,7 +285,47 @@ function OrgDetail({ org }: { org: AdminOrganization }) {
 
       {!org.entra_tenant_id && !org.is_operator && <CreateLocalUser orgId={org.id} />}
 
+      <OperatorAccessSection org={org} />
+
       <DeleteOrgSection org={org} />
+    </div>
+  );
+}
+
+function OperatorAccessSection({ org }: { org: AdminOrganization }) {
+  const [error, setError] = useState<string | null>(null);
+  const updateOrg = useUpdateAdminOrganization(org.id);
+
+  function toggle() {
+    const message = org.is_operator
+      ? `Remove admin console access from ${org.name}? Its org admins will no longer be able to manage the platform.`
+      : `Give ${org.name}'s org admins access to this admin console? They'll be able to see and manage every organization.`;
+    if (!window.confirm(message)) return;
+    setError(null);
+    updateOrg.mutate(
+      { is_operator: !org.is_operator },
+      { onError: (err) => setError(err instanceof ApiError ? err.message : "failed to update operator access") },
+    );
+  }
+
+  return (
+    <div style={{ marginTop: "1rem", paddingTop: "0.75rem", borderTop: "1px solid var(--border)" }}>
+      <div className="stat-tile-label" style={{ marginBottom: "0.3rem" }}>
+        Platform admin access
+      </div>
+      <p className="section-hint">
+        {org.is_operator
+          ? "This organization's org admins can use this admin console with their normal sign-in."
+          : "Let this organization's org admins use this admin console with their normal sign-in."}
+      </p>
+      <button className="btn btn--secondary btn--sm" onClick={toggle} disabled={updateOrg.isPending}>
+        {org.is_operator ? "Remove platform admin access" : "Make platform admin organization"}
+      </button>
+      {error && (
+        <div className="alert alert--critical" style={{ marginTop: "0.6rem", marginBottom: 0 }}>
+          {error}
+        </div>
+      )}
     </div>
   );
 }

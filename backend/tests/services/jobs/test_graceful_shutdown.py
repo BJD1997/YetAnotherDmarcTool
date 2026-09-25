@@ -80,10 +80,12 @@ async def _idle_loop(*_args, **_kwargs) -> None:
 
 
 def _patch_main_dependencies(monkeypatch) -> None:
-    """Swap out main()'s three real loop functions and its health-server bind
-    (a real socket we don't want in tests) — everything else in main() (signal
-    handler registration, stop_event, LeaderLock construction/release wiring)
-    stays real."""
+    """Swap out main()'s three real loop functions, its health-server bind
+    (a real socket we don't want in tests) and its startup RLS-role check (a
+    real DB connection, covered by tests/test_rls_startup_check.py) —
+    everything else in main() (signal handler registration, stop_event,
+    LeaderLock construction/release wiring) stays real."""
+    monkeypatch.setattr(scheduler_module, "assert_rls_enforced", AsyncMock())
     monkeypatch.setattr(scheduler_module, "_heartbeat_loop", _idle_loop)
     monkeypatch.setattr(scheduler_module, "_leadership_loop", _idle_loop)
     monkeypatch.setattr(scheduler_module, "_consumer_loop", _idle_loop)
@@ -152,6 +154,7 @@ async def test_main_shuts_down_cleanly_when_a_loop_returns_alongside_stop_task(m
     SIGTERM — that used to raise RuntimeError and log a false-alarm crash
     traceback on every normal shutdown where timing lined up this way.
     """
+    monkeypatch.setattr(scheduler_module, "assert_rls_enforced", AsyncMock())
     monkeypatch.setattr(scheduler_module, "_heartbeat_loop", _idle_loop)
     monkeypatch.setattr(scheduler_module, "_leadership_loop", _idle_loop)
 

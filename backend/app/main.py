@@ -1,3 +1,5 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -6,6 +8,7 @@ from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
+from app.db.session import assert_rls_enforced
 from app.middleware.csrf import enforce_csrf_header
 from app.middleware.demo_read_only import enforce_demo_read_only
 from app.middleware.mta_sts_routing import restrict_mta_sts_hostname
@@ -29,7 +32,13 @@ from app.routers import (
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
-app = FastAPI(title="YetAnotherDmarcTool API")
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    await assert_rls_enforced()
+    yield
+
+
+app = FastAPI(title="YetAnotherDmarcTool API", lifespan=lifespan)
 
 app.middleware("http")(add_security_headers)
 app.middleware("http")(enforce_csrf_header)

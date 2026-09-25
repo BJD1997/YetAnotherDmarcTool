@@ -34,3 +34,27 @@ export function useUpdateUser(onSuccess?: () => void, onError?: (error: Error) =
     onError,
   });
 }
+
+export function useResetUserPassword(onSuccess?: (setupLink: string) => void, onError?: (error: Error) => void) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.post<{ setup_link: string }>(`/users/${id}/reset-password`),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.users.all });
+      onSuccess?.(result.setup_link);
+    },
+    onError,
+  });
+}
+
+export function useResetUserMfa(onSuccess?: () => void, onError?: (error: Error) => void) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.post<void>(`/users/${id}/reset-mfa`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.users.all });
+      onSuccess?.();
+    },
+    onError,
+  });
+}

@@ -131,4 +131,47 @@ describe("PolicyBuilder seeding", () => {
     expect(await screen.findByText("This weakens your current policy")).toBeInTheDocument();
     expect(screen.getByText("p=reject → p=none")).toBeInTheDocument();
   });
+
+  it("does not warn when 'Same as main policy' resolves to the same strength as the current explicit sp=", async () => {
+    // Regression: p=reject and sp=reject already published, both explicit.
+    // Switching sp= to "Same as main policy" (blank) must NOT warn — it
+    // resolves to p=reject, identical to what's already published. The bug
+    // treated blank/inherited as if it meant p=none, the weakest possible
+    // reading, regardless of what it actually inherits from.
+    await renderBuilder(
+      builderData({
+        current_record: { raw: "v=DMARC1; p=reject; sp=reject", tags: { v: "DMARC1", p: "reject", sp: "reject" } },
+      }),
+    );
+
+    fireEvent.change(screen.getByDisplayValue("Reject"), { target: { value: "" } });
+
+    expect(screen.queryByText("This weakens your current policy")).not.toBeInTheDocument();
+  });
+
+  it("labels a current value that was only inherited, not published", async () => {
+    await renderBuilder(
+      builderData({ current_record: { raw: "v=DMARC1; p=reject", tags: { v: "DMARC1", p: "reject" } } }),
+    );
+
+    fireEvent.change(screen.getByDisplayValue("Same as main domain"), { target: { value: "none" } });
+
+    expect(await screen.findByText("sp=reject (inherited) → sp=none")).toBeInTheDocument();
+  });
+
+  it("makes no weakening claim about a published tag it can't parse", async () => {
+    // A malformed sp= isn't a validly-inheriting reject — claiming
+    // "sp=reject → ..." about it would describe a policy that isn't in force.
+    await renderBuilder(
+      builderData({
+        current_record: { raw: "v=DMARC1; p=reject; sp=bogus", tags: { v: "DMARC1", p: "reject", sp: "bogus" } },
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Monitor only" }));
+
+    expect(await screen.findByText("p=reject → p=none")).toBeInTheDocument();
+    expect(screen.queryByText(/^sp=/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^np=/)).not.toBeInTheDocument();
+  });
 });

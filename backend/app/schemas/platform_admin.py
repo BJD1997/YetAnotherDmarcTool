@@ -28,6 +28,7 @@ class OrganizationUpdateRequest(BaseModel):
     name: str | None = None
     entra_tenant_id: uuid.UUID | None = None
     status: OrganizationStatus | None = None
+    is_operator: bool | None = None
 
 
 class MailboxConnectionRequest(BaseModel):

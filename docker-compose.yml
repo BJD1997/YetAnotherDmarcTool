@@ -164,6 +164,10 @@ services:
       # Read-only: even a compromised updater can't rewrite
       # docker-compose.yml to smuggle something into the next cycle.
       - .:/workspace:ro
+      # The one writable exception: after an in-app update the updater
+      # records the new IMAGE_TAG here, so a later manual `docker compose
+      # up -d` doesn't roll api/worker back (see updater/server.py).
+      - ./.env:/workspace/.env
     # No ports: — reachable only from api over the internal network,
     # same non-publishing pattern already used by db/resolver.
     networks:

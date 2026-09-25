@@ -1,20 +1,17 @@
 import uuid
-from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user, require_org_admin
 from app.models.enums import AuthMethod, UserRole
-from app.models.password_setup_token import PasswordSetupToken
 from app.models.user import User
 from app.repositories.organizations import get_organization
 from app.repositories.users import get_user_in_org, list_users_for_org
 from app.schemas.users import LocalUserCreateRequest, UserUpdateRequest
-from app.services.auth.tokens import new_opaque_token
+from app.services.auth import account_reset, session_manager
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -27,6 +24,7 @@ def _user_out(user: User) -> dict:
         "role": user.role.value,
         "status": user.status.value,
         "auth_method": user.auth_method.value,
+        "mfa_enrolled": user.otp_enrolled_at is not None,
         "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
     }
 
@@ -68,16 +66,7 @@ async def create_local_user(
         await db.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, "a user with this email already exists")
 
-    raw_token, token_hash = new_opaque_token()
-    now = datetime.now(timezone.utc)
-    db.add(
-        PasswordSetupToken(
-            user_id=new_user.id,
-            token_hash=token_hash,
-            created_at=now,
-            expires_at=now + timedelta(hours=settings.password_setup_token_timeout_hours),
-        )
-    )
+    setup_link = await account_reset.issue_password_setup_link(db, new_user)
     # refresh() must run before commit() — users is RLS-protected, and
     # commit ends the SET LOCAL app.current_org_id context this transaction
     # needs for the refresh's SELECT to see the row at all (see
@@ -86,7 +75,7 @@ async def create_local_user(
     await db.refresh(new_user)
     await db.commit()
 
-    return {**_user_out(new_user), "setup_link": f"{settings.public_base_url}/set-password?token={raw_token}"}
+    return {**_user_out(new_user), "setup_link": setup_link}
 
 
 @router.patch("/{user_id}")
@@ -111,3 +100,49 @@ async def update_user(
     await db.refresh(target)
     await db.commit()
     return _user_out(target)
+
+
+async def _local_teammate(db: AsyncSession, admin: User, user_id: uuid.UUID) -> User:
+    """Resolves the target of an admin credential reset: another local-auth
+    user in the admin's own org. Your own credentials go through the
+    Account settings instead, which re-check your current password."""
+    target = await get_user_in_org(db, user_id, admin.organization_id)
+    if target is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
+    if target.id == admin.id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "use Settings → Account to change your own sign-in")
+    if target.auth_method != AuthMethod.local:
+        raise HTTPException(status.HTTP_409_CONFLICT, "this user signs in with Microsoft — reset it in Entra instead")
+    return target
+
+
+@router.post("/{user_id}/reset-password")
+async def reset_password(
+    user_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_org_admin),
+) -> dict:
+    """The old password stops working immediately and every session is
+    signed out; the user sets a new one through the returned link. Their
+    MFA stays as it is."""
+    target = await _local_teammate(db, admin, user_id)
+    target.password_hash = None
+    setup_link = await account_reset.issue_password_setup_link(db, target)
+    await account_reset.cancel_pending_logins(db, target)
+    await session_manager.revoke_user_sessions(db, target.id)
+    await db.commit()
+    return {"setup_link": setup_link}
+
+
+@router.post("/{user_id}/reset-mfa", status_code=status.HTTP_204_NO_CONTENT)
+async def reset_mfa(
+    user_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_org_admin),
+) -> None:
+    """Removes the user's authenticator and recovery codes and signs them
+    out; they enroll a new authenticator at their next sign-in."""
+    target = await _local_teammate(db, admin, user_id)
+    await account_reset.clear_mfa(db, target)
+    await session_manager.revoke_user_sessions(db, target.id)
+    await db.commit()

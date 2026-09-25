@@ -23,8 +23,16 @@ from app.repositories.auth import (
     get_user_by_org_and_entra_object_id,
 )
 from app.repositories.organizations import get_organization
-from app.schemas.auth import EnrollOtpConfirmRequest, LocalLoginRequest, SetPasswordRequest, VerifyOtpRequest
-from app.services.auth import entra_oidc, pkce, session_manager, totp
+from app.schemas.auth import (
+    ChangePasswordRequest,
+    EnrollOtpConfirmRequest,
+    LocalLoginRequest,
+    MfaResetConfirmRequest,
+    MfaResetStartRequest,
+    SetPasswordRequest,
+    VerifyOtpRequest,
+)
+from app.services.auth import account_reset, entra_oidc, pkce, session_manager, totp
 from app.services.auth.password import dummy_verify, hash_password, verify_password
 from app.services.auth.rate_limit import login_limiter, otp_limiter, rate_limiter
 from app.services.auth.session_manager import cookie_kwargs
@@ -196,6 +204,7 @@ async def me(user: User = Depends(get_current_user)) -> dict:
         "email": user.email,
         "display_name": user.display_name,
         "role": user.role.value,
+        "auth_method": user.auth_method.value,
         "organization_id": str(user.organization_id),
     }
 
@@ -414,15 +423,22 @@ async def set_password(body: SetPasswordRequest, db: AsyncSession = Depends(get_
     user.password_hash = hash_password(body.new_password)
     setup_token.used_at = now
 
-    response = JSONResponse({"needs_enrollment": True})
+    # An admin password reset leaves MFA in place, so that user signs in
+    # with their existing authenticator rather than enrolling a new one.
+    response = JSONResponse({"needs_enrollment": user.otp_enrolled_at is None})
     await _set_mfa_pending(db, response, user.id)
     await db.commit()
     return response
 
 
+_ALREADY_ENROLLED = "two-factor authentication is already set up — sign in with your authenticator code"
+
+
 @router.post("/enroll-otp")
 async def enroll_otp(request: Request, db: AsyncSession = Depends(get_db)) -> dict:
     user, _challenge = await _get_pending_user(request, db)
+    if user.otp_enrolled_at is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, _ALREADY_ENROLLED)
     secret = totp.generate_secret()
     uri = totp.provisioning_uri(secret, user.email)
     return {"secret": secret, "qr_code_data_uri": totp.qr_code_data_uri(uri)}
@@ -442,6 +458,18 @@ async def enroll_otp_confirm(
         )
         await db.commit()
         raise
+
+    # A pending challenge only proves the password. Enrollment is trust-on-
+    # first-use, so once a second factor exists, letting this endpoint
+    # replace it would let a password alone mint a session.
+    if user.otp_enrolled_at is not None:
+        await record_sign_in_event(
+            db, result=SignInResult.failure, auth_method=AuthMethod.local,
+            organization_id=user.organization_id, user_id=user.id, attempted_email=user.email,
+            failure_reason="totp_already_enrolled", ip_address=ip_address, user_agent=user_agent,
+        )
+        await db.commit()
+        raise HTTPException(status.HTTP_409_CONFLICT, _ALREADY_ENROLLED)
 
     if not totp.verify_code(body.secret, body.code):
         await record_sign_in_event(
@@ -485,3 +513,82 @@ async def enroll_otp_confirm(
         **cookie_kwargs(),
     )
     return response
+
+
+# ---------- Self-service account management (local-auth users) ----------
+# Entra users' password and MFA live in Microsoft Entra, not here. Every
+# change re-checks the current password so a hijacked session alone can't
+# lock the real owner out, and signs out every other session.
+
+_SSO_MANAGED = "your password and two-factor authentication are managed by your organization's Microsoft sign-in"
+
+
+async def _require_current_password(
+    db: AsyncSession, request: Request, user: User, password: str
+) -> None:
+    if user.auth_method != AuthMethod.local:
+        raise HTTPException(status.HTTP_409_CONFLICT, _SSO_MANAGED)
+    if user.password_hash is None or not verify_password(password, user.password_hash):
+        ip_address, user_agent = client_network_info(request)
+        await record_sign_in_event(
+            db, result=SignInResult.failure, auth_method=AuthMethod.local,
+            organization_id=user.organization_id, user_id=user.id, attempted_email=user.email,
+            failure_reason="invalid_current_password", ip_address=ip_address, user_agent=user_agent,
+        )
+        await db.commit()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "current password is incorrect")
+
+
+@router.post(
+    "/change-password",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(rate_limiter(login_limiter))],
+)
+async def change_password(
+    body: ChangePasswordRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> None:
+    await _require_current_password(db, request, user, body.current_password)
+    user.password_hash = hash_password(body.new_password)
+    await session_manager.revoke_user_sessions(
+        db, user.id, keep_raw_token=request.cookies.get(settings.session_cookie_name)
+    )
+    await db.commit()
+
+
+@router.post("/mfa/reset/start", dependencies=[Depends(rate_limiter(login_limiter))])
+async def mfa_reset_start(
+    body: MfaResetStartRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Hands out a fresh secret to scan; nothing changes until /confirm
+    proves the new authenticator works."""
+    await _require_current_password(db, request, user, body.current_password)
+    secret = totp.generate_secret()
+    uri = totp.provisioning_uri(secret, user.email)
+    return {"secret": secret, "qr_code_data_uri": totp.qr_code_data_uri(uri)}
+
+
+@router.post("/mfa/reset/confirm", dependencies=[Depends(rate_limiter(otp_limiter))])
+async def mfa_reset_confirm(
+    body: MfaResetConfirmRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    await _require_current_password(db, request, user, body.current_password)
+    if not totp.verify_code(body.secret, body.code):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "code didn't match — check your authenticator app and try again")
+
+    user.otp_secret = body.secret
+    user.otp_enrolled_at = datetime.now(timezone.utc)
+    recovery_codes = await account_reset.replace_recovery_codes(db, user)
+    await session_manager.revoke_user_sessions(
+        db, user.id, keep_raw_token=request.cookies.get(settings.session_cookie_name)
+    )
+    await db.commit()
+    return {"recovery_codes": recovery_codes}

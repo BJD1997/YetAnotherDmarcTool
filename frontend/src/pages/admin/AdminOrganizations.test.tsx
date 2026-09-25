@@ -5,7 +5,7 @@ import { api } from "../../api/client";
 import { renderWithAppProviders } from "../../test/render";
 import AdminOrganizations from "./AdminOrganizations";
 
-vi.mock("../../api/client", () => ({ api: { get: vi.fn(), post: vi.fn() } }));
+vi.mock("../../api/client", () => ({ api: { get: vi.fn(), post: vi.fn(), patch: vi.fn() } }));
 vi.mock("../../auth/AdminAuthContext", () => ({
   useAdminAuth: () => ({ admin: { auth_type: "entra" } }),
 }));
@@ -142,5 +142,23 @@ describe("AdminOrganizations", () => {
 
     await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2)); // exactly one debounced query, not four
     expect(getMock).toHaveBeenLastCalledWith(expect.stringContaining("search=acme"));
+  });
+
+  it("grants platform admin access to an organization after confirmation", async () => {
+    getMock.mockResolvedValue({
+      organizations: [org("Alpha")],
+      has_more: false,
+      summary: { total: 1, active: 1, suspended: 0, orgs_with_job_errors_7d: 0 },
+    });
+    vi.mocked(api.patch).mockResolvedValueOnce(org("Alpha", { is_operator: true }));
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    renderWithAppProviders(<AdminOrganizations />);
+    fireEvent.click(await screen.findByText("Alpha"));
+    fireEvent.click(await screen.findByRole("button", { name: "Make platform admin organization" }));
+
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("see and manage every organization"));
+    await waitFor(() => expect(api.patch).toHaveBeenCalledWith("/admin/organizations/Alpha", { is_operator: true }));
+    confirmSpy.mockRestore();
   });
 });

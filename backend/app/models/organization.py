@@ -28,10 +28,10 @@ class Organization(UUIDPkMixin, TimestampMixin, Base):
         default=OrganizationStatus.active,
     )
 
-    # At most one organization may have this set (enforced by a partial
-    # unique index — see the migration) — its org_admins can access the
-    # platform-admin API surface (/admin/*) through their normal Entra SSO
-    # session, no separate local-auth login needed. The local platform_admin
+    # Operator orgs' org_admins can access the platform-admin API surface
+    # (/admin/*) through their normal session, no separate local-auth login
+    # needed. Any number of orgs may be flagged (0026 dropped the original
+    # one-org limit); set from the admin console. The local platform_admin
     # login (see PlatformAdmin) stays available as a break-glass fallback.
     is_operator: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 

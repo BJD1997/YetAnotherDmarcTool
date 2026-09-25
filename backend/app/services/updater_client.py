@@ -21,10 +21,21 @@ async def trigger_update(version: str) -> None:
     if not settings.updater_url or not settings.updater_shared_secret:
         raise UpdaterUnavailableError("updater isn't configured (UPDATER_URL/UPDATER_SHARED_SECRET unset)")
 
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.post(
-            f"{settings.updater_url}/trigger",
-            headers={"X-Updater-Token": settings.updater_shared_secret},
-            json={"version": version},
-        )
-        resp.raise_for_status()
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"{settings.updater_url}/trigger",
+                headers={"X-Updater-Token": settings.updater_shared_secret},
+                json={"version": version},
+            )
+    except httpx.HTTPError as exc:
+        raise UpdaterUnavailableError(f"couldn't reach the updater: {exc}") from exc
+    if resp.is_error:
+        # The updater independently refuses non-release tags and downgrades
+        # (see updater/server.py's check_requested_version) — pass its
+        # reason through rather than a bare status code.
+        try:
+            reason = resp.json().get("error")
+        except ValueError:
+            reason = None
+        raise UpdaterUnavailableError(f"updater refused the update ({resp.status_code}): {reason or resp.text[:200]}")

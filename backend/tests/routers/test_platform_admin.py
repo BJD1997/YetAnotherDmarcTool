@@ -54,6 +54,25 @@ async def test_admin_login_and_verify_otp_full_flow(api):
     assert me_response.json()["auth_type"] == "local"
 
 
+async def test_enrolled_admin_cannot_reenroll_with_attacker_chosen_secret(api):
+    """Regression: the platform admin spans every tenant, so a password-only
+    swap of its TOTP secret via the enrollment endpoints would be a full
+    cross-tenant compromise."""
+    client, owner_factory = api
+    admin, real_secret = await seed_platform_admin_with_totp(owner_factory)
+    await client.post("/api/admin/login", json={"email": admin.email, "password": "correct horse battery staple"})
+    attacker_secret = pyotp.random_base32()
+
+    assert (await client.post("/api/admin/enroll-otp")).status_code == 409
+    hijack = await client.post(
+        "/api/admin/enroll-otp/confirm", json={"secret": attacker_secret, "code": pyotp.TOTP(attacker_secret).now()}
+    )
+    assert hijack.status_code == 409
+    assert (await client.get("/api/admin/me")).status_code == 401
+
+    assert (await client.post("/api/admin/verify-otp", json={"code": pyotp.TOTP(real_secret).now()})).status_code == 204
+
+
 async def test_admin_verify_otp_rejects_wrong_code(api):
     client, owner_factory = api
     admin, _secret = await seed_platform_admin_with_totp(owner_factory)

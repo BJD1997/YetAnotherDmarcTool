@@ -141,7 +141,7 @@ export function useCreateAdminOrganization(onSuccess?: () => void, onError?: (er
 export function useUpdateAdminOrganization(orgId: string) {
   const invalidate = useInvalidateAdminOrganizations();
   return useMutation({
-    mutationFn: (body: Partial<Pick<AdminOrganization, "entra_tenant_id" | "status">>) => api.patch<AdminOrganization>(`/admin/organizations/${orgId}`, body),
+    mutationFn: (body: Partial<Pick<AdminOrganization, "entra_tenant_id" | "status" | "is_operator">>) => api.patch<AdminOrganization>(`/admin/organizations/${orgId}`, body),
     onSuccess: invalidate,
   });
 }

@@ -102,7 +102,7 @@ async def get_current_platform_admin(request: Request, db: AsyncSession = Depend
     1. A local platform_admin session — the original bootstrap/break-glass
        mechanism (an org has to exist before its users can SSO in, so
        *something* needs a login that doesn't depend on any org existing).
-    2. A normal user session where the user is an org_admin of the
+    2. A normal user session where the user is an org_admin of an
        organization flagged is_operator=True — lets the operator manage
        the platform through their own Microsoft-backed SSO login instead
        of a separate local password, once that operator org exists (which,

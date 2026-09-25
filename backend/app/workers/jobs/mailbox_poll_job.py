@@ -121,18 +121,21 @@ async def _do_poll(organization_id: uuid.UUID, tenant_id: str) -> None:
                     stats["errors"] += 1
                     continue
 
-                report_type = parsed["report_type"]
-                report = parsed["report"]
-                if report_type == "aggregate":
-                    if await report_writer.write_aggregate_report(db, organization_id, report, message_id):
-                        stats["aggregate_reports"] += 1
-                elif report_type == "forensic":
-                    if await report_writer.write_forensic_report(db, organization_id, report, message_id):
-                        stats["forensic_reports"] += 1
-                elif report_type == "smtp_tls":
-                    stats["tls_rpt_policies"] += await report_writer.write_smtp_tls_report(
-                        db, organization_id, report, message_id
-                    )
+                # The report mailbox is public (it's the rua= address in DNS),
+                # so the parsed content is attacker-controlled. A bad value
+                # can fail here as a Postgres error that aborts the whole
+                # transaction — the savepoint confines that to this message.
+                # Without it the run fails, delta_link never advances, and
+                # every future run re-fetches this message and fails again.
+                try:
+                    async with db.begin_nested():
+                        written = await report_writer.write_report(db, organization_id, parsed, message_id)
+                except Exception:
+                    logger.exception("failed to store report from message %s (org %s)", message_id, organization_id)
+                    stats["errors"] += 1
+                    continue
+                for key, value in written.items():
+                    stats[key] += value
 
                 if i % COMMIT_BATCH_SIZE == 0:
                     await db.commit()

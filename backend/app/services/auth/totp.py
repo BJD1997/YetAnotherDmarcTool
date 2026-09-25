@@ -34,7 +34,11 @@ def qr_code_data_uri(uri: str) -> str:
     return f"data:image/svg+xml;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
 
-def verify_code(secret: str, code: str) -> bool:
+def verify_code(secret: str | None, code: str) -> bool:
+    # None = a stored secret that couldn't be decrypted (see totp_secret.py);
+    # fail the code so callers fall through to recovery codes.
+    if secret is None:
+        return False
     # valid_window=1 tolerates the presented code being one 30s step behind
     # or ahead, for ordinary clock drift between the server and the user's
     # authenticator app.

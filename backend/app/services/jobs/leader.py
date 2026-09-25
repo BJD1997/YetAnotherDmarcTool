@@ -27,6 +27,19 @@ logger = logging.getLogger("worker.leader")
 # (or process death) releases the advisory lock deterministically.
 _engine = create_async_engine(settings.leader_database_url or settings.database_url, poolclass=NullPool)
 
+# Whether the backend answering this query is the one holding the lock. A
+# bigint advisory key is stored split across classid (high 32 bits) and objid
+# (low 32 bits), with objsubid = 1.
+_HOLDS_LOCK_SQL = text(
+    "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND granted AND objsubid = 1 "
+    "AND pid = pg_backend_pid() AND classid::bigint = :hi AND objid::bigint = :lo)"
+)
+
+_POOLER_HINT = (
+    "leader connection doesn't hold its advisory lock — the connection is likely going through a "
+    "transaction-mode pooler (e.g. PgBouncer). Point LEADER_DATABASE_URL at Postgres directly."
+)
+
 
 class LeaderLock:
     """Best-effort leader election via pg_try_advisory_lock. Call try_acquire()
@@ -40,22 +53,27 @@ class LeaderLock:
     def is_leader(self) -> bool:
         return self._conn is not None
 
+    async def _holds_lock(self, conn: AsyncConnection) -> bool:
+        key = self._lock_key & 0xFFFFFFFFFFFFFFFF
+        held = (await conn.execute(_HOLDS_LOCK_SQL, {"hi": key >> 32, "lo": key & 0xFFFFFFFF})).scalar()
+        # Same reasoning as the acquire/release commits below: this query
+        # implicitly opens a transaction, so commit it right back — otherwise
+        # the connection sits idle-in-transaction for the leader's whole tenure.
+        await conn.commit()
+        return bool(held)
+
     async def try_acquire(self) -> bool:
-        # Already leader: confirm the held connection is still alive; if it
-        # dropped, relinquish so someone (maybe us, next tick) can re-elect.
+        # Already leader: confirm the held connection is still alive AND still
+        # the one holding the lock (a bare SELECT 1 would also "succeed"
+        # through a transaction pooler that routed it to some other backend).
         if self._conn is not None:
             try:
-                await self._conn.execute(text("SELECT 1"))
-                # Same reasoning as the acquire/release commits below: this
-                # SELECT implicitly opens a transaction, so commit it right
-                # back — otherwise every keepalive tick re-opens an
-                # uncommitted transaction and the connection sits
-                # idle-in-transaction for the leader's whole tenure anyway.
-                await self._conn.commit()
-                return True
+                if await self._holds_lock(self._conn):
+                    return True
+                logger.error(_POOLER_HINT)
             except Exception:
                 logger.warning("leader connection lost — relinquishing leadership")
-                await self._drop_connection()
+            await self._drop_connection()
 
         conn = await _engine.connect()
         try:
@@ -66,12 +84,16 @@ class LeaderLock:
             await conn.close()
             raise
         if acquired:
-            self._conn = conn
             # Advisory lock acquisition takes effect immediately server-side,
             # independent of transaction commit — but commit anyway so this
             # connection isn't sitting idle-in-transaction for the leader's
             # whole lifetime.
             await conn.commit()
+            if not await self._holds_lock(conn):
+                logger.error(_POOLER_HINT)
+                await conn.close()
+                return False
+            self._conn = conn
             logger.info("acquired scheduler leadership (advisory lock %s)", self._lock_key)
             return True
         await conn.close()

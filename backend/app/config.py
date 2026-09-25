@@ -66,7 +66,9 @@ class Settings(BaseSettings):
     cloudflare_api_token: str | None = None
     cloudflare_zone_id: str | None = None
 
-    # Fernet key for the optional per-org custom-app-credential escape hatch (Phase 1+)
+    # Encrypts TOTP secrets at rest (app/services/auth/totp_secret.py). To
+    # rotate, list the new key first and keep the old one after it,
+    # comma-separated — new writes use the first, reads accept any.
     fernet_key: str | None = None
 
     # Entra App A — Mail Access (application permission, Graph client-credentials) (Phase 2)

@@ -101,14 +101,21 @@ async def _do_poll() -> None:
                 except UnparseableReportError:
                     errors += 1
                     continue
+                except Exception:
+                    logger.exception("failed to parse hosted-reports message %s", message_id)
+                    errors += 1
+                    continue
 
+                # This mailbox is shared by every org with a hosted address,
+                # so one bad report failing the run would stall ingestion for
+                # all of them — see mailbox_poll_job's matching savepoint.
                 await set_org_context(db, matched_org_id)
-                if parsed["report_type"] == "aggregate":
-                    await report_writer.write_aggregate_report(db, matched_org_id, parsed["report"], message_id)
-                elif parsed["report_type"] == "forensic":
-                    await report_writer.write_forensic_report(db, matched_org_id, parsed["report"], message_id)
-                elif parsed["report_type"] == "smtp_tls":
-                    await report_writer.write_smtp_tls_report(db, matched_org_id, parsed["report"], message_id)
+                try:
+                    async with db.begin_nested():
+                        await report_writer.write_report(db, matched_org_id, parsed, message_id)
+                except Exception:
+                    logger.exception("failed to store hosted-reports message %s (org %s)", message_id, matched_org_id)
+                    errors += 1
                 # Back to the platform-admin bypass for the next message's
                 # address_map-independent work (already in memory) and the
                 # final state update below, which isn't org-scoped data.

@@ -5,7 +5,7 @@ import { useAuth } from "../auth/AuthContext";
 import EnrollOtpStep from "../components/auth/EnrollOtpStep";
 import RecoveryCodesStep from "../components/auth/RecoveryCodesStep";
 
-type Phase = "password" | "enroll" | "recovery";
+type Phase = "password" | "otp" | "enroll" | "recovery";
 
 export default function SetPassword() {
   const [params] = useSearchParams();
@@ -19,6 +19,7 @@ export default function SetPassword() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
+  const [code, setCode] = useState("");
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -29,10 +30,26 @@ export default function SetPassword() {
     setSubmitting(true);
     setError(null);
     try {
-      await api.post("/auth/set-password", { token, new_password: password });
-      setPhase("enroll");
+      // After an admin password reset the user keeps their authenticator,
+      // so they sign in with a code instead of enrolling a new one.
+      const result = await api.post<{ needs_enrollment: boolean }>("/auth/set-password", { token, new_password: password });
+      setPhase(result.needs_enrollment ? "enroll" : "otp");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "couldn't set password");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleVerify(e: FormEvent) {
+    e.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      await api.post("/auth/verify-otp", { code });
+      await handleRecoveryContinue();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "invalid code");
     } finally {
       setSubmitting(false);
     }
@@ -101,6 +118,33 @@ export default function SetPassword() {
               )}
               <button type="submit" className="btn btn--primary" disabled={submitting} style={{ padding: "0.65rem" }}>
                 Continue
+              </button>
+            </form>
+          </>
+        )}
+
+        {phase === "otp" && (
+          <>
+            <p className="page-subtitle" style={{ marginBottom: "1rem" }}>
+              Password set. Enter the code from your authenticator app (or a recovery code) to finish signing in.
+            </p>
+            <form onSubmit={handleVerify} className="auth-form">
+              <input
+                className="input"
+                inputMode="numeric"
+                placeholder="6-digit code"
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                autoFocus
+                required
+              />
+              {error && (
+                <div className="alert alert--critical" style={{ margin: 0 }}>
+                  {error}
+                </div>
+              )}
+              <button type="submit" className="btn btn--primary" disabled={submitting} style={{ padding: "0.65rem" }}>
+                Sign in
               </button>
             </form>
           </>

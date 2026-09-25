@@ -39,3 +39,39 @@ def test_encrypted_secret_reads_legacy_plaintext(fernet_key):
     col = EncryptedSecret()
     legacy_plaintext = "JBSWY3DPEHPK3PXP"
     assert col.process_result_value(legacy_plaintext, None) == legacy_plaintext
+
+
+def test_rotated_key_still_decrypts_secrets_written_with_the_old_key(fernet_key, monkeypatch):
+    """Rotation: FERNET_KEY="<new>,<old>" encrypts with the new key but still
+    decrypts anything written under the old one."""
+    from app.services.auth.totp_secret import EncryptedSecret
+
+    col = EncryptedSecret()
+    stored_under_old_key = col.process_bind_param("JBSWY3DPEHPK3PXP", None)
+
+    new_key = Fernet.generate_key().decode()
+    monkeypatch.setattr(settings, "fernet_key", f"{new_key},{fernet_key}")
+    crypto_secrets._fernet.cache_clear()
+
+    assert col.process_result_value(stored_under_old_key, None) == "JBSWY3DPEHPK3PXP"
+    rewritten = col.process_bind_param("JBSWY3DPEHPK3PXP", None)
+    assert Fernet(new_key.encode()).decrypt(rewritten.encode()) == b"JBSWY3DPEHPK3PXP"
+
+
+def test_undecryptable_ciphertext_is_not_passed_off_as_a_secret(fernet_key, monkeypatch, caplog):
+    """If the key that wrote a secret is gone, the ciphertext must not be
+    returned as though it were a legacy plaintext secret — pyotp can't use it
+    and would error out of verify-otp before recovery codes are even tried."""
+    from app.services.auth import totp
+    from app.services.auth.totp_secret import EncryptedSecret
+
+    col = EncryptedSecret()
+    stored = col.process_bind_param("JBSWY3DPEHPK3PXP", None)
+    monkeypatch.setattr(settings, "fernet_key", Fernet.generate_key().decode())
+    crypto_secrets._fernet.cache_clear()
+
+    secret = col.process_result_value(stored, None)
+
+    assert secret is None
+    assert "FERNET_KEY" in caplog.text
+    assert totp.verify_code(secret, "123456") is False

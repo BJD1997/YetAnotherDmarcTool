@@ -19,6 +19,7 @@ import InboundTab from "./pages/domain-detail/InboundTab";
 import Team from "./pages/Team";
 import SettingsLayout from "./pages/SettingsLayout";
 import GeneralTab from "./pages/settings/GeneralTab";
+import AccountTab from "./pages/settings/AccountTab";
 import DomainsTab from "./pages/settings/DomainsTab";
 import SignInActivityTab from "./pages/settings/SignInActivityTab";
 import Shell from "./components/Shell";
@@ -131,6 +132,7 @@ export default function App() {
         }
       >
         <Route index element={<GeneralTab />} />
+        <Route path="account" element={<AccountTab />} />
         <Route path="domains" element={<DomainsTab />} />
         <Route path="sign-in-activity" element={<SignInActivityTab />} />
       </Route>

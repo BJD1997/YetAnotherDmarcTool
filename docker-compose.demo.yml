@@ -155,6 +155,10 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - .:/workspace:ro
+      # The one writable exception: after an in-app update the updater
+      # records the new IMAGE_TAG here, so a later manual `docker compose
+      # up -d` doesn't roll api/worker back (see updater/server.py).
+      - ./.env.demo:/workspace/.env.demo
     networks:
       - internal
 

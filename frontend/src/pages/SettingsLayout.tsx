@@ -12,6 +12,7 @@ export default function SettingsLayout() {
   // from the tab nav entirely for a plain member, not just the content.
   const tabs: { to: string; label: string; end?: boolean }[] = [
     { to: "", label: "General", end: true },
+    { to: "account", label: "Account" },
     ...(canManage
       ? [
           { to: "domains", label: "Domains" },
