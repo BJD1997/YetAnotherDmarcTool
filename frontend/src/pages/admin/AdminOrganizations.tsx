@@ -283,7 +283,9 @@ function OrgDetail({ org }: { org: AdminOrganization }) {
           so there's nothing left for the platform admin to relay
           out-of-band. */}
 
-      {!org.entra_tenant_id && !org.is_operator && <CreateLocalUser orgId={org.id} />}
+      {/* Any org without a Microsoft tenant signs in locally — platform admin
+          orgs included, whose local admins reach this console through it. */}
+      {!org.entra_tenant_id && <CreateLocalUser orgId={org.id} />}
 
       <OrgUsersSection orgId={org.id} />
 
@@ -588,8 +590,11 @@ function ChangePassword() {
   if (!open) {
     return (
       <p>
+        {/* Only shown for the break-glass login (auth_type "local"), which
+            can share an email address with a Microsoft account — say which
+            password this is. */}
         <button className="btn btn--ghost btn--sm" onClick={() => setOpen(true)}>
-          Change password
+          Change break-glass admin password
         </button>
       </p>
     );

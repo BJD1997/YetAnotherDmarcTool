@@ -93,6 +93,59 @@ class AdminPrincipal:
     id: uuid.UUID
     email: str
     auth_type: str  # "local" | "operator_org"
+    organization_name: str | None = None  # operator_org only
+    # True when the browser also holds the other kind of admin session, so
+    # the console can offer to switch.
+    can_switch: bool = False
+
+
+CHOOSE_SIGN_IN = "choose which sign-in to use for the admin console"
+
+
+async def _local_admin_candidate(request: Request, db: AsyncSession) -> AdminPrincipal | None:
+    admin_token = request.cookies.get(settings.platform_admin_session_cookie_name)
+    if not admin_token:
+        return None
+    session = await session_manager.get_active_platform_admin_session(db, admin_token)
+    if session is None:
+        return None
+    admin = await db.get(PlatformAdmin, session.platform_admin_id)
+    if admin is None or not admin.is_active:
+        return None
+    return AdminPrincipal(id=admin.id, email=admin.email, auth_type="local")
+
+
+async def _operator_org_candidate(request: Request, db: AsyncSession) -> AdminPrincipal | None:
+    user_token = request.cookies.get(settings.session_cookie_name)
+    if not user_token:
+        return None
+    user_session = await session_manager.get_active_user_session(db, user_token)
+    if user_session is None:
+        return None
+    await set_org_context(db, user_session.organization_id)
+    user = await db.get(User, user_session.user_id)
+    org = await db.get(Organization, user_session.organization_id)
+    if (
+        user is not None
+        and user.status == UserStatus.active
+        and user.role == UserRole.org_admin
+        and org is not None
+        and org.is_operator
+        and org.status == OrganizationStatus.active
+    ):
+        return AdminPrincipal(id=user.id, email=user.email, auth_type="operator_org", organization_name=org.name)
+    return None
+
+
+async def admin_sign_in_candidates(request: Request, db: AsyncSession) -> dict[str, AdminPrincipal]:
+    """Every admin identity this browser's cookies can act as, keyed by
+    auth_type — zero, one, or both."""
+    candidates = {}
+    for resolve in (_local_admin_candidate, _operator_org_candidate):
+        principal = await resolve(request, db)
+        if principal is not None:
+            candidates[principal.auth_type] = principal
+    return candidates
 
 
 async def get_current_platform_admin(request: Request, db: AsyncSession = Depends(get_db)) -> AdminPrincipal:
@@ -104,38 +157,30 @@ async def get_current_platform_admin(request: Request, db: AsyncSession = Depend
        *something* needs a login that doesn't depend on any org existing).
     2. A normal user session where the user is an org_admin of an
        organization flagged is_operator=True — lets the operator manage
-       the platform through their own Microsoft-backed SSO login instead
-       of a separate local password, once that operator org exists (which,
-       after initial bootstrap via path 1, it always does).
+       the platform through their own sign-in instead of a separate local
+       password.
 
-    Both paths set the is_platform_admin RLS bypass flag on success, so the
-    existing admin routes work unmodified regardless of which path was used.
+    A browser can hold both at once (and the two can even share an email
+    address). Then the identity isn't guessed: the one named by the
+    platform_admin_choice cookie is used (set via POST /admin/session-choice,
+    or by a break-glass login itself), and without a valid choice this
+    answers 409 CHOOSE_SIGN_IN so the console can ask.
+
+    Either path sets the is_platform_admin RLS bypass flag on success, so the
+    existing admin routes work unmodified regardless of which was used.
     """
-    admin_token = request.cookies.get(settings.platform_admin_session_cookie_name)
-    if admin_token:
-        session = await session_manager.get_active_platform_admin_session(db, admin_token)
-        if session is not None:
-            admin = await db.get(PlatformAdmin, session.platform_admin_id)
-            if admin is not None and admin.is_active:
-                await set_platform_admin_context(db, is_admin=True)
-                return AdminPrincipal(id=admin.id, email=admin.email, auth_type="local")
+    candidates = await admin_sign_in_candidates(request, db)
+    if not candidates:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not authenticated as platform admin")
 
-    user_token = request.cookies.get(settings.session_cookie_name)
-    if user_token:
-        user_session = await session_manager.get_active_user_session(db, user_token)
-        if user_session is not None:
-            await set_org_context(db, user_session.organization_id)
-            user = await db.get(User, user_session.user_id)
-            org = await db.get(Organization, user_session.organization_id)
-            if (
-                user is not None
-                and user.status == UserStatus.active
-                and user.role == UserRole.org_admin
-                and org is not None
-                and org.is_operator
-                and org.status == OrganizationStatus.active
-            ):
-                await set_platform_admin_context(db, is_admin=True)
-                return AdminPrincipal(id=user.id, email=user.email, auth_type="operator_org")
+    if len(candidates) == 1:
+        principal = next(iter(candidates.values()))
+    else:
+        choice = request.cookies.get(settings.platform_admin_choice_cookie_name)
+        if choice not in candidates:
+            raise HTTPException(status.HTTP_409_CONFLICT, CHOOSE_SIGN_IN)
+        principal = candidates[choice]
+        principal.can_switch = True
 
-    raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not authenticated as platform admin")
+    await set_platform_admin_context(db, is_admin=True)
+    return principal

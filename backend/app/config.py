@@ -29,6 +29,18 @@ class Settings(BaseSettings):
     platform_admin_session_cookie_name: str = "dmarc_admin_session"
     session_idle_timeout_hours: int = 12
     session_absolute_timeout_days: int = 7
+    # The break-glass platform-admin login gets its own, tighter limits: it
+    # can manage every organization, and it's meant for short, occasional
+    # use. (An operator org's admins reach the admin console through their
+    # normal session, which keeps the limits above.) Deliberately env-only,
+    # not editable in the admin console: whoever holds that console
+    # shouldn't be able to lengthen their own session.
+    platform_admin_session_idle_timeout_hours: int = 4
+    platform_admin_session_absolute_timeout_hours: int = 24
+    # Remembers which admin identity to use when the browser holds both a
+    # break-glass session and an operator org's session (see
+    # get_current_platform_admin).
+    platform_admin_choice_cookie_name: str = "dmarc_admin_choice"
 
     # Local email+password+TOTP login (for orgs with no entra_tenant_id set)
     mfa_pending_cookie_name: str = "dmarc_mfa_pending"

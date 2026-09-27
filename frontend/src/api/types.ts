@@ -61,6 +61,14 @@ export interface AdminMe {
   id: string;
   email: string;
   auth_type: "local" | "operator_org";
+  organization_name: string | null;
+  // The browser also holds the other kind of admin sign-in.
+  can_switch: boolean;
+}
+
+export interface AdminSessionOptions {
+  local: { email: string; organization_name: null } | null;
+  operator_org: { email: string; organization_name: string } | null;
 }
 
 export interface TeamMember {

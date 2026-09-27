@@ -1,4 +1,5 @@
 import uuid
+from typing import Literal
 
 from pydantic import BaseModel, EmailStr, field_validator
 
@@ -52,3 +53,7 @@ class ChangePasswordRequest(BaseModel):
         if len(value) < 12:
             raise ValueError("new password must be at least 12 characters")
         return value
+
+
+class AdminSessionChoiceRequest(BaseModel):
+    choice: Literal["local", "operator_org"] | None

@@ -11,6 +11,7 @@ from app.config import settings
 from app.db.session import get_db
 from app.middleware.tenant_context import (
     AdminPrincipal,
+    admin_sign_in_candidates,
     get_current_platform_admin,
     get_current_platform_admin_local,
 )
@@ -39,6 +40,7 @@ from app.repositories.users import get_user_in_org, list_users_for_org
 from app.schemas.platform_admin import (
     AdminEnrollOtpConfirmRequest,
     AdminLoginRequest,
+    AdminSessionChoiceRequest,
     AdminVerifyOtpRequest,
     ChangePasswordRequest,
     LocalUserCreateRequest,
@@ -162,6 +164,15 @@ async def _set_admin_mfa_pending(db: AsyncSession, response: Response, platform_
     response.set_cookie(_ADMIN_MFA_PENDING_COOKIE, raw_token, **short_lived)
 
 
+def _set_admin_session_cookies(response: Response, raw_token: str) -> None:
+    """Signing in to the break-glass account is an explicit choice to use it,
+    so record that too — no "which sign-in?" prompt straight after logging in
+    when the browser also holds an operator org session."""
+    max_age = session_manager.admin_cookie_max_age()
+    response.set_cookie(settings.platform_admin_session_cookie_name, raw_token, max_age=max_age, **cookie_kwargs())
+    response.set_cookie(settings.platform_admin_choice_cookie_name, "local", max_age=max_age, **cookie_kwargs())
+
+
 async def _get_pending_admin(request: Request, db: AsyncSession) -> tuple[PlatformAdmin, PlatformAdminMfaPendingChallenge]:
     raw_token = request.cookies.get(_ADMIN_MFA_PENDING_COOKIE)
     if not raw_token:
@@ -234,12 +245,7 @@ async def admin_verify_otp(body: AdminVerifyOtpRequest, request: Request, db: As
 
     response = Response(status_code=204)
     response.delete_cookie(_ADMIN_MFA_PENDING_COOKIE, path="/")
-    response.set_cookie(
-        settings.platform_admin_session_cookie_name,
-        raw_token,
-        max_age=settings.session_idle_timeout_hours * 3600,
-        **cookie_kwargs(),
-    )
+    _set_admin_session_cookies(response, raw_token)
     return response
 
 
@@ -289,12 +295,7 @@ async def admin_enroll_otp_confirm(
 
     response = JSONResponse({"recovery_codes": [plaintext for plaintext, _hash in codes]})
     response.delete_cookie(_ADMIN_MFA_PENDING_COOKIE, path="/")
-    response.set_cookie(
-        settings.platform_admin_session_cookie_name,
-        raw_token,
-        max_age=settings.session_idle_timeout_hours * 3600,
-        **cookie_kwargs(),
-    )
+    _set_admin_session_cookies(response, raw_token)
     return response
 
 
@@ -308,12 +309,58 @@ async def admin_logout(request: Request, db: AsyncSession = Depends(get_db)) -> 
             await db.commit()
     response = Response(status_code=204)
     response.delete_cookie(settings.platform_admin_session_cookie_name, path="/")
+    response.delete_cookie(settings.platform_admin_choice_cookie_name, path="/")
     return response
 
 
 @router.get("/me")
 async def admin_me(admin: AdminPrincipal = Depends(get_current_platform_admin)) -> dict:
-    return {"id": str(admin.id), "email": admin.email, "auth_type": admin.auth_type}
+    return {
+        "id": str(admin.id),
+        "email": admin.email,
+        "auth_type": admin.auth_type,
+        "organization_name": admin.organization_name,
+        "can_switch": admin.can_switch,
+    }
+
+
+@router.get("/session-options")
+async def admin_session_options(request: Request, db: AsyncSession = Depends(get_db)) -> dict:
+    """Which admin sign-ins this browser holds — for the "which sign-in?"
+    screen /admin/me's 409 leads to. Only describes the caller's own
+    sessions, so it needs no admin authorization of its own."""
+    candidates = await admin_sign_in_candidates(request, db)
+    await db.commit()  # keep the sessions' last-seen refresh
+    return {
+        auth_type: (
+            {"email": principal.email, "organization_name": principal.organization_name}
+            if (principal := candidates.get(auth_type))
+            else None
+        )
+        for auth_type in ("local", "operator_org")
+    }
+
+
+@router.post("/session-choice", status_code=status.HTTP_204_NO_CONTENT)
+async def admin_session_choice(
+    body: AdminSessionChoiceRequest, request: Request, db: AsyncSession = Depends(get_db)
+) -> Response:
+    """Picks which of the browser's admin sign-ins the console uses, or
+    (choice null) forgets the pick so the console asks again."""
+    response = Response(status_code=status.HTTP_204_NO_CONTENT)
+    if body.choice is None:
+        response.delete_cookie(settings.platform_admin_choice_cookie_name, path="/")
+        return response
+    if body.choice not in await admin_sign_in_candidates(request, db):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "that sign-in isn't available in this browser")
+    await db.commit()
+    response.set_cookie(
+        settings.platform_admin_choice_cookie_name,
+        body.choice,
+        max_age=settings.session_absolute_timeout_days * 86400,
+        **cookie_kwargs(),
+    )
+    return response
 
 
 @router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
@@ -425,7 +472,9 @@ async def update_organization(
         org.is_operator = body.is_operator
     if body.name is not None:
         org.name = body.name
-    if body.entra_tenant_id is not None:
+    # Sent as null means "clear it" (the org goes back to local sign-in);
+    # left out means "leave it alone".
+    if "entra_tenant_id" in body.model_fields_set:
         org.entra_tenant_id = body.entra_tenant_id
     if body.status is not None:
         org.status = body.status

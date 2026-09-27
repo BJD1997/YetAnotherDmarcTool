@@ -144,6 +144,22 @@
   text-overflow: ellipsis;
 }
 
+.sidebar-user-method {
+  display: block;
+  font-size: 0.7rem;
+  opacity: 0.8;
+}
+
+.link-button {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .sidebar-legal {
   padding: 0 0.25rem;
   font-size: 0.7rem;

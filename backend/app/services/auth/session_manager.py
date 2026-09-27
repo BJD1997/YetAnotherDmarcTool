@@ -12,6 +12,8 @@ from app.repositories.auth import get_platform_admin_session_by_token_hash, get_
 
 _IDLE_TIMEOUT = timedelta(hours=settings.session_idle_timeout_hours)
 _ABSOLUTE_TIMEOUT = timedelta(days=settings.session_absolute_timeout_days)
+_ADMIN_IDLE_TIMEOUT = timedelta(hours=settings.platform_admin_session_idle_timeout_hours)
+_ADMIN_ABSOLUTE_TIMEOUT = timedelta(hours=settings.platform_admin_session_absolute_timeout_hours)
 
 
 def _new_raw_token() -> str:
@@ -73,7 +75,7 @@ async def create_platform_admin_session(
         session_token_hash=_hash_token(raw_token),
         created_at=now,
         last_seen_at=now,
-        expires_at=now + _IDLE_TIMEOUT,
+        expires_at=now + _ADMIN_IDLE_TIMEOUT,
         ip_address=ip_address,
         user_agent=user_agent,
     )
@@ -89,19 +91,19 @@ async def get_active_platform_admin_session(
     session = await get_platform_admin_session_by_token_hash(db, token_hash)
     if session is None:
         return None
-    return _validate_and_refresh(session)
+    return _validate_and_refresh(session, idle=_ADMIN_IDLE_TIMEOUT, absolute=_ADMIN_ABSOLUTE_TIMEOUT)
 
 
-def _validate_and_refresh(session):
+def _validate_and_refresh(session, *, idle: timedelta = _IDLE_TIMEOUT, absolute: timedelta = _ABSOLUTE_TIMEOUT):
     now = _now()
     if session.revoked_at is not None:
         return None
     if session.expires_at <= now:
         return None
-    if now - session.created_at > _ABSOLUTE_TIMEOUT:
+    if now - session.created_at > absolute:
         return None
     session.last_seen_at = now
-    session.expires_at = min(now + _IDLE_TIMEOUT, session.created_at + _ABSOLUTE_TIMEOUT)
+    session.expires_at = min(now + idle, session.created_at + absolute)
     return session
 
 
@@ -129,3 +131,7 @@ def cookie_kwargs() -> dict:
         "samesite": "lax",
         "path": "/",
     }
+
+
+def admin_cookie_max_age() -> int:
+    return settings.platform_admin_session_idle_timeout_hours * 3600

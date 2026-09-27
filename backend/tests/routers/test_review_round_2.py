@@ -264,3 +264,19 @@ async def test_deleting_the_last_hosted_domain_removes_its_dns_record(api, monke
     await login_as_platform_admin(client, owner_factory)
     assert (await client.delete(f"/api/admin/organizations/{other_org.id}")).status_code == 204
     assert removed == ["solo.example", "shared.example"]
+
+
+async def test_platform_admin_can_clear_a_tenant_id(api):
+    """Found by the browser test agent: PATCH {entra_tenant_id: null} returned
+    200 but left the old tenant ID in place."""
+    client, owner_factory = api
+    org, _ = await seed_org_and_user(owner_factory, entra=True)
+    await login_as_platform_admin(client, owner_factory)
+
+    response = await client.patch(f"/api/admin/organizations/{org.id}", json={"entra_tenant_id": None})
+
+    assert response.status_code == 200
+    assert response.json()["entra_tenant_id"] is None
+    # Leaving the field out still leaves it alone.
+    renamed = await client.patch(f"/api/admin/organizations/{org.id}", json={"name": "Renamed"})
+    assert renamed.json()["entra_tenant_id"] is None and renamed.json()["name"] == "Renamed"

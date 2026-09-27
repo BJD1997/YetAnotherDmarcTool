@@ -9,7 +9,7 @@ import { useAdminUpdates } from "../hooks/useAdmin";
 import { useHealth } from "../hooks/useOverviewResources";
 
 export default function AdminShell({ children }: { children: ReactNode }) {
-  const { admin } = useAdminAuth();
+  const { admin, refetch } = useAdminAuth();
   const location = useLocation();
   const queryClient = useQueryClient();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -34,6 +34,14 @@ export default function AdminShell({ children }: { children: ReactNode }) {
       queryClient.clear();
       window.location.href = "/admin/login";
     }
+  }
+
+  async function handleSwitch() {
+    // Forget the choice; /admin/me then answers 409 and RequireAdminAuth
+    // shows the "which sign-in?" screen again.
+    await api.post("/admin/session-choice", { choice: null });
+    queryClient.clear();
+    await refetch();
   }
 
   const isActive = (path: string) => (path === "/admin" ? location.pathname === "/admin" : location.pathname.startsWith(path));
@@ -93,6 +101,22 @@ export default function AdminShell({ children }: { children: ReactNode }) {
           <div className="sidebar-user">
             <span className="sidebar-user-email" title={admin?.email}>
               {admin?.email}
+              {admin && (
+                // The break-glass login and an operator org's own sign-in
+                // can use the same email; when the browser holds both, the
+                // break-glass session wins — so always say which one this is.
+                <span className="sidebar-user-method">
+                  {admin.auth_type === "local" ? "Break-glass admin login" : "Your organization's sign-in"}
+                  {admin.can_switch && (
+                    <>
+                      {" · "}
+                      <button type="button" className="link-button" onClick={handleSwitch}>
+                        Switch
+                      </button>
+                    </>
+                  )}
+                </span>
+              )}
             </span>
             <div style={{ display: "flex", gap: "0.25rem", flexShrink: 0 }}>
               <ThemeToggle />

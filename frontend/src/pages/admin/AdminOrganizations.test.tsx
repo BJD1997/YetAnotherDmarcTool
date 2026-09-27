@@ -180,5 +180,26 @@ describe("AdminOrganizations", () => {
     expect(await screen.findByText("https://dmarc.example/set-password?token=t")).toBeInTheDocument();
     confirmSpy.mockRestore();
   });
+
+  it("offers local-user creation on a local platform admin org too", async () => {
+    getMock.mockImplementation(async (url: string) =>
+      url.includes("/users")
+        ? []
+        : {
+            organizations: [org("QA Agent", { is_operator: true }), org("Microsoft Org", { entra_tenant_id: "t-1" })],
+            has_more: false,
+            summary: { total: 2, active: 2, suspended: 0, orgs_with_job_errors_7d: 0 },
+          },
+    );
+
+    renderWithAppProviders(<AdminOrganizations />);
+    fireEvent.click(await screen.findByText("QA Agent"));
+    expect(await screen.findByPlaceholderText("admin@client.com")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("QA Agent"));
+    fireEvent.click(screen.getByText("Microsoft Org"));
+    await screen.findByPlaceholderText("tenant GUID");
+    expect(screen.queryByPlaceholderText("admin@client.com")).not.toBeInTheDocument();
+  });
 });
 
