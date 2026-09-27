@@ -7,6 +7,9 @@
 
 @description('Azure region.')
 param location string
+
+@description('Address range of the Container Apps environment subnet — trusted, with ACA ingress, to set X-Forwarded-For.')
+param acaSubnetPrefix string
 param namePrefix string
 param environmentId string
 @description('Managed environment default domain (to compute the api FQDN without a self-reference).')
@@ -97,6 +100,15 @@ var apiEnv = concat(
     {
       name: 'RATE_LIMIT_BACKEND'
       value: 'postgres'
+    }
+    {
+      // Every request reaches the api through ACA's ingress proxy (peer
+      // addresses in 100.100.0.0/16, or the environment's own subnet), which
+      // puts the real client in X-Forwarded-For. uvicorn only honours that
+      // header from peers listed here — without it every visitor looks like
+      // the proxy, in the sign-in log and to the per-IP rate limits.
+      name: 'FORWARDED_ALLOW_IPS'
+      value: '100.100.0.0/16,${acaSubnetPrefix}'
     }
     {
       name: 'APP_VERSION'

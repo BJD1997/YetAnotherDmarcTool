@@ -308,6 +308,7 @@ module apps 'modules/apps.bicep' = {
     resolverImage: resolverImage
     imageTag: imageTag
     publicBaseUrlOverride: publicBaseUrlOverride
+    acaSubnetPrefix: tier.acaSubnetPrefix
     apiMinReplicas: tier.apiMinReplicas
     apiMaxReplicas: resolvedApiMaxReplicas
     workerMinReplicas: 1

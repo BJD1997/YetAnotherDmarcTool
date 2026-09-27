@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "14861346194525218424"
+      "templateHash": "2591027697114000863"
     }
   },
   "parameters": {
@@ -1244,6 +1244,9 @@
           "publicBaseUrlOverride": {
             "value": "[parameters('publicBaseUrlOverride')]"
           },
+          "acaSubnetPrefix": {
+            "value": "[variables('tier').acaSubnetPrefix]"
+          },
           "apiMinReplicas": {
             "value": "[variables('tier').apiMinReplicas]"
           },
@@ -1279,7 +1282,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "7511873636507274096"
+              "templateHash": "14255793749558854435"
             }
           },
           "parameters": {
@@ -1287,6 +1290,12 @@
               "type": "string",
               "metadata": {
                 "description": "Azure region."
+              }
+            },
+            "acaSubnetPrefix": {
+              "type": "string",
+              "metadata": {
+                "description": "Address range of the Container Apps environment subnet — trusted, with ACA ingress, to set X-Forwarded-For."
               }
             },
             "namePrefix": {
@@ -1382,7 +1391,7 @@
               }
             },
             "apiSecrets": "[concat(createArray(createObject('name', 'app-database-url', 'keyVaultUrl', format('{0}secrets/app-database-url', parameters('vaultUri')), 'identity', parameters('identityId')), createObject('name', 'fernet-key', 'keyVaultUrl', format('{0}secrets/fernet-key', parameters('vaultUri')), 'identity', parameters('identityId'))), if(parameters('deployEntraSsoSecret'), createArray(createObject('name', 'entra-sso-client-secret', 'keyVaultUrl', format('{0}secrets/entra-sso-client-secret', parameters('vaultUri')), 'identity', parameters('identityId'))), createArray()))]",
-            "apiEnv": "[concat(createArray(createObject('name', 'DATABASE_URL', 'secretRef', 'app-database-url'), createObject('name', 'FERNET_KEY', 'secretRef', 'fernet-key'), createObject('name', 'PUBLIC_BASE_URL', 'value', variables('publicBaseUrl')), createObject('name', 'DNS_RESOLVER_HOST', 'value', '127.0.0.1'), createObject('name', 'RATE_LIMIT_BACKEND', 'value', 'postgres'), createObject('name', 'APP_VERSION', 'value', parameters('imageTag'))), if(parameters('deployEntraSsoSecret'), createArray(createObject('name', 'ENTRA_SSO_CLIENT_ID', 'value', parameters('entraSsoClientId')), createObject('name', 'ENTRA_SSO_CLIENT_SECRET', 'secretRef', 'entra-sso-client-secret'), createObject('name', 'ENTRA_SSO_AUTHORITY', 'value', parameters('entraSsoAuthority'))), createArray()))]",
+            "apiEnv": "[concat(createArray(createObject('name', 'DATABASE_URL', 'secretRef', 'app-database-url'), createObject('name', 'FERNET_KEY', 'secretRef', 'fernet-key'), createObject('name', 'PUBLIC_BASE_URL', 'value', variables('publicBaseUrl')), createObject('name', 'DNS_RESOLVER_HOST', 'value', '127.0.0.1'), createObject('name', 'RATE_LIMIT_BACKEND', 'value', 'postgres'), createObject('name', 'FORWARDED_ALLOW_IPS', 'value', format('100.100.0.0/16,{0}', parameters('acaSubnetPrefix'))), createObject('name', 'APP_VERSION', 'value', parameters('imageTag'))), if(parameters('deployEntraSsoSecret'), createArray(createObject('name', 'ENTRA_SSO_CLIENT_ID', 'value', parameters('entraSsoClientId')), createObject('name', 'ENTRA_SSO_CLIENT_SECRET', 'secretRef', 'entra-sso-client-secret'), createObject('name', 'ENTRA_SSO_AUTHORITY', 'value', parameters('entraSsoAuthority'))), createArray()))]",
             "workerSecrets": "[concat(createArray(createObject('name', 'app-database-url', 'keyVaultUrl', format('{0}secrets/app-database-url', parameters('vaultUri')), 'identity', parameters('identityId')), createObject('name', 'fernet-key', 'keyVaultUrl', format('{0}secrets/fernet-key', parameters('vaultUri')), 'identity', parameters('identityId')), createObject('name', 'keda-pg-connection', 'keyVaultUrl', format('{0}secrets/keda-pg-connection', parameters('vaultUri')), 'identity', parameters('identityId'))), if(parameters('deployEntraMailSecret'), createArray(createObject('name', 'entra-mail-client-secret', 'keyVaultUrl', format('{0}secrets/entra-mail-client-secret', parameters('vaultUri')), 'identity', parameters('identityId'))), createArray()))]",
             "workerEnv": "[concat(createArray(createObject('name', 'DATABASE_URL', 'secretRef', 'app-database-url'), createObject('name', 'FERNET_KEY', 'secretRef', 'fernet-key'), createObject('name', 'DNS_RESOLVER_HOST', 'value', '127.0.0.1'), createObject('name', 'RATE_LIMIT_BACKEND', 'value', 'postgres'), createObject('name', 'APP_VERSION', 'value', parameters('imageTag'))), if(parameters('deployEntraMailSecret'), createArray(createObject('name', 'ENTRA_MAIL_CLIENT_ID', 'value', parameters('entraMailClientId')), createObject('name', 'ENTRA_MAIL_CLIENT_SECRET', 'secretRef', 'entra-mail-client-secret')), createArray()))]"
           },
