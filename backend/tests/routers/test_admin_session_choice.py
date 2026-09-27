@@ -101,8 +101,9 @@ async def test_choosing_the_organization_sign_in(api):
     assert (await client.get("/api/admin/me")).json()["auth_type"] == "local"
 
     # Clearing the choice asks again.
-    assert (await client.post("/api/admin/session-choice", json={"choice": None})).status_code == 204
-    client.cookies.delete(CHOICE)
+    cleared = await client.post("/api/admin/session-choice", json={"choice": None})
+    assert cleared.status_code == 204
+    assert CHOICE not in client.cookies
     assert (await client.get("/api/admin/me")).status_code == 409
 
 

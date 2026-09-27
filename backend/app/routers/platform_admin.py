@@ -164,6 +164,16 @@ async def _set_admin_mfa_pending(db: AsyncSession, response: Response, platform_
     response.set_cookie(_ADMIN_MFA_PENDING_COOKIE, raw_token, **short_lived)
 
 
+def _forget_admin_choice(response: Response) -> None:
+    # Same attributes it was set with (cookie_kwargs), so every browser
+    # treats this as the same cookie and drops it.
+    kwargs = cookie_kwargs()
+    response.delete_cookie(
+        settings.platform_admin_choice_cookie_name,
+        path=kwargs["path"], secure=kwargs["secure"], httponly=kwargs["httponly"], samesite=kwargs["samesite"],
+    )
+
+
 def _set_admin_session_cookies(response: Response, raw_token: str) -> None:
     """Signing in to the break-glass account is an explicit choice to use it,
     so record that too — no "which sign-in?" prompt straight after logging in
@@ -309,7 +319,7 @@ async def admin_logout(request: Request, db: AsyncSession = Depends(get_db)) -> 
             await db.commit()
     response = Response(status_code=204)
     response.delete_cookie(settings.platform_admin_session_cookie_name, path="/")
-    response.delete_cookie(settings.platform_admin_choice_cookie_name, path="/")
+    _forget_admin_choice(response)
     return response
 
 
@@ -349,7 +359,7 @@ async def admin_session_choice(
     (choice null) forgets the pick so the console asks again."""
     response = Response(status_code=status.HTTP_204_NO_CONTENT)
     if body.choice is None:
-        response.delete_cookie(settings.platform_admin_choice_cookie_name, path="/")
+        _forget_admin_choice(response)
         return response
     if body.choice not in await admin_sign_in_candidates(request, db):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "that sign-in isn't available in this browser")
