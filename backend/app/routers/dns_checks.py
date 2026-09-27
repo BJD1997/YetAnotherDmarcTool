@@ -362,8 +362,12 @@ async def mta_sts_builder(
     than a guessed wildcard — see _mx_covered's docstring for why a wrong
     wildcard is actively worse than none (the exact bug found against a
     real Microsoft 365 customer domain during development: mx: *.mx.microsoft
-    looked plausible but didn't actually cover the real two-label MX host)."""
+    looked plausible but didn't actually cover the real two-label MX host).
+    Verified domains only, like the best-practice checks: the policy fetch
+    connects to a host the domain's owner controls."""
     domain = await get_owned_domain(db, domain_id, user.organization_id)
+    if domain.verification_status != DomainVerificationStatus.verified:
+        raise HTTPException(status.HTTP_409_CONFLICT, "verify this domain before using the MTA-STS policy builder")
 
     try:
         mx_records = await resolve_mx(domain.name)

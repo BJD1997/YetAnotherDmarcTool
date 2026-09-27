@@ -24,9 +24,19 @@ const RESULT_BADGE: Record<SignInEvent["result"], { className: string; label: st
   account_change: { className: "badge--neutral", label: "account change" },
 };
 
-export default function SignInEventsSection() {
+const METHOD_LABELS: Record<SignInEvent["auth_method"], string> = {
+  entra: "Microsoft",
+  local: "local",
+  platform_admin: "break-glass",
+};
+
+// endpoint: an org's own log by default; the admin console passes
+// "/admin/sign-in-events" for break-glass sign-ins (one method only, so no
+// method filter there).
+export default function SignInEventsSection({ endpoint = "/sign-in-events" }: { endpoint?: string }) {
   const [resultFilter, setResultFilter] = useState("");
   const [authMethodFilter, setAuthMethodFilter] = useState("");
+  const showMethodFilter = endpoint === "/sign-in-events";
 
   // No explicit limit param — the backend's own default (50, see
   // /sign-in-events' `limit: int = Query(50, ...)`) is relied on, matching
@@ -37,7 +47,7 @@ export default function SignInEventsSection() {
   if (authMethodFilter) params.set("auth_method", authMethodFilter);
   const filterQS = params.toString();
 
-  const query = useSignInEvents(filterQS);
+  const query = useSignInEvents(filterQS, endpoint);
 
   const events = query.data?.pages.flatMap((page) => page.events) ?? [];
 
@@ -50,11 +60,13 @@ export default function SignInEventsSection() {
           <option value="failure">Failure</option>
           <option value="account_change">Account change</option>
         </select>
-        <select className="input" value={authMethodFilter} onChange={(e) => setAuthMethodFilter(e.target.value)}>
-          <option value="">Any method</option>
-          <option value="entra">Microsoft</option>
-          <option value="local">Local</option>
-        </select>
+        {showMethodFilter && (
+          <select className="input" value={authMethodFilter} onChange={(e) => setAuthMethodFilter(e.target.value)}>
+            <option value="">Any method</option>
+            <option value="entra">Microsoft</option>
+            <option value="local">Local</option>
+          </select>
+        )}
       </div>
 
       {query.isLoading && <p className="muted">Loading…</p>}
@@ -80,7 +92,7 @@ export default function SignInEventsSection() {
                   <tr key={event.id} style={event.result === "failure" ? { background: "var(--critical-wash)" } : undefined}>
                     <td>{event.email ?? "—"}</td>
                     <td>
-                      <span className="badge badge--neutral">{event.auth_method === "entra" ? "Microsoft" : "local"}</span>
+                      <span className="badge badge--neutral">{METHOD_LABELS[event.auth_method]}</span>
                     </td>
                     <td>
                       <span className={`badge ${RESULT_BADGE[event.result].className}`}>{RESULT_BADGE[event.result].label}</span>

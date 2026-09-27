@@ -15,7 +15,7 @@ from app.middleware.tenant_context import (
     get_current_platform_admin,
     get_current_platform_admin_local,
 )
-from app.models.enums import AuthMethod, ConsentStatus, JobStatus, JobType, OrganizationStatus
+from app.models.enums import AuthMethod, ConsentStatus, JobStatus, JobType, OrganizationStatus, SignInResult
 from app.models.mailbox_connection import MailboxConnection
 from app.models.organization import Organization
 from app.models.platform_admin import PlatformAdmin
@@ -36,6 +36,7 @@ from app.repositories.platform_admin import (
     org_aggregates,
     org_summary_stats,
 )
+from app.repositories.sign_in_events import list_platform_admin_sign_in_events
 from app.repositories.users import get_user_in_org, list_users_for_org
 from app.schemas.platform_admin import (
     AdminEnrollOtpConfirmRequest,
@@ -53,6 +54,8 @@ from app.services.auth.rate_limit import login_limiter, otp_account_limiter, otp
 from app.services.auth.entra_links import entra_consent_urls
 from app.services.auth.password import dummy_verify, hash_password, verify_password
 from app.services.auth.session_manager import cookie_kwargs
+from app.services.auth.sign_in_log import client_network_info, record_sign_in_event
+from app.routers.sign_in_events import sign_in_event_out
 from app.services.auth.tokens import hash_token, new_opaque_token
 from app.services.cloudflare.dns_provisioner import release_authorization_records
 
@@ -164,6 +167,18 @@ async def _set_admin_mfa_pending(db: AsyncSession, response: Response, platform_
     response.set_cookie(_ADMIN_MFA_PENDING_COOKIE, raw_token, **short_lived)
 
 
+async def _log_admin_sign_in(
+    db: AsyncSession, request: Request, result: SignInResult, email: str | None, reason: str | None = None
+) -> None:
+    """Break-glass sign-ins and account changes go in the sign-in log with no
+    organization attached — visible in the admin console, never to an org."""
+    ip_address, user_agent = client_network_info(request)
+    await record_sign_in_event(
+        db, result=result, auth_method=AuthMethod.platform_admin, attempted_email=email,
+        failure_reason=reason, ip_address=ip_address, user_agent=user_agent,
+    )
+
+
 def _forget_admin_choice(response: Response) -> None:
     # Same attributes it was set with (cookie_kwargs), so every browser
     # treats this as the same cookie and drops it.
@@ -209,6 +224,8 @@ async def admin_login(body: AdminLoginRequest, request: Request, db: AsyncSessio
         # reject than an existing one (user enumeration).
         dummy_verify()
     if not password_ok or not admin.is_active:
+        await _log_admin_sign_in(db, request, SignInResult.failure, body.email, "invalid_credentials")
+        await db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
 
     response = JSONResponse({"needs_enrollment": admin.otp_enrolled_at is None})
@@ -229,6 +246,7 @@ async def admin_verify_otp(body: AdminVerifyOtpRequest, request: Request, db: As
         # Too many code guesses on this account, from however many IPs:
         # end the pending login so the password has to be proven again.
         await db.delete(challenge)
+        await _log_admin_sign_in(db, request, SignInResult.failure, admin.email, "too_many_code_attempts")
         await db.commit()
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS,
@@ -237,10 +255,15 @@ async def admin_verify_otp(body: AdminVerifyOtpRequest, request: Request, db: As
         )
 
     code = body.code.strip()
-    if not totp.verify_code(admin.otp_secret, code):
+    step = totp.accept_code(admin.otp_secret, code, admin.otp_last_used_step)
+    if step is not None:
+        admin.otp_last_used_step = step
+    else:
         code_hash = totp.hash_recovery_code_for_lookup(code)
         recovery = await get_unused_admin_recovery_code(db, admin.id, code_hash)
         if recovery is None:
+            await _log_admin_sign_in(db, request, SignInResult.failure, admin.email, "invalid_totp_or_recovery_code")
+            await db.commit()
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid code")
         recovery.used_at = datetime.now(timezone.utc)
 
@@ -251,6 +274,7 @@ async def admin_verify_otp(body: AdminVerifyOtpRequest, request: Request, db: As
         user_agent=request.headers.get("user-agent"),
     )
     await db.delete(challenge)
+    await _log_admin_sign_in(db, request, SignInResult.success, admin.email)
     await db.commit()
 
     response = Response(status_code=204)
@@ -281,6 +305,8 @@ async def admin_enroll_otp_confirm(
     # Same trust-on-first-use guard as the user flow in auth.py — without it
     # a password alone could replace this cross-tenant account's second factor.
     if admin.otp_enrolled_at is not None:
+        await _log_admin_sign_in(db, request, SignInResult.failure, admin.email, "totp_already_enrolled")
+        await db.commit()
         raise HTTPException(status.HTTP_409_CONFLICT, _ALREADY_ENROLLED)
 
     if not totp.verify_code(body.secret, body.code):
@@ -289,6 +315,7 @@ async def admin_enroll_otp_confirm(
     now = datetime.now(timezone.utc)
     admin.otp_secret = body.secret
     admin.otp_enrolled_at = now
+    admin.otp_last_used_step = totp.current_step(body.secret)
 
     codes = totp.generate_recovery_codes()
     for plaintext, code_hash in codes:
@@ -301,6 +328,7 @@ async def admin_enroll_otp_confirm(
         user_agent=request.headers.get("user-agent"),
     )
     await db.delete(challenge)
+    await _log_admin_sign_in(db, request, SignInResult.success, admin.email)
     await db.commit()
 
     response = JSONResponse({"recovery_codes": [plaintext for plaintext, _hash in codes]})
@@ -376,12 +404,21 @@ async def admin_session_choice(
 @router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
 async def change_password(
     body: ChangePasswordRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     admin: PlatformAdmin = Depends(get_current_platform_admin_local),
 ) -> None:
     if not verify_password(body.current_password, admin.password_hash):
+        await _log_admin_sign_in(db, request, SignInResult.failure, admin.email, "invalid_current_password")
+        await db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "current password is incorrect")
     admin.password_hash = hash_password(body.new_password)
+    # Sign out every other break-glass session — the point of changing a
+    # password is usually that someone else might have it.
+    await session_manager.revoke_platform_admin_sessions(
+        db, admin.id, keep_raw_token=request.cookies.get(settings.platform_admin_session_cookie_name)
+    )
+    await _log_admin_sign_in(db, request, SignInResult.account_change, admin.email, "password_changed")
     await db.commit()
 
 
@@ -685,6 +722,19 @@ async def upsert_mailbox_connection(
         "consent_status": connection.consent_status.value,
         "consent_granted_at": connection.consent_granted_at.isoformat() if connection.consent_granted_at else None,
     }
+
+
+@router.get("/sign-in-events")
+async def list_admin_sign_in_events(
+    limit: int = Query(50, ge=1, le=200),
+    before_id: uuid.UUID | None = Query(None),
+    result: SignInResult | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    _admin: AdminPrincipal = Depends(get_current_platform_admin),
+) -> dict:
+    """Break-glass admin sign-ins, same shape as an org's /sign-in-events."""
+    events = await list_platform_admin_sign_in_events(db, limit=limit, before_id=before_id, result=result)
+    return {"events": [sign_in_event_out(e) for e in events], "has_more": len(events) == limit}
 
 
 @router.get("/job-runs")

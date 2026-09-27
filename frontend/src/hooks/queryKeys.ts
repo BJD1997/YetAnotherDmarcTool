@@ -5,6 +5,7 @@ export const queryKeys = {
     all: ["domains"] as const,
     ranked: ["domains-ranked"] as const,
     detail: (domainId: string) => ["domains", domainId] as const,
+    leftOutReports: (domainId: string) => ["domains", domainId, "left-out-reports"] as const,
   },
   organization: {
     current: ["organization", "current"] as const,

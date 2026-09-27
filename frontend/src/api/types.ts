@@ -14,6 +14,8 @@ export interface EntraConsentUrls {
 
 export type SpfAllQualifierMode = "strict" | "conditional";
 
+export type ReportSenderCheck = "standard" | "strict" | "off";
+
 export interface Organization {
   id: string;
   name: string;
@@ -22,6 +24,7 @@ export interface Organization {
   is_operator: boolean;
   spf_all_qualifier_mode: SpfAllQualifierMode;
   hosted_mailbox_opt_in: boolean;
+  report_sender_check: ReportSenderCheck;
   is_demo_read_only: boolean;
   entra_consent_urls: EntraConsentUrls | null;
 }

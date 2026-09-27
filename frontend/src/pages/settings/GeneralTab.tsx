@@ -1,7 +1,8 @@
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useOutletContext } from "react-router-dom";
 import { ApiError } from "../../api/client";
-import type { Organization, SpfAllQualifierMode } from "../../api/types";
+import type { Organization, ReportSenderCheck, SpfAllQualifierMode } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import MailboxConnectionSection from "../../components/settings/MailboxConnectionSection";
 import { useUpdateOrganization } from "../../hooks/useOrganization";
@@ -18,6 +19,28 @@ const SPF_MODES: { key: SpfAllQualifierMode; label: string; description: string 
     description:
       "~all is recommended instead for a sending domain once its own DMARC policy is quarantine/reject — at that point DMARC " +
       "is already the enforcement, so -all only risks bouncing relayed mail at the SMTP level before DKIM/DMARC are evaluated.",
+  },
+];
+
+const SENDER_CHECKS: { key: ReportSenderCheck; label: string; description: string }[] = [
+  {
+    key: "standard",
+    label: "Standard (recommended)",
+    description:
+      "Leaves out reports that failed DMARC, came from someone other than the reporter they name, or were sent from inside " +
+      "your Microsoft 365 organization. Genuine reports only drop out if they fail DMARC, which is rare.",
+  },
+  {
+    key: "strict",
+    label: "Strict",
+    description:
+      "Counts only reports whose sender passed DMARC. Best protection against fake reports, but also drops genuine " +
+      "reports from senders that have no DMARC record.",
+  },
+  {
+    key: "off",
+    label: "Off",
+    description: "Counts every report. Nothing is left out, but anyone who knows your reporting address can add fake data.",
   },
 ];
 
@@ -50,12 +73,60 @@ export default function GeneralTab() {
           <SpfModeSection org={org} />
 
           <hr className="divider" />
+          <h3 className="section-title">Report sender check</h3>
+          <p className="section-hint">
+            Anyone can email a report to your reporting address. This decides which reports count, based on how their
+            sender checks out. Left-out reports are kept and listed on each domain's report pages. Changing this also
+            applies to reports you've already received.
+          </p>
+          <SenderCheckSection org={org} />
+
+          <hr className="divider" />
           <h3 className="section-title">Hosted reporting mailbox</h3>
           <p className="section-hint">A YetAnotherDmarcTool-hosted rua= address, for domains with no mailbox of their own to dedicate.</p>
           <HostedMailboxSection org={org} />
         </>
       )}
     </section>
+  );
+}
+
+function SenderCheckSection({ org }: { org: Organization }) {
+  const [error, setError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+
+  const setCheck = useUpdateOrganization(
+    () => {
+      setError(null);
+      // Reports already received are re-evaluated, so every report view changes.
+      void queryClient.invalidateQueries();
+    },
+    (err) => setError(err instanceof ApiError ? err.message : "failed to save"),
+  );
+
+  return (
+    <div className="card" style={{ padding: "1rem", display: "grid", gap: "0.6rem" }} role="radiogroup" aria-label="Report sender check">
+      {SENDER_CHECKS.map((c) => (
+        <label key={c.key} style={{ display: "flex", gap: "0.6rem", alignItems: "flex-start", cursor: "pointer" }}>
+          <input
+            type="radio"
+            name="report-sender-check"
+            id={`report-sender-check-${c.key}`}
+            checked={org.report_sender_check === c.key}
+            disabled={setCheck.isPending}
+            onChange={() => setCheck.mutate({ name: org.name, report_sender_check: c.key })}
+            style={{ marginTop: "0.25rem" }}
+          />
+          <span>
+            <strong style={{ fontWeight: 600 }}>{c.label}</strong>
+            <span className="section-hint" style={{ display: "block", margin: 0 }}>
+              {c.description}
+            </span>
+          </span>
+        </label>
+      ))}
+      {error && <div className="alert alert--critical" style={{ margin: 0 }}>{error}</div>}
+    </div>
   );
 }
 

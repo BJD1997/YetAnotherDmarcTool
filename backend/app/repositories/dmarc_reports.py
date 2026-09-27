@@ -2,7 +2,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import case, delete, func, or_, select
+from sqlalchemy import case, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,10 +11,11 @@ from app.models.dismissed_detected_domain import DismissedDetectedDomain
 from app.models.dmarc_aggregate import DmarcAggregateRecord, DmarcAggregateReport
 from app.models.dmarc_forensic import DmarcForensicReport
 from app.models.domain import Domain
-from app.models.enums import AuthResult, Disposition, SenderReviewStatus
+from app.models.enums import AuthResult, Disposition, ReportSenderCheck, SenderReviewStatus
 from app.models.sender_review import SenderReview
 from app.models.source_ip_identity import SourceIpIdentity
 from app.models.tls_rpt import TlsRptReport
+from app.services.ingestion.sender_auth import decide_sql
 from app.services.pagination import keyset_paginate
 
 
@@ -822,6 +823,47 @@ async def insert_aggregate_report_if_new(db: AsyncSession, report: DmarcAggregat
     `report` object (including its DmarcAggregateRecord children, added via
     db.add_all separately) — this function only owns the idempotent insert."""
     return await _insert_if_new(db, report)
+
+
+async def list_left_out_reports(db: AsyncSession, domain_id: UUID) -> list:
+    """The domain's reports that the sender check leaves out, newest first —
+    for review. Opts out of the global filter that otherwise hides them
+    (app/db/report_trust.py)."""
+    left_out = []
+    for model, received in (
+        (DmarcAggregateReport, DmarcAggregateReport.received_at),
+        (TlsRptReport, TlsRptReport.received_at),
+        (DmarcForensicReport, DmarcForensicReport.created_at),
+    ):
+        rows = await db.execute(
+            select(model)
+            .where(model.domain_id == domain_id, model.sender_verified.is_(False))
+            .order_by(received.desc())
+            .limit(200)
+            .execution_options(include_unverified_reports=True)
+        )
+        left_out.extend(rows.scalars().all())
+    return left_out
+
+
+async def apply_report_sender_check(db: AsyncSession, organization_id: UUID, mode: ReportSenderCheck) -> None:
+    """Re-evaluates every stored report of the organization under `mode`,
+    from the facts recorded at ingestion (sender_auth.decide_sql)."""
+    for model in (DmarcAggregateReport, DmarcForensicReport, TlsRptReport):
+        await db.execute(
+            update(model)
+            .where(model.organization_id == organization_id)
+            .values(sender_verified=decide_sql(mode, model))
+        )
+    await db.execute(
+        update(DmarcAggregateRecord)
+        .where(DmarcAggregateRecord.organization_id == organization_id)
+        .values(
+            sender_verified=select(DmarcAggregateReport.sender_verified)
+            .where(DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
+            .scalar_subquery()
+        )
+    )
 
 
 async def delete_unverified_aggregate_duplicate(db: AsyncSession, report: DmarcAggregateReport) -> None:

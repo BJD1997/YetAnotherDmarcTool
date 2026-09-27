@@ -5,6 +5,7 @@ import AdminLogin from "./pages/admin/AdminLogin";
 import AdminOrganizations from "./pages/admin/AdminOrganizations";
 import AdminJobRuns from "./pages/admin/AdminJobRuns";
 import AdminUpdates from "./pages/admin/AdminUpdates";
+import AdminSignIns from "./pages/admin/AdminSignIns";
 import Overview from "./pages/Overview";
 import Onboarding from "./pages/Onboarding";
 import Domains from "./pages/Domains";
@@ -49,6 +50,16 @@ export default function App() {
           <RequireAdminAuth>
             <AdminShell>
               <AdminJobRuns />
+            </AdminShell>
+          </RequireAdminAuth>
+        }
+      />
+      <Route
+        path="/admin/sign-ins"
+        element={
+          <RequireAdminAuth>
+            <AdminShell>
+              <AdminSignIns />
             </AdminShell>
           </RequireAdminAuth>
         }

@@ -14,6 +14,7 @@ import { reportsFilterQuery } from "../../api/dmarc";
 import { DATE_RANGE_PRESETS } from "../../api/overview";
 import { Stat } from "../../components/domain/shared";
 import { useDmarcRecordDetail, useDmarcReportsByDay, useDmarcReportsSummary, useGroupedDmarcReports } from "../../hooks/useDmarcReports";
+import LeftOutReportsNotice from "../../components/domain/LeftOutReportsNotice";
 
 function dispositionRole(disposition: string): "good" | "warning" | "critical" {
   if (disposition === "reject") return "critical";
@@ -135,6 +136,8 @@ export default function DomainReports() {
           <h2>DMARC aggregate reports</h2>
         </div>
       </div>
+
+      <LeftOutReportsNotice domainId={domainId} types={["DMARC", "Forensic"]} />
 
       <FilterBar
         filters={filters}

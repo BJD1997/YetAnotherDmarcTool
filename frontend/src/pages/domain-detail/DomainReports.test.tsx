@@ -8,6 +8,9 @@ import type { Domain } from "../../api/types";
 import { makeTestQueryClient } from "../../test/render";
 import DomainReports from "./DomainReports";
 
+// Tested on its own (LeftOutReportsNotice.test.tsx); stubbed here so its extra
+// API call doesn't interfere with these tests' request assertions.
+vi.mock("../../components/domain/LeftOutReportsNotice", () => ({ default: () => null }));
 vi.mock("../../api/client", () => ({
   api: { get: vi.fn() },
 }));

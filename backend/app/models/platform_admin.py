@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, String
+from sqlalchemy import BigInteger, Boolean, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -28,3 +28,7 @@ class PlatformAdmin(UUIDPkMixin, TimestampMixin, Base):
     # Encrypted at rest — see User.otp_secret / EncryptedSecret.
     otp_secret: Mapped[str | None] = mapped_column(EncryptedSecret(255), nullable=True)
     otp_enrolled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # 30-second TOTP time step of the last code accepted at sign-in; codes
+    # from that step or earlier are refused (totp.accept_code), so each code
+    # works once.
+    otp_last_used_step: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

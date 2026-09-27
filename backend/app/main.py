@@ -38,7 +38,13 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     yield
 
 
-app = FastAPI(title="YetAnotherDmarcTool API", lifespan=lifespan)
+app = FastAPI(
+    title="YetAnotherDmarcTool API",
+    lifespan=lifespan,
+    docs_url="/docs" if settings.api_docs_enabled else None,
+    redoc_url="/redoc" if settings.api_docs_enabled else None,
+    openapi_url="/openapi.json" if settings.api_docs_enabled else None,
+)
 
 app.middleware("http")(add_security_headers)
 app.middleware("http")(enforce_csrf_header)

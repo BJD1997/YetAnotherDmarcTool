@@ -8,6 +8,7 @@ import { DATE_RANGE_PRESETS } from "../../api/overview";
 import { Stat } from "../../components/domain/shared";
 import { LoadMoreButton } from "../../components/shared/LoadMoreButton";
 import { useTlsReportRows, useTlsReportSummary, useTlsReportsBySender } from "../../hooks/useTlsReports";
+import LeftOutReportsNotice from "../../components/domain/LeftOutReportsNotice";
 
 const GROUPINGS = [
   { key: "day", label: "Day" },
@@ -70,6 +71,8 @@ export default function DomainTlsReports() {
           <h2>TLS delivery reports</h2>
         </div>
       </div>
+
+      <LeftOutReportsNotice domainId={domainId} types={["TLS-RPT"]} />
 
       <FilterBar
         filters={filters}

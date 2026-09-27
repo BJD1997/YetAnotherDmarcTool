@@ -21,6 +21,7 @@ import ssl
 
 from app.services.dns_checks.base import Finding, is_null_mx
 from app.services.dns_checks.resolver import DnsLookupError, resolve_mx
+from app.services.dns_checks.ssrf_guard import BlockedAddressError, resolve_public_address
 
 SMTP_PORT = 25
 CONNECT_TIMEOUT = 10.0
@@ -43,9 +44,15 @@ async def _read_smtp_response(reader: asyncio.StreamReader) -> tuple[int, list[s
 
 
 async def _probe_host(host: str) -> Finding:
+    # MX hosts are whatever the domain's owner publishes — including, if
+    # they like, internal addresses of the network this app runs in.
+    try:
+        address = await resolve_public_address(host, SMTP_PORT)
+    except BlockedAddressError as exc:
+        return Finding(status="error", summary=f"Not probing {host}: {exc}", subject=host)
     try:
         reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(host, SMTP_PORT), timeout=CONNECT_TIMEOUT
+            asyncio.open_connection(address, SMTP_PORT), timeout=CONNECT_TIMEOUT
         )
     except (OSError, asyncio.TimeoutError) as exc:
         return Finding(status="error", summary=f"Could not connect to {host}:{SMTP_PORT}: {exc}", subject=host)

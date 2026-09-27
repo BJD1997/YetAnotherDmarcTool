@@ -59,6 +59,12 @@ class DmarcAggregateReport(UUIDPkMixin, TimestampMixin, Base):
     # rows are kept but left out of every stat — see app/db/report_trust.py.
     sender_verified: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     sender_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # The facts the sender check (sender_auth.decide) is based on; NULL
+    # sender_origin = not checked. sender_verified is derived from these
+    # under the organization's report_sender_check setting.
+    sender_origin: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    sender_dmarc: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    sender_matches_reporter: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 

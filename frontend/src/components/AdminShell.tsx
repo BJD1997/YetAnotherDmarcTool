@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { Building2, Download, ListChecks, LogOut, Menu, X, ArrowLeft } from "lucide-react";
+import { Building2, Download, KeyRound, ListChecks, LogOut, Menu, X, ArrowLeft } from "lucide-react";
 import { api } from "../api/client";
 import { useAdminAuth } from "../auth/AdminAuthContext";
 import ThemeToggle from "./ThemeToggle";
@@ -81,6 +81,10 @@ export default function AdminShell({ children }: { children: ReactNode }) {
           <Link to="/admin/job-runs" onClick={closeMobile} className={`nav-link ${isActive("/admin/job-runs") ? "active" : ""}`}>
             <ListChecks />
             Job runs
+          </Link>
+          <Link to="/admin/sign-ins" onClick={closeMobile} className={`nav-link ${isActive("/admin/sign-ins") ? "active" : ""}`}>
+            <KeyRound />
+            Sign-ins
           </Link>
           <Link to="/admin/updates" onClick={closeMobile} className={`nav-link ${isActive("/admin/updates") ? "active" : ""}`}>
             <Download />

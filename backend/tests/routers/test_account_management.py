@@ -3,7 +3,7 @@ org-admin credential resets (/users/{id}/reset-*), and granting operator
 (admin console) access to organizations."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlparse
 
 import pyotp
@@ -20,6 +20,12 @@ from app.services.auth import session_manager
 from app.services.auth.password import hash_password
 from app.services.crypto import secrets as crypto_secrets
 from tests.conftest import login_as, login_as_platform_admin, seed_org_and_user
+
+
+def _next_code(secret: str) -> str:
+    """The next 30-second step's code: codes are single-use, and the current
+    one was already spent confirming enrollment."""
+    return pyotp.TOTP(secret).at(datetime.now() + timedelta(seconds=30))
 
 PASSWORD = "correct horse battery staple"
 NEW_PASSWORD = "an entirely new passphrase"
@@ -139,7 +145,7 @@ async def test_replace_authenticator(api):
     # Next sign-in wants a code from the NEW authenticator, not the old one.
     assert (await _password_login(client, user.email, PASSWORD)).json() == {"needs_enrollment": False}
     assert (await client.post("/api/auth/verify-otp", json={"code": pyotp.TOTP(old_secret).now()})).status_code == 401
-    assert (await client.post("/api/auth/verify-otp", json={"code": pyotp.TOTP(new_secret).now()})).status_code == 204
+    assert (await client.post("/api/auth/verify-otp", json={"code": _next_code(new_secret)})).status_code == 204
 
 
 # ---------- org-admin resets ----------

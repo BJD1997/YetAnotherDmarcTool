@@ -6,6 +6,9 @@ import { api } from "../../api/client";
 import { renderWithAppProviders } from "../../test/render";
 import DomainTlsReports from "./DomainTlsReports";
 
+// Tested on its own (LeftOutReportsNotice.test.tsx); stubbed here so its extra
+// API call doesn't interfere with these tests' request assertions.
+vi.mock("../../components/domain/LeftOutReportsNotice", () => ({ default: () => null }));
 vi.mock("../../api/client", () => ({ api: { get: vi.fn() } }));
 const getMock = vi.mocked(api.get);
 beforeEach(() => {

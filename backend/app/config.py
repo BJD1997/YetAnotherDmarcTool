@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     db_pool_size: int = 10
     db_max_overflow: int = 20
 
+    # FastAPI's interactive API docs (/docs, /redoc, /openapi.json). Off by
+    # default: on a public instance they're a free map of every endpoint and
+    # its parameters. Turn on for local development.
+    api_docs_enabled: bool = False
+
     # Sessions (Phase 1)
     session_cookie_name: str = "dmarc_session"
     platform_admin_session_cookie_name: str = "dmarc_admin_session"

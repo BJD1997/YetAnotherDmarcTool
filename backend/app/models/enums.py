@@ -35,6 +35,15 @@ class ConsentStatus(str, enum.Enum):
 # DMARC is already the enforcement mechanism at that point, so -all only
 # adds a deliverability risk (SMTP-level bounce on relayed mail before
 # DKIM/DMARC evaluation) with no security benefit. See spf.py's check().
+class ReportSenderCheck(str, enum.Enum):
+    """How strictly an organization's incoming reports are checked for
+    forgery — see app/services/ingestion/sender_auth.py's decide()."""
+
+    standard = "standard"
+    strict = "strict"
+    off = "off"
+
+
 class SpfAllQualifierMode(str, enum.Enum):
     strict = "strict"
     conditional = "conditional"
@@ -89,6 +98,9 @@ class UserRole(str, enum.Enum):
 class AuthMethod(str, enum.Enum):
     entra = "entra"
     local = "local"
+    # Only on sign_in_events: the break-glass platform admin login (never a
+    # users.auth_method value).
+    platform_admin = "platform_admin"
 
 
 class SignInResult(str, enum.Enum):

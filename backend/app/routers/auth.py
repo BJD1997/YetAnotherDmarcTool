@@ -390,7 +390,10 @@ async def verify_otp(body: VerifyOtpRequest, request: Request, db: AsyncSession 
         )
 
     code = body.code.strip()
-    if not totp.verify_code(user.otp_secret, code):
+    step = totp.accept_code(user.otp_secret, code, user.otp_last_used_step)
+    if step is not None:
+        user.otp_last_used_step = step
+    else:
         code_hash = totp.hash_recovery_code_for_lookup(code)
         recovery = await get_unused_recovery_code(db, user.id, code_hash)
         if recovery is None:
@@ -511,6 +514,7 @@ async def enroll_otp_confirm(
     now = datetime.now(timezone.utc)
     user.otp_secret = body.secret
     user.otp_enrolled_at = now
+    user.otp_last_used_step = totp.current_step(body.secret)
 
     codes = totp.generate_recovery_codes()
     for plaintext, code_hash in codes:
@@ -615,6 +619,7 @@ async def mfa_reset_confirm(
 
     user.otp_secret = body.secret
     user.otp_enrolled_at = datetime.now(timezone.utc)
+    user.otp_last_used_step = totp.current_step(body.secret)
     recovery_codes = await account_reset.replace_recovery_codes(db, user)
     await session_manager.revoke_user_sessions(
         db, user.id, keep_raw_token=request.cookies.get(settings.session_cookie_name)

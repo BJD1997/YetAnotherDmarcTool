@@ -65,7 +65,13 @@ def _mock_graph(monkeypatch, module, poison: dict, *, recipient: str = "reports@
         return list(parsed_by_message), "delta-after-run"
 
     async def _fetch_mime(*, message_id, **_kwargs):
-        return f"To: {recipient}\r\nX-Test-Id: {message_id}\r\n\r\n".encode()
+        # A genuine Google report as Exchange Online delivers it — otherwise
+        # sender verification (see sender_auth.py) would leave it out.
+        return (
+            "Authentication-Results: dmarc=pass action=none header.from=google.com\r\n"
+            "X-MS-Exchange-Organization-AuthAs: Anonymous\r\n"
+            f"To: {recipient}\r\nX-Test-Id: {message_id}\r\n\r\n"
+        ).encode()
 
     def _parse(raw_mime: bytes):
         message_id = raw_mime.decode().split("X-Test-Id: ")[1].split("\r\n")[0]

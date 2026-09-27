@@ -7,6 +7,7 @@ would force an O(n) verify loop here since we don't know in advance which
 of a user's several unused codes is being presented)."""
 
 import base64
+import datetime
 import hashlib
 import io
 import secrets
@@ -43,6 +44,31 @@ def verify_code(secret: str | None, code: str) -> bool:
     # or ahead, for ordinary clock drift between the server and the user's
     # authenticator app.
     return pyotp.TOTP(secret).verify(code, valid_window=1)
+
+
+def accept_code(secret: str | None, code: str, last_used_step: int | None) -> int | None:
+    """Sign-in check: like verify_code, but each code works only once. Returns
+    the 30-second time step the code belongs to (store it as the account's
+    last used step), or None if the code is wrong or its step — or a later
+    one — was already used. Without this, a code watched over someone's
+    shoulder or phished stays valid for its whole ~90 s window."""
+    if secret is None:
+        return None
+    totp = pyotp.TOTP(secret)
+    now = datetime.datetime.now()
+    for offset in (-1, 0, 1):
+        if pyotp.utils.strings_equal(str(code), str(totp.at(now, offset))):
+            step = totp.timecode(now) + offset
+            if last_used_step is not None and step <= last_used_step:
+                return None
+            return step
+    return None
+
+
+def current_step(secret: str) -> int:
+    """The time step of the current code — recorded at enrollment, so the
+    code used to confirm a new authenticator can't then also sign in."""
+    return pyotp.TOTP(secret).timecode(datetime.datetime.now())
 
 
 def _hash_recovery_code(code: str) -> str:

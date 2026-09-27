@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 from tests.conftest import login_as, login_as_platform_admin, seed_org_and_user
 
 
@@ -56,6 +57,12 @@ from app.models.enums import UserRole, UserStatus
 from app.models.user import User
 from app.services.auth.password import hash_password
 from app.services.crypto import secrets as crypto_secrets
+
+
+def _next_code(secret: str) -> str:
+    """The next 30-second step's code: codes are single-use, and the current
+    one was already spent confirming enrollment."""
+    return pyotp.TOTP(secret).at(datetime.now() + timedelta(seconds=30))
 
 
 @pytest.fixture(autouse=True)
@@ -165,7 +172,7 @@ async def test_full_local_login_enroll_and_verify_flow(api):
     assert second_login.status_code == 200
     assert second_login.json()["needs_enrollment"] is False
 
-    verify_response = await client.post("/api/auth/verify-otp", json={"code": pyotp.TOTP(secret).now()})
+    verify_response = await client.post("/api/auth/verify-otp", json={"code": _next_code(secret)})
     assert verify_response.status_code == 204
 
     final_me = await client.get("/api/auth/me")
@@ -197,7 +204,7 @@ async def test_enrolled_user_cannot_reenroll_with_attacker_chosen_secret(api):
     assert (await client.get("/api/auth/me")).status_code == 401
 
     # The real second factor is untouched and still works.
-    assert (await client.post("/api/auth/verify-otp", json={"code": pyotp.TOTP(real_secret).now()})).status_code == 204
+    assert (await client.post("/api/auth/verify-otp", json={"code": _next_code(real_secret)})).status_code == 204
 
 
 async def test_verify_otp_rejects_wrong_code(api):

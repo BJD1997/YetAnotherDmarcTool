@@ -133,5 +133,15 @@ def cookie_kwargs() -> dict:
     }
 
 
+async def revoke_platform_admin_sessions(db: AsyncSession, platform_admin_id, *, keep_raw_token: str | None = None) -> None:
+    """Same as revoke_user_sessions, for the break-glass account."""
+    stmt = update(PlatformAdminSession).where(
+        PlatformAdminSession.platform_admin_id == platform_admin_id, PlatformAdminSession.revoked_at.is_(None)
+    )
+    if keep_raw_token is not None:
+        stmt = stmt.where(PlatformAdminSession.session_token_hash != _hash_token(keep_raw_token))
+    await db.execute(stmt.values(revoked_at=_now()))
+
+
 def admin_cookie_max_age() -> int:
     return settings.platform_admin_session_idle_timeout_hours * 3600

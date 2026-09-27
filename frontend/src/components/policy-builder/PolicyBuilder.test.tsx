@@ -23,6 +23,7 @@ const ORG: Organization = {
   spf_all_qualifier_mode: "strict",
   hosted_mailbox_opt_in: false,
   is_demo_read_only: false,
+  report_sender_check: "standard",
   entra_consent_urls: null,
 };
 
