@@ -39,3 +39,48 @@ async def test_accepted_update_returns_normally(monkeypatch):
     _use_transport(monkeypatch, lambda request: httpx.Response(202, json={"status": "started"}))
 
     await updater_client.trigger_update("v0.1.6")
+
+
+JOB_ID = "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.App/jobs/yadt-updater"
+
+
+@pytest.fixture
+def azure(monkeypatch):
+    monkeypatch.setattr(settings, "azure_updater_job_id", JOB_ID)
+    monkeypatch.setattr(settings, "azure_update_client_id", "trigger-client-id")
+    monkeypatch.setenv("IDENTITY_ENDPOINT", "http://identity.local/msi/token")
+    monkeypatch.setenv("IDENTITY_HEADER", "identity-secret")
+
+
+async def test_azure_only_starts_the_updater_job(monkeypatch, azure):
+    """No overrides: the api's identity may start the job, not change what it
+    runs. The job reads the requested version back itself."""
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        if request.url.host == "identity.local":
+            assert request.url.params["client_id"] == "trigger-client-id"
+            assert request.headers["X-IDENTITY-HEADER"] == "identity-secret"
+            return httpx.Response(200, json={"access_token": "arm-token"})
+        assert request.headers["Authorization"] == "Bearer arm-token"
+        return httpx.Response(202, json={"name": "yadt-updater-abc"})
+
+    _use_transport(monkeypatch, handler)
+
+    await updater_client.trigger_update("v0.1.5-rc2")
+
+    arm_calls = [(r.method, r.url.path, r.content) for r in seen if r.url.host == "management.azure.com"]
+    assert arm_calls == [("POST", f"{JOB_ID}/start", b"")]
+
+
+async def test_azure_refusal_is_reported(monkeypatch, azure):
+    def handler(request):
+        if request.url.host == "identity.local":
+            return httpx.Response(200, json={"access_token": "t"})
+        return httpx.Response(403, text="AuthorizationFailed")
+
+    _use_transport(monkeypatch, handler)
+
+    with pytest.raises(updater_client.UpdaterUnavailableError, match="Azure refused to start the updater for v0.1.5-rc2 \\(403\\)"):
+        await updater_client.trigger_update("v0.1.5-rc2")

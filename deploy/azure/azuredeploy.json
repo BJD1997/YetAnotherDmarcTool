@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "8670519643616835976"
+      "templateHash": "14502834196745096464"
     }
   },
   "parameters": {
@@ -232,6 +232,8 @@
     "pgServerName": "[format('{0}-pg-{1}', variables('namePrefixLower'), variables('suffix'))]",
     "appImage": "[format('ghcr.io/bjd1997/yetanotherdmarctool:{0}', parameters('imageTag'))]",
     "resolverImage": "[format('ghcr.io/bjd1997/yetanotherdmarctool-resolver:{0}', parameters('imageTag'))]",
+    "updaterImage": "[format('ghcr.io/bjd1997/yetanotherdmarctool-updater:{0}', parameters('imageTag'))]",
+    "imageRepos": "ghcr.io/bjd1997/yetanotherdmarctool,ghcr.io/bjd1997/yetanotherdmarctool-resolver,ghcr.io/bjd1997/yetanotherdmarctool-updater",
     "deployBootstrapSecret": "[not(empty(parameters('platformAdminBootstrapPassword')))]",
     "deployEntraSsoSecret": "[and(not(empty(parameters('entraSsoClientId'))), not(empty(parameters('entraSsoClientSecret'))))]",
     "deployEntraMailSecret": "[and(not(empty(parameters('entraMailClientId'))), not(empty(parameters('entraMailClientSecret'))))]",
@@ -293,6 +295,12 @@
         "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-deploy-id', variables('namePrefixLower')))]",
         "[resourceId('Microsoft.Resources/deployments', 'environment')]"
       ]
+    },
+    {
+      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+      "apiVersion": "2023-01-31",
+      "name": "[format('{0}-update-trigger-id', variables('namePrefixLower'))]",
+      "location": "[parameters('location')]"
     },
     {
       "type": "Microsoft.Resources/deployments",
@@ -1273,8 +1281,11 @@
           "resolverImage": {
             "value": "[variables('resolverImage')]"
           },
-          "imageTag": {
-            "value": "[parameters('imageTag')]"
+          "triggerIdentityId": {
+            "value": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-update-trigger-id', variables('namePrefixLower')))]"
+          },
+          "triggerClientId": {
+            "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-update-trigger-id', variables('namePrefixLower'))), '2023-01-31').clientId]"
           },
           "publicBaseUrlOverride": {
             "value": "[parameters('publicBaseUrlOverride')]"
@@ -1323,7 +1334,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "17281077517261933064"
+              "templateHash": "15325786705245376074"
             }
           },
           "parameters": {
@@ -1361,9 +1372,6 @@
               "type": "string"
             },
             "resolverImage": {
-              "type": "string"
-            },
-            "imageTag": {
               "type": "string"
             },
             "publicBaseUrlOverride": {
@@ -1434,6 +1442,12 @@
             "deployCloudflareSecret": {
               "type": "bool",
               "defaultValue": false
+            },
+            "triggerIdentityId": {
+              "type": "string"
+            },
+            "triggerClientId": {
+              "type": "string"
             }
           },
           "variables": {
@@ -1449,9 +1463,9 @@
               }
             },
             "apiSecrets": "[concat(createArray(createObject('name', 'app-database-url', 'keyVaultUrl', format('{0}secrets/app-database-url', parameters('vaultUri')), 'identity', parameters('identityId')), createObject('name', 'fernet-key', 'keyVaultUrl', format('{0}secrets/fernet-key', parameters('vaultUri')), 'identity', parameters('identityId'))), if(parameters('deployEntraSsoSecret'), createArray(createObject('name', 'entra-sso-client-secret', 'keyVaultUrl', format('{0}secrets/entra-sso-client-secret', parameters('vaultUri')), 'identity', parameters('identityId'))), createArray()), if(parameters('deployCloudflareSecret'), createArray(createObject('name', 'cloudflare-api-token', 'keyVaultUrl', format('{0}secrets/cloudflare-api-token', parameters('vaultUri')), 'identity', parameters('identityId'))), createArray()))]",
-            "apiEnv": "[concat(createArray(createObject('name', 'DATABASE_URL', 'secretRef', 'app-database-url'), createObject('name', 'FERNET_KEY', 'secretRef', 'fernet-key'), createObject('name', 'PUBLIC_BASE_URL', 'value', variables('publicBaseUrl')), createObject('name', 'DNS_RESOLVER_HOST', 'value', '127.0.0.1'), createObject('name', 'RATE_LIMIT_BACKEND', 'value', 'postgres'), createObject('name', 'FORWARDED_ALLOW_IPS', 'value', format('100.100.0.0/16,{0}', parameters('acaSubnetPrefix'))), createObject('name', 'DEPLOYMENT_PLATFORM', 'value', 'azure-container-apps'), createObject('name', 'AZURE_RESOURCE_GROUP', 'value', resourceGroup().name), createObject('name', 'APP_VERSION', 'value', parameters('imageTag'))), if(parameters('deployEntraSsoSecret'), createArray(createObject('name', 'ENTRA_SSO_CLIENT_ID', 'value', parameters('entraSsoClientId')), createObject('name', 'ENTRA_SSO_CLIENT_SECRET', 'secretRef', 'entra-sso-client-secret'), createObject('name', 'ENTRA_SSO_AUTHORITY', 'value', parameters('entraSsoAuthority'))), createArray()), variables('hostedReportsEnv'), if(parameters('deployCloudflareSecret'), createArray(createObject('name', 'CLOUDFLARE_API_TOKEN', 'secretRef', 'cloudflare-api-token'), createObject('name', 'CLOUDFLARE_ZONE_ID', 'value', parameters('cloudflareZoneId'))), createArray()))]",
+            "apiEnv": "[concat(createArray(createObject('name', 'DATABASE_URL', 'secretRef', 'app-database-url'), createObject('name', 'FERNET_KEY', 'secretRef', 'fernet-key'), createObject('name', 'PUBLIC_BASE_URL', 'value', variables('publicBaseUrl')), createObject('name', 'DNS_RESOLVER_HOST', 'value', '127.0.0.1'), createObject('name', 'RATE_LIMIT_BACKEND', 'value', 'postgres'), createObject('name', 'FORWARDED_ALLOW_IPS', 'value', format('100.100.0.0/16,{0}', parameters('acaSubnetPrefix'))), createObject('name', 'DEPLOYMENT_PLATFORM', 'value', 'azure-container-apps'), createObject('name', 'AZURE_RESOURCE_GROUP', 'value', resourceGroup().name), createObject('name', 'AZURE_UPDATER_JOB_ID', 'value', resourceId('Microsoft.App/jobs', format('{0}-updater', parameters('namePrefix')))), createObject('name', 'AZURE_UPDATE_CLIENT_ID', 'value', parameters('triggerClientId'))), if(parameters('deployEntraSsoSecret'), createArray(createObject('name', 'ENTRA_SSO_CLIENT_ID', 'value', parameters('entraSsoClientId')), createObject('name', 'ENTRA_SSO_CLIENT_SECRET', 'secretRef', 'entra-sso-client-secret'), createObject('name', 'ENTRA_SSO_AUTHORITY', 'value', parameters('entraSsoAuthority'))), createArray()), variables('hostedReportsEnv'), if(parameters('deployCloudflareSecret'), createArray(createObject('name', 'CLOUDFLARE_API_TOKEN', 'secretRef', 'cloudflare-api-token'), createObject('name', 'CLOUDFLARE_ZONE_ID', 'value', parameters('cloudflareZoneId'))), createArray()))]",
             "workerSecrets": "[concat(createArray(createObject('name', 'app-database-url', 'keyVaultUrl', format('{0}secrets/app-database-url', parameters('vaultUri')), 'identity', parameters('identityId')), createObject('name', 'fernet-key', 'keyVaultUrl', format('{0}secrets/fernet-key', parameters('vaultUri')), 'identity', parameters('identityId')), createObject('name', 'keda-pg-connection', 'keyVaultUrl', format('{0}secrets/keda-pg-connection', parameters('vaultUri')), 'identity', parameters('identityId'))), if(parameters('deployEntraMailSecret'), createArray(createObject('name', 'entra-mail-client-secret', 'keyVaultUrl', format('{0}secrets/entra-mail-client-secret', parameters('vaultUri')), 'identity', parameters('identityId'))), createArray()))]",
-            "workerEnv": "[concat(createArray(createObject('name', 'DATABASE_URL', 'secretRef', 'app-database-url'), createObject('name', 'FERNET_KEY', 'secretRef', 'fernet-key'), createObject('name', 'DNS_RESOLVER_HOST', 'value', '127.0.0.1'), createObject('name', 'RATE_LIMIT_BACKEND', 'value', 'postgres'), createObject('name', 'APP_VERSION', 'value', parameters('imageTag'))), if(parameters('deployEntraMailSecret'), createArray(createObject('name', 'ENTRA_MAIL_CLIENT_ID', 'value', parameters('entraMailClientId')), createObject('name', 'ENTRA_MAIL_CLIENT_SECRET', 'secretRef', 'entra-mail-client-secret')), createArray()), variables('hostedReportsEnv'))]"
+            "workerEnv": "[concat(createArray(createObject('name', 'DATABASE_URL', 'secretRef', 'app-database-url'), createObject('name', 'FERNET_KEY', 'secretRef', 'fernet-key'), createObject('name', 'DNS_RESOLVER_HOST', 'value', '127.0.0.1'), createObject('name', 'RATE_LIMIT_BACKEND', 'value', 'postgres')), if(parameters('deployEntraMailSecret'), createArray(createObject('name', 'ENTRA_MAIL_CLIENT_ID', 'value', parameters('entraMailClientId')), createObject('name', 'ENTRA_MAIL_CLIENT_SECRET', 'secretRef', 'entra-mail-client-secret')), createArray()), variables('hostedReportsEnv'))]"
           },
           "resources": [
             {
@@ -1462,7 +1476,8 @@
               "identity": {
                 "type": "UserAssigned",
                 "userAssignedIdentities": {
-                  "[format('{0}', parameters('identityId'))]": {}
+                  "[format('{0}', parameters('identityId'))]": {},
+                  "[format('{0}', parameters('triggerIdentityId'))]": {}
                 }
               },
               "properties": {
@@ -1623,7 +1638,276 @@
       "dependsOn": [
         "[resourceId('Microsoft.Resources/deployments', 'environment')]",
         "[resourceId('Microsoft.Resources/deployments', 'keyvault')]",
-        "[resourceId('Microsoft.Resources/deploymentScripts', format('{0}-run-migrate', variables('namePrefixLower')))]"
+        "[resourceId('Microsoft.Resources/deploymentScripts', format('{0}-run-migrate', variables('namePrefixLower')))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-update-trigger-id', variables('namePrefixLower')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "updater",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "namePrefix": {
+            "value": "[variables('namePrefixLower')]"
+          },
+          "environmentId": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'environment'), '2025-04-01').outputs.environmentId.value]"
+          },
+          "updaterImage": {
+            "value": "[variables('updaterImage')]"
+          },
+          "imageRepos": {
+            "value": "[variables('imageRepos')]"
+          },
+          "apiUrl": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'apps'), '2025-04-01').outputs.apiUrl.value]"
+          },
+          "triggerPrincipalId": {
+            "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-update-trigger-id', variables('namePrefixLower'))), '2023-01-31').principalId]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "9434079003155314173"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string"
+            },
+            "namePrefix": {
+              "type": "string"
+            },
+            "environmentId": {
+              "type": "string"
+            },
+            "updaterImage": {
+              "type": "string",
+              "metadata": {
+                "description": "Updater image (same tag as the app)."
+              }
+            },
+            "imageRepos": {
+              "type": "string",
+              "metadata": {
+                "description": "Comma-separated image repositories the updater may move to a new tag."
+              }
+            },
+            "apiUrl": {
+              "type": "string",
+              "metadata": {
+                "description": "The api's base URL, for its version and the requested release."
+              }
+            },
+            "triggerPrincipalId": {
+              "type": "string",
+              "metadata": {
+                "description": "Principal id of the api identity allowed to start this job."
+              }
+            }
+          },
+          "variables": {
+            "jobName": "[format('{0}-updater', parameters('namePrefix'))]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+              "apiVersion": "2023-01-31",
+              "name": "[format('{0}-updater-id', parameters('namePrefix'))]",
+              "location": "[parameters('location')]"
+            },
+            {
+              "type": "Microsoft.Authorization/roleDefinitions",
+              "apiVersion": "2022-04-01",
+              "name": "[guid(resourceGroup().id, 'yadt-updater-role')]",
+              "properties": {
+                "roleName": "[format('YetAnotherDmarcTool updater ({0})', resourceGroup().name)]",
+                "description": "Moves this deployment's container apps and jobs to a new release image and runs its migrate job.",
+                "type": "CustomRole",
+                "assignableScopes": [
+                  "[resourceGroup().id]"
+                ],
+                "permissions": [
+                  {
+                    "actions": [
+                      "Microsoft.App/containerApps/read",
+                      "Microsoft.App/containerApps/write",
+                      "Microsoft.App/containerApps/*/read",
+                      "Microsoft.App/jobs/read",
+                      "Microsoft.App/jobs/write",
+                      "Microsoft.App/jobs/*/read",
+                      "Microsoft.App/jobs/start/action",
+                      "Microsoft.App/managedEnvironments/read",
+                      "Microsoft.App/managedEnvironments/join/action"
+                    ],
+                    "notActions": []
+                  }
+                ]
+              }
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "name": "[guid(resourceGroup().id, resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-updater-id', parameters('namePrefix'))), resourceId('Microsoft.Authorization/roleDefinitions', guid(resourceGroup().id, 'yadt-updater-role')))]",
+              "properties": {
+                "roleDefinitionId": "[resourceId('Microsoft.Authorization/roleDefinitions', guid(resourceGroup().id, 'yadt-updater-role'))]",
+                "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-updater-id', parameters('namePrefix'))), '2023-01-31').principalId]",
+                "principalType": "ServicePrincipal"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-updater-id', parameters('namePrefix')))]",
+                "[resourceId('Microsoft.Authorization/roleDefinitions', guid(resourceGroup().id, 'yadt-updater-role'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.App/jobs",
+              "apiVersion": "2024-03-01",
+              "name": "[variables('jobName')]",
+              "location": "[parameters('location')]",
+              "identity": {
+                "type": "UserAssigned",
+                "userAssignedIdentities": {
+                  "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-updater-id', parameters('namePrefix'))))]": {}
+                }
+              },
+              "properties": {
+                "environmentId": "[parameters('environmentId')]",
+                "workloadProfileName": "Consumption",
+                "configuration": {
+                  "triggerType": "Manual",
+                  "replicaTimeout": 3600,
+                  "replicaRetryLimit": 0,
+                  "manualTriggerConfig": {
+                    "parallelism": 1,
+                    "replicaCompletionCount": 1
+                  }
+                },
+                "template": {
+                  "containers": [
+                    {
+                      "name": "updater",
+                      "image": "[parameters('updaterImage')]",
+                      "command": [
+                        "python3",
+                        "/azure_update.py"
+                      ],
+                      "resources": {
+                        "cpu": "[json('0.25')]",
+                        "memory": "0.5Gi"
+                      },
+                      "env": [
+                        {
+                          "name": "APP_HEALTH_URL",
+                          "value": "[format('{0}/api/health', parameters('apiUrl'))]"
+                        },
+                        {
+                          "name": "UPDATE_REQUEST_URL",
+                          "value": "[format('{0}/api/update-request', parameters('apiUrl'))]"
+                        },
+                        {
+                          "name": "IMAGE_REPOS",
+                          "value": "[parameters('imageRepos')]"
+                        },
+                        {
+                          "name": "API_APP",
+                          "value": "[format('{0}-api', parameters('namePrefix'))]"
+                        },
+                        {
+                          "name": "WORKER_APP",
+                          "value": "[format('{0}-worker', parameters('namePrefix'))]"
+                        },
+                        {
+                          "name": "MIGRATE_JOB",
+                          "value": "[format('{0}-migrate', parameters('namePrefix'))]"
+                        },
+                        {
+                          "name": "UPDATER_JOB",
+                          "value": "[variables('jobName')]"
+                        },
+                        {
+                          "name": "SUBSCRIPTION_ID",
+                          "value": "[subscription().subscriptionId]"
+                        },
+                        {
+                          "name": "RESOURCE_GROUP",
+                          "value": "[resourceGroup().name]"
+                        },
+                        {
+                          "name": "AZURE_CLIENT_ID",
+                          "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-updater-id', parameters('namePrefix'))), '2023-01-31').clientId]"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-updater-id', parameters('namePrefix')))]",
+                "[resourceId('Microsoft.Authorization/roleAssignments', guid(resourceGroup().id, resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-updater-id', parameters('namePrefix'))), resourceId('Microsoft.Authorization/roleDefinitions', guid(resourceGroup().id, 'yadt-updater-role'))))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Authorization/roleDefinitions",
+              "apiVersion": "2022-04-01",
+              "name": "[guid(resourceGroup().id, 'yadt-update-trigger-role')]",
+              "properties": {
+                "roleName": "[format('YetAnotherDmarcTool update trigger ({0})', resourceGroup().name)]",
+                "description": "Starts the updater job.",
+                "type": "CustomRole",
+                "assignableScopes": [
+                  "[resourceGroup().id]"
+                ],
+                "permissions": [
+                  {
+                    "actions": [
+                      "Microsoft.App/jobs/start/action"
+                    ],
+                    "notActions": []
+                  }
+                ]
+              }
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.App/jobs', variables('jobName'))]",
+              "name": "[guid(resourceId('Microsoft.App/jobs', variables('jobName')), parameters('triggerPrincipalId'), resourceId('Microsoft.Authorization/roleDefinitions', guid(resourceGroup().id, 'yadt-update-trigger-role')))]",
+              "properties": {
+                "roleDefinitionId": "[resourceId('Microsoft.Authorization/roleDefinitions', guid(resourceGroup().id, 'yadt-update-trigger-role'))]",
+                "principalId": "[parameters('triggerPrincipalId')]",
+                "principalType": "ServicePrincipal"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Authorization/roleDefinitions', guid(resourceGroup().id, 'yadt-update-trigger-role'))]",
+                "[resourceId('Microsoft.App/jobs', variables('jobName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "updaterJobId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.App/jobs', variables('jobName'))]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'apps')]",
+        "[resourceId('Microsoft.Resources/deployments', 'environment')]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-update-trigger-id', variables('namePrefixLower')))]"
       ]
     }
   ],

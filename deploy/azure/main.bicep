@@ -172,6 +172,8 @@ var keyVaultName = take('${namePrefixLower}kv${suffix}', 24)
 var pgServerName = '${namePrefixLower}-pg-${suffix}'
 var appImage = 'ghcr.io/bjd1997/yetanotherdmarctool:${imageTag}'
 var resolverImage = 'ghcr.io/bjd1997/yetanotherdmarctool-resolver:${imageTag}'
+var updaterImage = 'ghcr.io/bjd1997/yetanotherdmarctool-updater:${imageTag}'
+var imageRepos = 'ghcr.io/bjd1997/yetanotherdmarctool,ghcr.io/bjd1997/yetanotherdmarctool-resolver,ghcr.io/bjd1997/yetanotherdmarctool-updater'
 
 var deployBootstrapSecret = !empty(platformAdminBootstrapPassword)
 var deployEntraSsoSecret = !empty(entraSsoClientId) && !empty(entraSsoClientSecret)
@@ -313,6 +315,12 @@ resource runMigrate 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
   ]
 }
 
+// The api's identity for starting the updater job (and nothing else).
+resource triggerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: '${namePrefixLower}-update-trigger-id'
+  location: location
+}
+
 module apps 'modules/apps.bicep' = {
   name: 'apps'
   params: {
@@ -324,7 +332,8 @@ module apps 'modules/apps.bicep' = {
     vaultUri: keyvault.outputs.vaultUri
     appImage: appImage
     resolverImage: resolverImage
-    imageTag: imageTag
+    triggerIdentityId: triggerIdentity.id
+    triggerClientId: triggerIdentity.properties.clientId
     publicBaseUrlOverride: publicBaseUrlOverride
     acaSubnetPrefix: tier.acaSubnetPrefix
     apiMinReplicas: tier.apiMinReplicas
@@ -345,6 +354,19 @@ module apps 'modules/apps.bicep' = {
   dependsOn: [
     runMigrate
   ]
+}
+
+module updater 'modules/updater.bicep' = {
+  name: 'updater'
+  params: {
+    location: location
+    namePrefix: namePrefixLower
+    environmentId: environment.outputs.environmentId
+    updaterImage: updaterImage
+    imageRepos: imageRepos
+    apiUrl: apps.outputs.apiUrl
+    triggerPrincipalId: triggerIdentity.properties.principalId
+  }
 }
 
 output apiUrl string = apps.outputs.apiUrl

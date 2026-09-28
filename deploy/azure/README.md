@@ -69,6 +69,11 @@ button uses.
 - **migrate job** — creates the non-owner `dmarc_app` role, runs Alembic, bootstraps
   the platform admin. A `deploymentScript` runs it during deployment, before the apps
   start.
+- **updater job** — started by **Update now** in the admin console; runs the
+  migrations, then moves the worker, api and itself to the new release. It has
+  its own managed identity with a custom role limited to this resource group's
+  container apps and jobs; the api has a second identity that may only start
+  this job. See [Updating](#updating).
 
 ## Prerequisites
 - An Azure subscription, and **Owner** (or **Contributor + User Access Administrator**) on the target resource group — the template creates **role assignments** (Key Vault access for the app identity; Contributor for the migrate deployment script).
@@ -105,12 +110,32 @@ The button deploys on the default `*.azurecontainerapps.io` domain with automati
 3. Redeploy with `publicBaseUrlOverride=https://your.domain` (or `az containerapp update --set-env-vars PUBLIC_BASE_URL=…`) so cookies/HSTS use the real URL.
 
 ### Updating
-Re-run the deployment (button or CLI) with a new `imageTag` — this updates the app
-image and the resolver sidecar image together. To update manually instead:
-`az containerapp update -n <namePrefix>-api -g <rg> --container-name api --image ghcr.io/bjd1997/yetanotherdmarctool:<tag>`
-(and the same `--container-name worker` for `-worker`); update the `resolver`
-container name the same way if you also need to move the resolver image forward on
-its own. If a release adds migrations, run the migrate job again: `az containerapp job start -n <namePrefix>-migrate -g <rg>`.
+**From the admin console:** Updates → **Update now**, the same as on Docker
+Compose. It starts the `<namePrefix>-updater` job, which runs the database
+migrations and then moves the worker, the api (with its resolver sidecar) and
+itself to the new release. The page shows the new version when it's done.
+
+How it's locked down:
+- The api's identity (`<namePrefix>-update-trigger-id`) may only **start**
+  the updater job, with no overrides.
+- The job reads the requested release back from the api and refuses anything
+  that isn't a real release tag newer than what's running.
+- The job's identity (`<namePrefix>-updater-id`) has a custom role limited to
+  this resource group's container apps and jobs: read, update, start, and read
+  job runs. No delete, no exec, no assigning identities.
+
+Creating those custom roles needs **Owner** or **User Access Administrator**
+on the resource group at deployment time. Role assignments can take a few
+minutes to apply after a fresh deployment. If the first **Update now** is
+refused, try again shortly.
+
+A failed update is reported in the updater job's run history (Azure Portal →
+`<namePrefix>-updater` → Execution history → logs). Migrations run first, so
+the app itself is only changed after they succeed.
+
+**By redeploying:** re-run the deployment (button or CLI) with a new
+`imageTag` and the same parameters as before. This also applies template
+changes, not just the new images.
 
 ## Manual deploy (instead of the button)
 ```bash

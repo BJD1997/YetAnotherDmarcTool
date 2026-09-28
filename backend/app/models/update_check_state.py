@@ -25,3 +25,8 @@ class UpdateCheckState(UUIDPkMixin, Base):
     # by default, same "stable-only unless you opt in" semantics as before,
     # just persisted here instead of requiring a .env edit + restart.
     include_prereleases: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # The release an admin asked to install. On Azure the updater job reads it
+    # back (GET /api/update-request) instead of being told directly, so the
+    # api's identity only needs to start the job — never to override what
+    # it runs.
+    requested_version: Mapped[str | None] = mapped_column(String(64), nullable=True)

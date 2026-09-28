@@ -159,6 +159,11 @@ class Settings(BaseSettings):
     # socket to give one). Set by the Azure template; unset = Docker Compose.
     deployment_platform: str | None = None  # "azure-container-apps"
     azure_resource_group: str | None = None
+    # In-app updates on Azure: the updater job to start (full resource id) and
+    # the client id of the api's managed identity allowed to start it — see
+    # updater/azure_update.py and deploy/azure/modules/updater.bicep.
+    azure_updater_job_id: str | None = None
+    azure_update_client_id: str | None = None
 
     # Worker (app/workers/scheduler.py): the Postgres advisory-lock key the
     # leader is elected on. leader_database_url is the connection the leader's
@@ -199,7 +204,11 @@ class Settings(BaseSettings):
 
     @property
     def self_update_available(self) -> bool:
-        return bool(self.updater_url and self.updater_shared_secret)
+        return bool(self.updater_url and self.updater_shared_secret) or self.azure_self_update_available
+
+    @property
+    def azure_self_update_available(self) -> bool:
+        return bool(self.azure_updater_job_id and self.azure_update_client_id)
 
     @property
     def hosted_reports_domain(self) -> str | None:

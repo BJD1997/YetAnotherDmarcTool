@@ -19,7 +19,6 @@ param vaultUri string
 
 param appImage string
 param resolverImage string
-param imageTag string
 
 @description('Override the api public URL (e.g. a custom domain). Empty = use the ACA FQDN.')
 param publicBaseUrlOverride string = ''
@@ -49,6 +48,11 @@ param hostedReportsTenantId string = ''
 param hostedReportsMailboxAddress string = ''
 param cloudflareZoneId string = ''
 param deployCloudflareSecret bool = false
+
+// In-app updates: the api's second identity may only start the updater job
+// (see updater.bicep); the job's resource id is fixed by naming.
+param triggerIdentityId string
+param triggerClientId string
 
 var hostedReportsEnv = empty(hostedReportsMailboxAddress) ? [] : [
   {
@@ -137,8 +141,8 @@ var apiEnv = concat(
       value: '100.100.0.0/16,${acaSubnetPrefix}'
     }
     {
-      // No updater sidecar on ACA; the admin console shows the redeploy
-      // command for this resource group instead of "Update now".
+      // No updater sidecar on ACA: "Update now" starts the updater job
+      // instead (updater.bicep); the redeploy command stays the fallback.
       name: 'DEPLOYMENT_PLATFORM'
       value: 'azure-container-apps'
     }
@@ -147,8 +151,12 @@ var apiEnv = concat(
       value: resourceGroup().name
     }
     {
-      name: 'APP_VERSION'
-      value: imageTag
+      name: 'AZURE_UPDATER_JOB_ID'
+      value: resourceId('Microsoft.App/jobs', '${namePrefix}-updater')
+    }
+    {
+      name: 'AZURE_UPDATE_CLIENT_ID'
+      value: triggerClientId
     }
   ],
   deployEntraSsoSecret ? [
@@ -185,6 +193,7 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
     type: 'UserAssigned'
     userAssignedIdentities: {
       '${identityId}': {}
+      '${triggerIdentityId}': {}
     }
   }
   properties: {
@@ -294,10 +303,6 @@ var workerEnv = concat(
     {
       name: 'RATE_LIMIT_BACKEND'
       value: 'postgres'
-    }
-    {
-      name: 'APP_VERSION'
-      value: imageTag
     }
   ],
   deployEntraMailSecret ? [

@@ -9,6 +9,17 @@ from app.schemas.admin_updates import UpdateSettingsPatch
 from app.services import update_check, updater_client
 
 router = APIRouter(prefix="/admin/updates", tags=["platform-admin"])
+public_router = APIRouter(tags=["updates"])
+
+
+@public_router.get("/update-request")
+async def update_request(db: AsyncSession = Depends(get_db)) -> dict:
+    """The release an admin asked to install, for the Azure updater job (see
+    updater/azure_update.py). Public on purpose: the job has no app session,
+    and the version is no secret — the job still refuses anything that isn't
+    a real release newer than what's running."""
+    state = await update_check.get_or_create_state(db)
+    return {"version": state.requested_version}
 
 
 def _status_out(state: UpdateCheckState) -> dict:
@@ -88,6 +99,8 @@ async def trigger(
     # running (or an older) version.
     if state.latest_version is None or not update_check.is_newer_version(state.latest_version, settings.app_version):
         raise HTTPException(status.HTTP_409_CONFLICT, "no newer version available to update to")
+    state.requested_version = state.latest_version
+    await db.commit()
     try:
         await updater_client.trigger_update(state.latest_version)
     except updater_client.UpdaterUnavailableError as exc:

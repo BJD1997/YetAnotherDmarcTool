@@ -72,6 +72,7 @@ api_router.include_router(action_queue.router)
 api_router.include_router(onboarding.router)
 api_router.include_router(sign_in_events.router)
 api_router.include_router(admin_updates.router)
+api_router.include_router(admin_updates.public_router)
 
 app.include_router(api_router)
 
