@@ -42,6 +42,30 @@ param deployEntraSsoSecret bool = false
 param entraMailClientId string = ''
 param deployEntraMailSecret bool = false
 
+// Optional hosted reporting mailbox (api issues the addresses, worker polls
+// the mailbox) and Cloudflare (api creates/removes the DNS authorization
+// records — the token goes to the api only).
+param hostedReportsTenantId string = ''
+param hostedReportsMailboxAddress string = ''
+param hostedReportsAddressDomain string = ''
+param cloudflareZoneId string = ''
+param deployCloudflareSecret bool = false
+
+var hostedReportsEnv = empty(hostedReportsMailboxAddress) ? [] : [
+  {
+    name: 'HOSTED_REPORTS_TENANT_ID'
+    value: hostedReportsTenantId
+  }
+  {
+    name: 'HOSTED_REPORTS_MAILBOX_ADDRESS'
+    value: hostedReportsMailboxAddress
+  }
+  {
+    name: 'HOSTED_REPORTS_ADDRESS_DOMAIN'
+    value: hostedReportsAddressDomain
+  }
+]
+
 var apiFqdn = '${namePrefix}-api.${envDefaultDomain}'
 var publicBaseUrl = empty(publicBaseUrlOverride) ? 'https://${apiFqdn}' : publicBaseUrlOverride
 
@@ -74,6 +98,13 @@ var apiSecrets = concat(
     {
       name: 'entra-sso-client-secret'
       keyVaultUrl: '${vaultUri}secrets/entra-sso-client-secret'
+      identity: identityId
+    }
+  ] : [],
+  deployCloudflareSecret ? [
+    {
+      name: 'cloudflare-api-token'
+      keyVaultUrl: '${vaultUri}secrets/cloudflare-api-token'
       identity: identityId
     }
   ] : []
@@ -127,6 +158,17 @@ var apiEnv = concat(
     {
       name: 'ENTRA_SSO_AUTHORITY'
       value: entraSsoAuthority
+    }
+  ] : [],
+  hostedReportsEnv,
+  deployCloudflareSecret ? [
+    {
+      name: 'CLOUDFLARE_API_TOKEN'
+      secretRef: 'cloudflare-api-token'
+    }
+    {
+      name: 'CLOUDFLARE_ZONE_ID'
+      value: cloudflareZoneId
     }
   ] : []
 )
@@ -262,7 +304,8 @@ var workerEnv = concat(
       name: 'ENTRA_MAIL_CLIENT_SECRET'
       secretRef: 'entra-mail-client-secret'
     }
-  ] : []
+  ] : [],
+  hostedReportsEnv
 )
 
 resource workerApp 'Microsoft.App/containerApps@2024-03-01' = {

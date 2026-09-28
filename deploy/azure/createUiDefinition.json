@@ -6,7 +6,7 @@
     "config": {
       "isWizard": false,
       "basics": {
-        "description": "Deploys YetAnotherDmarcTool on Azure Container Apps with a private (VNet-integrated) PostgreSQL Flexible Server and Key Vault. The api and worker each run a DNSSEC resolver sidecar; the worker autoscales on the background-job queue depth. A migrate job initializes the database during deployment. Pick a deployment size on the Sizing step to pre-fill network, Postgres, and replica-count sizing — every value stays individually overridable via CLI/parameters file.",
+        "description": "Deploys YetAnotherDmarcTool on Azure Container Apps with a private (VNet-integrated) PostgreSQL Flexible Server and Key Vault. The api and worker each run a DNSSEC resolver sidecar; the worker autoscales on the background-job queue depth. A migrate job initializes the database during deployment. Pick a deployment size on the Sizing step to pre-fill network, Postgres, and replica-count sizing \u2014 every value stays individually overridable via CLI/parameters file.",
         "resourceGroup": {
           "allowExisting": true
         }
@@ -114,25 +114,25 @@
             "name": "deploymentSize",
             "type": "Microsoft.Common.OptionsGroup",
             "label": "Deployment size",
-            "defaultValue": "Small — a few users: up to 2 api/worker replicas, Burstable B2s Postgres. The default.",
+            "defaultValue": "Small \u2014 a few users: up to 2 api/worker replicas, Burstable B2s Postgres. The default.",
             "toolTip": "Pre-fills network, Postgres, and replica-count sizing. Every value stays individually overridable below.",
             "constraints": {
               "required": true,
               "allowedValues": [
                 {
-                  "label": "Test — smallest footprint: single api/worker replica, Burstable B1ms Postgres. For trying it out, not real traffic.",
+                  "label": "Test \u2014 smallest footprint: single api/worker replica, Burstable B1ms Postgres. For trying it out, not real traffic.",
                   "value": "test"
                 },
                 {
-                  "label": "Small — a few users: up to 2 api/worker replicas, Burstable B2s Postgres. The default.",
+                  "label": "Small \u2014 a few users: up to 2 api/worker replicas, Burstable B2s Postgres. The default.",
                   "value": "small"
                 },
                 {
-                  "label": "Medium — a small team/MSP: up to 3 api/worker replicas, General Purpose D2ds_v4 Postgres.",
+                  "label": "Medium \u2014 a small team/MSP: up to 3 api/worker replicas, General Purpose D2ds_v4 Postgres.",
                   "value": "medium"
                 },
                 {
-                  "label": "Large — heavier load: 2-5 api replicas, up to 5 worker replicas, General Purpose D4ds_v4 Postgres.",
+                  "label": "Large \u2014 heavier load: 2-5 api replicas, up to 5 worker replicas, General Purpose D4ds_v4 Postgres.",
                   "value": "large"
                 }
               ]
@@ -143,7 +143,7 @@
             "name": "postgresHighAvailability",
             "type": "Microsoft.Common.CheckBox",
             "label": "Enable Postgres high availability (zone-redundant)",
-            "toolTip": "Adds a synchronously-replicated standby in a second Availability Zone with automatic failover. Roughly doubles Postgres compute cost. Requires a region with Availability Zone support. Not offered for Test/Small — their Burstable Postgres SKU doesn't support zone redundancy.",
+            "toolTip": "Adds a synchronously-replicated standby in a second Availability Zone with automatic failover. Roughly doubles Postgres compute cost. Requires a region with Availability Zone support. Not offered for Test/Small \u2014 their Burstable Postgres SKU doesn't support zone redundancy.",
             "visible": "[and(not(equals(steps('sizing').deploymentSize, 'test')), not(equals(steps('sizing').deploymentSize, 'small')))]"
           },
           {
@@ -253,6 +253,105 @@
             }
           }
         ]
+      },
+      {
+        "name": "hostedMailbox",
+        "label": "Hosted reporting mailbox (optional)",
+        "elements": [
+          {
+            "name": "info",
+            "type": "Microsoft.Common.InfoBox",
+            "visible": true,
+            "options": {
+              "icon": "Info",
+              "text": "One mailbox in your own Microsoft 365 tenant that gives every domain its own reporting address (mailbox+tag@domain), for organizations without a mailbox of their own. Needs the Entra Mail client from the previous step, with Mail Access consent in this tenant. Fill in all three or leave all blank."
+            }
+          },
+          {
+            "name": "hostedReportsTenantId",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Tenant ID of the mailbox",
+            "defaultValue": "",
+            "constraints": {
+              "required": false,
+              "regex": "^$|^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+              "validationMessage": "A tenant ID looks like 00000000-0000-0000-0000-000000000000."
+            }
+          },
+          {
+            "name": "hostedReportsMailboxAddress",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Mailbox address",
+            "defaultValue": "",
+            "placeholder": "reports@example.com",
+            "constraints": {
+              "required": false,
+              "regex": "^$|^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$",
+              "validationMessage": "Enter an email address."
+            }
+          },
+          {
+            "name": "hostedReportsAddressDomain",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Address domain",
+            "defaultValue": "",
+            "placeholder": "example.com",
+            "toolTip": "The domain of the hosted addresses. Must be the mailbox address's own domain: plus-addressing only works within one domain.",
+            "constraints": {
+              "required": false,
+              "validations": [
+                {
+                  "isValid": "[or(empty(steps('hostedMailbox').hostedReportsAddressDomain), equals(toLower(steps('hostedMailbox').hostedReportsAddressDomain), toLower(last(split(steps('hostedMailbox').hostedReportsMailboxAddress, '@')))))]",
+                  "message": "Must be the mailbox address's own domain."
+                },
+                {
+                  "isValid": "[or(and(empty(steps('hostedMailbox').hostedReportsTenantId), empty(steps('hostedMailbox').hostedReportsMailboxAddress), empty(steps('hostedMailbox').hostedReportsAddressDomain)), and(not(empty(steps('hostedMailbox').hostedReportsTenantId)), not(empty(steps('hostedMailbox').hostedReportsMailboxAddress)), not(empty(steps('hostedMailbox').hostedReportsAddressDomain))))]",
+                  "message": "Fill in all three fields, or leave all three blank."
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "name": "cloudflare",
+        "label": "Cloudflare (optional)",
+        "elements": [
+          {
+            "name": "info",
+            "type": "Microsoft.Common.InfoBox",
+            "visible": true,
+            "options": {
+              "icon": "Info",
+              "text": "Only with a hosted reporting mailbox, and only if the address domain's DNS is on Cloudflare. Creates the DMARC authorization record each domain using a hosted address needs, and removes it again when the domain is deleted. Without this, you add those records by hand; the app shows which. Use an API token limited to DNS edit on that one zone."
+            }
+          },
+          {
+            "name": "cloudflareZoneId",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Zone ID",
+            "defaultValue": "",
+            "constraints": {
+              "required": false,
+              "regex": "^$|^[0-9a-f]{32}$",
+              "validationMessage": "A zone ID is 32 lowercase hex characters (Cloudflare dashboard \u2192 the domain \u2192 Overview)."
+            }
+          },
+          {
+            "name": "cloudflareApiToken",
+            "type": "Microsoft.Common.PasswordBox",
+            "label": {
+              "password": "API token",
+              "confirmPassword": "Confirm"
+            },
+            "constraints": {
+              "required": false
+            },
+            "options": {
+              "hideConfirmation": true
+            }
+          }
+        ]
       }
     ],
     "outputs": {
@@ -271,6 +370,11 @@
       "entraSsoClientSecret": "[steps('entra').entraSsoClientSecret]",
       "entraMailClientId": "[steps('entra').entraMailClientId]",
       "entraMailClientSecret": "[steps('entra').entraMailClientSecret]",
+      "hostedReportsTenantId": "[steps('hostedMailbox').hostedReportsTenantId]",
+      "hostedReportsMailboxAddress": "[steps('hostedMailbox').hostedReportsMailboxAddress]",
+      "hostedReportsAddressDomain": "[steps('hostedMailbox').hostedReportsAddressDomain]",
+      "cloudflareZoneId": "[steps('cloudflare').cloudflareZoneId]",
+      "cloudflareApiToken": "[steps('cloudflare').cloudflareApiToken]",
       "publicBaseUrlOverride": "[steps('sizing').publicBaseUrlOverride]"
     }
   }

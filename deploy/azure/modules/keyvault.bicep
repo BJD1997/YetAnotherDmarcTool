@@ -36,6 +36,8 @@ param platformAdminBootstrapPassword string = ''
 param entraMailClientSecret string = ''
 @secure()
 param entraSsoClientSecret string = ''
+@secure()
+param cloudflareApiToken string = ''
 
 var kvSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6' // Key Vault Secrets User
 
@@ -177,6 +179,14 @@ resource sEntraMail 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(
   name: 'entra-mail-client-secret'
   properties: {
     value: entraMailClientSecret
+  }
+}
+
+resource sCloudflare 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(cloudflareApiToken)) {
+  parent: kv
+  name: 'cloudflare-api-token'
+  properties: {
+    value: cloudflareApiToken
   }
 }
 
