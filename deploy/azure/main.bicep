@@ -65,17 +65,15 @@ param entraMailClientSecret string = ''
 
 // --- optional hosted reporting mailbox ---
 // One shared mailbox in your own Microsoft 365 tenant that hands every domain
-// its own <mailbox>+<tag>@<domain> reporting address, for organizations with
-// no mailbox of their own. Needs the Entra Mail client above (with Mail
-// Access consent in this tenant). All three or none.
+// its own <mailbox>+<tag>@<mailbox's domain> reporting address, for
+// organizations with no mailbox of their own. Needs the Entra Mail client
+// above (with Mail Access consent in this tenant). Both or neither.
 param hostedReportsTenantId string = ''
 param hostedReportsMailboxAddress string = ''
-@description('Domain of the hosted addresses — must be the mailbox address\'s own domain.')
-param hostedReportsAddressDomain string = ''
 
 // --- optional Cloudflare (needs the hosted reporting mailbox) ---
 // Creates the DMARC authorization record each domain using a hosted address
-// needs in the address domain's Cloudflare zone, and removes it again.
+// needs in the Cloudflare zone of the mailbox's domain, and removes it again.
 @secure()
 param cloudflareApiToken string = ''
 param cloudflareZoneId string = ''
@@ -178,7 +176,7 @@ var resolverImage = 'ghcr.io/bjd1997/yetanotherdmarctool-resolver:${imageTag}'
 var deployBootstrapSecret = !empty(platformAdminBootstrapPassword)
 var deployEntraSsoSecret = !empty(entraSsoClientId) && !empty(entraSsoClientSecret)
 var deployEntraMailSecret = !empty(entraMailClientId) && !empty(entraMailClientSecret)
-var deployHostedReports = !empty(hostedReportsTenantId) && !empty(hostedReportsMailboxAddress) && !empty(hostedReportsAddressDomain)
+var deployHostedReports = !empty(hostedReportsTenantId) && !empty(hostedReportsMailboxAddress)
 var deployCloudflareSecret = deployHostedReports && !empty(cloudflareApiToken) && !empty(cloudflareZoneId)
 
 var contributorRoleId = 'b24988ac-6180-42a0-ab88-20f7382dd24c'
@@ -340,7 +338,6 @@ module apps 'modules/apps.bicep' = {
     deployEntraMailSecret: deployEntraMailSecret
     hostedReportsTenantId: deployHostedReports ? hostedReportsTenantId : ''
     hostedReportsMailboxAddress: deployHostedReports ? hostedReportsMailboxAddress : ''
-    hostedReportsAddressDomain: deployHostedReports ? hostedReportsAddressDomain : ''
     cloudflareZoneId: deployCloudflareSecret ? cloudflareZoneId : ''
     deployCloudflareSecret: deployCloudflareSecret
   }

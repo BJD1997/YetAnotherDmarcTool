@@ -39,7 +39,7 @@ def _manual_fallback_detail(client_domain: str, record_name: str, hosted_domain:
 
 
 async def ensure_authorization_record(client_domain: str) -> ProvisionResult:
-    hosted_domain = settings.hosted_reports_address_domain
+    hosted_domain = settings.hosted_reports_domain
     if not hosted_domain:
         return ProvisionResult(status="unconfigured", detail=None)
 
@@ -96,7 +96,7 @@ async def remove_authorization_record(client_domain: str) -> ProvisionResult:
     address for `client_domain` any more — otherwise the operator's zone
     keeps authorizing (and the hosted mailbox keeps receiving) reports for
     domains nobody tracks here."""
-    hosted_domain = settings.hosted_reports_address_domain
+    hosted_domain = settings.hosted_reports_domain
     if not hosted_domain or not settings.cloudflare_api_token or not settings.cloudflare_zone_id:
         return ProvisionResult(status="unconfigured", detail=None)
 

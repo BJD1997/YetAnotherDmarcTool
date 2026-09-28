@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "7625016681687591423"
+      "templateHash": "5259645336212868892"
     }
   },
   "parameters": {
@@ -116,13 +116,6 @@
     "hostedReportsMailboxAddress": {
       "type": "string",
       "defaultValue": ""
-    },
-    "hostedReportsAddressDomain": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Domain of the hosted addresses — must be the mailbox address's own domain."
-      }
     },
     "cloudflareApiToken": {
       "type": "securestring",
@@ -242,7 +235,7 @@
     "deployBootstrapSecret": "[not(empty(parameters('platformAdminBootstrapPassword')))]",
     "deployEntraSsoSecret": "[and(not(empty(parameters('entraSsoClientId'))), not(empty(parameters('entraSsoClientSecret'))))]",
     "deployEntraMailSecret": "[and(not(empty(parameters('entraMailClientId'))), not(empty(parameters('entraMailClientSecret'))))]",
-    "deployHostedReports": "[and(and(not(empty(parameters('hostedReportsTenantId'))), not(empty(parameters('hostedReportsMailboxAddress')))), not(empty(parameters('hostedReportsAddressDomain'))))]",
+    "deployHostedReports": "[and(not(empty(parameters('hostedReportsTenantId'))), not(empty(parameters('hostedReportsMailboxAddress'))))]",
     "deployCloudflareSecret": "[and(and(variables('deployHostedReports'), not(empty(parameters('cloudflareApiToken')))), not(empty(parameters('cloudflareZoneId'))))]",
     "contributorRoleId": "b24988ac-6180-42a0-ab88-20f7382dd24c"
   },
@@ -1318,7 +1311,6 @@
           },
           "hostedReportsTenantId": "[if(variables('deployHostedReports'), createObject('value', parameters('hostedReportsTenantId')), createObject('value', ''))]",
           "hostedReportsMailboxAddress": "[if(variables('deployHostedReports'), createObject('value', parameters('hostedReportsMailboxAddress')), createObject('value', ''))]",
-          "hostedReportsAddressDomain": "[if(variables('deployHostedReports'), createObject('value', parameters('hostedReportsAddressDomain')), createObject('value', ''))]",
           "cloudflareZoneId": "[if(variables('deployCloudflareSecret'), createObject('value', parameters('cloudflareZoneId')), createObject('value', ''))]",
           "deployCloudflareSecret": {
             "value": "[variables('deployCloudflareSecret')]"
@@ -1331,7 +1323,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "12375632097533379300"
+              "templateHash": "958876831121766152"
             }
           },
           "parameters": {
@@ -1435,10 +1427,6 @@
               "type": "string",
               "defaultValue": ""
             },
-            "hostedReportsAddressDomain": {
-              "type": "string",
-              "defaultValue": ""
-            },
             "cloudflareZoneId": {
               "type": "string",
               "defaultValue": ""
@@ -1449,7 +1437,7 @@
             }
           },
           "variables": {
-            "hostedReportsEnv": "[if(empty(parameters('hostedReportsMailboxAddress')), createArray(), createArray(createObject('name', 'HOSTED_REPORTS_TENANT_ID', 'value', parameters('hostedReportsTenantId')), createObject('name', 'HOSTED_REPORTS_MAILBOX_ADDRESS', 'value', parameters('hostedReportsMailboxAddress')), createObject('name', 'HOSTED_REPORTS_ADDRESS_DOMAIN', 'value', parameters('hostedReportsAddressDomain'))))]",
+            "hostedReportsEnv": "[if(empty(parameters('hostedReportsMailboxAddress')), createArray(), createArray(createObject('name', 'HOSTED_REPORTS_TENANT_ID', 'value', parameters('hostedReportsTenantId')), createObject('name', 'HOSTED_REPORTS_MAILBOX_ADDRESS', 'value', parameters('hostedReportsMailboxAddress'))))]",
             "apiFqdn": "[format('{0}-api.{1}', parameters('namePrefix'), parameters('envDefaultDomain'))]",
             "publicBaseUrl": "[if(empty(parameters('publicBaseUrlOverride')), format('https://{0}', variables('apiFqdn')), parameters('publicBaseUrlOverride'))]",
             "resolverContainer": {

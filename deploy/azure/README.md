@@ -87,7 +87,7 @@ button uses.
 | `fernetKey` | yes | Encrypts TOTP secrets/credentials at rest. |
 | `platformAdminBootstrapEmail` / `…Password` | recommended | First platform-admin login, created if none exists. |
 | `entra*` | optional | Entra SSO (api) and/or Graph mailbox ingestion (worker). Leave blank for local auth + DNS-checks-only. |
-| `hostedReportsTenantId` / `hostedReportsMailboxAddress` / `hostedReportsAddressDomain` | optional | One mailbox in your own Microsoft 365 tenant that gives each domain its own `mailbox+tag@domain` reporting address. Needs the Entra Mail client. The address domain must be the mailbox's own domain. All three or none. |
+| `hostedReportsTenantId` / `hostedReportsMailboxAddress` | optional | One mailbox in your own Microsoft 365 tenant that gives each domain its own `mailbox+tag@<mailbox's domain>` reporting address. Needs the Entra Mail client. Both or neither. |
 | `cloudflareZoneId` / `cloudflareApiToken` | optional | Needs the hosted mailbox. Creates and removes the DMARC authorization record for each hosted address in that domain's Cloudflare zone. Without it, you add those records by hand. Use a token limited to DNS edit on that zone. |
 | `publicBaseUrlOverride` | optional | A custom domain URL; leave blank to use the default ACA URL. |
 | `postgresSkuNameOverride` / `postgresSkuTierOverride` / `postgresStorageGBOverride` | optional | Override the tier-derived Postgres SKU/storage. Empty/`0` = use the `deploymentSize` default. |

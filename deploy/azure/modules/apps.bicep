@@ -47,7 +47,6 @@ param deployEntraMailSecret bool = false
 // records — the token goes to the api only).
 param hostedReportsTenantId string = ''
 param hostedReportsMailboxAddress string = ''
-param hostedReportsAddressDomain string = ''
 param cloudflareZoneId string = ''
 param deployCloudflareSecret bool = false
 
@@ -59,10 +58,6 @@ var hostedReportsEnv = empty(hostedReportsMailboxAddress) ? [] : [
   {
     name: 'HOSTED_REPORTS_MAILBOX_ADDRESS'
     value: hostedReportsMailboxAddress
-  }
-  {
-    name: 'HOSTED_REPORTS_ADDRESS_DOMAIN'
-    value: hostedReportsAddressDomain
   }
 ]
 

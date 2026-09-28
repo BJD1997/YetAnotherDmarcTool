@@ -65,19 +65,16 @@ class Settings(BaseSettings):
     # until both are configured (see app/workers/scheduler.py).
     hosted_reports_tenant_id: str | None = None
     hosted_reports_mailbox_address: str | None = None
-    # The domain new addresses are generated under — MUST be the same domain
-    # as hosted_reports_mailbox_address (e.g. both "example.com"), not
-    # just a separately-configurable value: plus-addressing only resolves
-    # <local>+<tag>@domain to <local>@domain on that exact domain, there's no
-    # cross-domain routing. A domain-wide catch-all would relax this, but
-    # isn't available on every provider (e.g. Exchange Online has none) —
-    # see the comment in app/routers/domains.py's hosted-report-address
-    # generation for the full reasoning.
+    # Optional, and normally left unset: the domain new addresses are
+    # generated under defaults to the mailbox address's own domain — which it
+    # has to be anyway, since plus-addressing only delivers <local>+<tag>@domain
+    # to <local>@domain on that same domain. Use hosted_reports_domain, not
+    # this field directly.
     hosted_reports_address_domain: str | None = None
 
-    # Cloudflare API credentials for the zone hosting hosted_reports_address_domain
+    # Cloudflare API credentials for the zone hosting hosted_reports_domain
     # — used to auto-create the RFC 7489 §7.1 authorization record
-    # (<client-domain>._report._dmarc.<hosted_reports_address_domain>) each
+    # (<client-domain>._report._dmarc.<hosted_reports_domain>) each
     # client domain needs before receivers will honor rua= pointing at a
     # hosted address. See app/services/cloudflare/dns_provisioner.py.
     cloudflare_api_token: str | None = None
@@ -194,6 +191,16 @@ class Settings(BaseSettings):
     @property
     def entra_sso_redirect_uri(self) -> str:
         return f"{self.public_base_url}/api/auth/callback"
+
+    @property
+    def hosted_reports_domain(self) -> str | None:
+        """Domain of the hosted reporting addresses: HOSTED_REPORTS_ADDRESS_DOMAIN
+        if set, otherwise the hosted mailbox's own domain."""
+        if self.hosted_reports_address_domain:
+            return self.hosted_reports_address_domain.strip().lower()
+        if self.hosted_reports_mailbox_address and "@" in self.hosted_reports_mailbox_address:
+            return self.hosted_reports_mailbox_address.rpartition("@")[2].strip().lower() or None
+        return None
 
 
 settings = Settings()

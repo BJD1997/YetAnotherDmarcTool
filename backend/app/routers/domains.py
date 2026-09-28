@@ -319,7 +319,7 @@ async def get_or_create_hosted_report_address(
     if not _hosted_mailbox_available(org):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "hosted mailbox isn't enabled for your organization — see Settings")
 
-    if not settings.hosted_reports_address_domain or not settings.hosted_reports_mailbox_address:
+    if not settings.hosted_reports_domain or not settings.hosted_reports_mailbox_address:
         raise HTTPException(status.HTTP_409_CONFLICT, "hosted reporting addresses aren't configured on this instance yet")
 
     if domain.hosted_report_address is None:
@@ -330,11 +330,10 @@ async def get_or_create_hosted_report_address(
         # never resolves anywhere without a domain-wide catch-all, which
         # isn't always available (see hosted_reports_poll_job.py, which
         # only ever reads hosted_reports_mailbox_address's own inbox). So
-        # the local part before "+" must be that mailbox's own name —
-        # hosted_reports_address_domain therefore has to be the same domain
-        # as hosted_reports_mailbox_address for this to actually deliver.
+        # the local part before "+" must be that mailbox's own name, on the
+        # mailbox's own domain (settings.hosted_reports_domain).
         mailbox_local_part = settings.hosted_reports_mailbox_address.split("@", 1)[0]
-        domain.hosted_report_address = f"{mailbox_local_part}+{secrets.token_hex(6)}@{settings.hosted_reports_address_domain}"
+        domain.hosted_report_address = f"{mailbox_local_part}+{secrets.token_hex(6)}@{settings.hosted_reports_domain}"
         await db.flush()
         await db.refresh(domain)
         await db.commit()

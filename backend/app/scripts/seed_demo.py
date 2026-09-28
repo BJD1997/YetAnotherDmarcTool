@@ -116,11 +116,11 @@ async def main() -> None:
             await db.commit()
             logger.info("set spf_all_qualifier_mode=conditional for demo org")
 
-        if settings.hosted_reports_mailbox_address and settings.hosted_reports_address_domain:
+        if settings.hosted_reports_mailbox_address and settings.hosted_reports_domain:
             domain = await get_domain_by_org_and_name(db, org.id, DEMO_DOMAIN)
             if domain is not None and domain.hosted_report_address is None:
                 mailbox_local_part = settings.hosted_reports_mailbox_address.split("@", 1)[0]
-                domain.hosted_report_address = f"{mailbox_local_part}+{secrets.token_hex(6)}@{settings.hosted_reports_address_domain}"
+                domain.hosted_report_address = f"{mailbox_local_part}+{secrets.token_hex(6)}@{settings.hosted_reports_domain}"
                 await db.commit()
                 logger.info("generated hosted_report_address %s for demo domain", domain.hosted_report_address)
 

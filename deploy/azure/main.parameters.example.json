@@ -38,9 +38,6 @@
     "hostedReportsMailboxAddress": {
       "value": ""
     },
-    "hostedReportsAddressDomain": {
-      "value": ""
-    },
     "cloudflareZoneId": {
       "value": ""
     },

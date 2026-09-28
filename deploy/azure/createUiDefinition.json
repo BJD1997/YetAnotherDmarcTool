@@ -264,7 +264,7 @@
             "visible": true,
             "options": {
               "icon": "Info",
-              "text": "One mailbox in your own Microsoft 365 tenant that gives every domain its own reporting address (mailbox+tag@domain), for organizations without a mailbox of their own. Needs the Entra Mail client from the previous step, with Mail Access consent in this tenant. Fill in all three or leave all blank."
+              "text": "One mailbox in your own Microsoft 365 tenant that gives every domain its own reporting address (mailbox+tag@the mailbox's domain), for organizations without a mailbox of their own. Needs the Entra Mail client from the previous step, with Mail Access consent in this tenant. Fill in both or leave both blank."
             }
           },
           {
@@ -287,29 +287,15 @@
             "constraints": {
               "required": false,
               "regex": "^$|^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$",
-              "validationMessage": "Enter an email address."
-            }
-          },
-          {
-            "name": "hostedReportsAddressDomain",
-            "type": "Microsoft.Common.TextBox",
-            "label": "Address domain",
-            "defaultValue": "",
-            "placeholder": "example.com",
-            "toolTip": "The domain of the hosted addresses. Must be the mailbox address's own domain: plus-addressing only works within one domain.",
-            "constraints": {
-              "required": false,
+              "validationMessage": "Enter an email address.",
               "validations": [
                 {
-                  "isValid": "[or(empty(steps('hostedMailbox').hostedReportsAddressDomain), equals(toLower(steps('hostedMailbox').hostedReportsAddressDomain), toLower(last(split(steps('hostedMailbox').hostedReportsMailboxAddress, '@')))))]",
-                  "message": "Must be the mailbox address's own domain."
-                },
-                {
-                  "isValid": "[or(and(empty(steps('hostedMailbox').hostedReportsTenantId), empty(steps('hostedMailbox').hostedReportsMailboxAddress), empty(steps('hostedMailbox').hostedReportsAddressDomain)), and(not(empty(steps('hostedMailbox').hostedReportsTenantId)), not(empty(steps('hostedMailbox').hostedReportsMailboxAddress)), not(empty(steps('hostedMailbox').hostedReportsAddressDomain))))]",
-                  "message": "Fill in all three fields, or leave all three blank."
+                  "isValid": "[equals(empty(steps('hostedMailbox').hostedReportsTenantId), empty(steps('hostedMailbox').hostedReportsMailboxAddress))]",
+                  "message": "Fill in both the tenant ID and the mailbox address, or leave both blank."
                 }
               ]
-            }
+            },
+            "toolTip": "Reporting addresses use this mailbox's name and domain, for example reports+a1b2c3@example.com."
           }
         ]
       },
@@ -323,7 +309,7 @@
             "visible": true,
             "options": {
               "icon": "Info",
-              "text": "Only with a hosted reporting mailbox, and only if the address domain's DNS is on Cloudflare. Creates the DMARC authorization record each domain using a hosted address needs, and removes it again when the domain is deleted. Without this, you add those records by hand; the app shows which. Use an API token limited to DNS edit on that one zone."
+              "text": "Only with a hosted reporting mailbox, and only if the mailbox's domain has its DNS on Cloudflare. Creates the DMARC authorization record each domain using a hosted address needs, and removes it again when the domain is deleted. Without this, you add those records by hand; the app shows which. Use an API token limited to DNS edit on that one zone."
             }
           },
           {
@@ -372,7 +358,6 @@
       "entraMailClientSecret": "[steps('entra').entraMailClientSecret]",
       "hostedReportsTenantId": "[steps('hostedMailbox').hostedReportsTenantId]",
       "hostedReportsMailboxAddress": "[steps('hostedMailbox').hostedReportsMailboxAddress]",
-      "hostedReportsAddressDomain": "[steps('hostedMailbox').hostedReportsAddressDomain]",
       "cloudflareZoneId": "[steps('cloudflare').cloudflareZoneId]",
       "cloudflareApiToken": "[steps('cloudflare').cloudflareApiToken]",
       "publicBaseUrlOverride": "[steps('sizing').publicBaseUrlOverride]"
