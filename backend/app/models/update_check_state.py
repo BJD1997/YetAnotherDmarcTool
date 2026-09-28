@@ -30,3 +30,7 @@ class UpdateCheckState(UUIDPkMixin, Base):
     # api's identity only needs to start the job — never to override what
     # it runs.
     requested_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # True when the request is a rehearsal: the full Azure update run on the
+    # version already running, to test permissions and steps without
+    # changing anything (POST /admin/updates/rehearse).
+    requested_rehearsal: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

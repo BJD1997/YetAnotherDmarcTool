@@ -19,7 +19,7 @@ async def update_request(db: AsyncSession = Depends(get_db)) -> dict:
     and the version is no secret — the job still refuses anything that isn't
     a real release newer than what's running."""
     state = await update_check.get_or_create_state(db)
-    return {"version": state.requested_version}
+    return {"version": state.requested_version, "rehearsal": state.requested_rehearsal}
 
 
 def _status_out(state: UpdateCheckState) -> dict:
@@ -41,6 +41,8 @@ def _status_out(state: UpdateCheckState) -> dict:
         # False: no updater sidecar here (Azure, Portainer) — the console shows
         # how this deployment updates instead of an "Update now" button.
         "self_update_available": settings.self_update_available,
+        # Azure only: rehearse the whole update on the running version.
+        "rehearsal_available": settings.azure_self_update_available and not dev_build,
         "deployment_platform": settings.deployment_platform,
         "azure_resource_group": settings.azure_resource_group,
     }
@@ -100,9 +102,33 @@ async def trigger(
     if state.latest_version is None or not update_check.is_newer_version(state.latest_version, settings.app_version):
         raise HTTPException(status.HTTP_409_CONFLICT, "no newer version available to update to")
     state.requested_version = state.latest_version
+    state.requested_rehearsal = False
     await db.commit()
     try:
         await updater_client.trigger_update(state.latest_version)
     except updater_client.UpdaterUnavailableError as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
     return {"status": "update triggered", "target_version": state.latest_version}
+
+
+@router.post("/rehearse", status_code=status.HTTP_202_ACCEPTED)
+async def rehearse(
+    db: AsyncSession = Depends(get_db), _admin: AdminPrincipal = Depends(get_current_platform_admin)
+) -> dict:
+    """Runs the complete Azure update — migrations, worker, api, updater — on
+    the version already running, so permissions and steps can be tested
+    before a real update exists. The job refuses a rehearsal for any version
+    other than the running one."""
+    if not settings.azure_self_update_available:
+        raise HTTPException(status.HTTP_409_CONFLICT, "a test update is only available on Azure deployments")
+    if update_check.is_dev_build(settings.app_version):
+        raise HTTPException(status.HTTP_409_CONFLICT, "running a development build — nothing to rehearse")
+    state = await update_check.get_or_create_state(db)
+    state.requested_version = settings.app_version
+    state.requested_rehearsal = True
+    await db.commit()
+    try:
+        await updater_client.trigger_update(settings.app_version)
+    except updater_client.UpdaterUnavailableError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    return {"status": "test update started", "target_version": settings.app_version}

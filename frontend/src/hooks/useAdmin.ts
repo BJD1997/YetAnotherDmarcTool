@@ -59,6 +59,8 @@ export interface UpdateStatus {
   is_dev_build: boolean;
   // No updater sidecar (Azure, Portainer): show how to update instead.
   self_update_available: boolean;
+  // Azure: run the whole update on the running version as a test.
+  rehearsal_available: boolean;
   deployment_platform: string | null;
   azure_resource_group: string | null;
 }
@@ -223,5 +225,6 @@ export function useAdminUpdateActions() {
     setPrereleases,
     checkNow: async () => { await api.post("/admin/updates/check-now"); await invalidate(); },
     triggerUpdate: () => api.post("/admin/updates/trigger"),
+    rehearse: () => api.post("/admin/updates/rehearse"),
   };
 }

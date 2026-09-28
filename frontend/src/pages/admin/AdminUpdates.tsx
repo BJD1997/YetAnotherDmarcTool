@@ -111,6 +111,8 @@ export default function AdminUpdates() {
         </label>
       </div>
 
+      {status.rehearsal_available && <TestUpdateSection resourceGroup={status.azure_resource_group} />}
+
       {status.update_available && (
         <div className="card" style={{ marginTop: "1rem" }}>
           <h3 className="section-title">
@@ -210,6 +212,49 @@ function ManualUpdateSteps({ status }: { status: UpdateStatus }) {
           On Portainer: change IMAGE_TAG to {version} in the stack's environment variables and redeploy the stack.
         </p>
       )}
+    </div>
+  );
+}
+
+
+// Azure: runs every update step on the version already running, so the
+// updater's Azure permissions can be checked before a real update exists.
+function TestUpdateSection({ resourceGroup }: { resourceGroup: string | null }) {
+  const { rehearse } = useAdminUpdateActions();
+  const [state, setState] = useState<"idle" | "starting" | "started">("idle");
+  const [error, setError] = useState<string | null>(null);
+
+  async function start() {
+    setState("starting");
+    setError(null);
+    try {
+      await rehearse();
+      setState("started");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "couldn't start the test update");
+      setState("idle");
+    }
+  }
+
+  return (
+    <div className="card" style={{ marginTop: "1rem" }}>
+      <h3 className="section-title">Test the updater</h3>
+      <p className="section-hint">
+        Runs a complete update on the version you're already running: database migrations, worker, api and the
+        updater itself. Nothing changes, but every step and Azure permission a real update needs is used. The app
+        restarts briefly.
+      </p>
+      {state === "started" ? (
+        <div className="alert alert--good" style={{ margin: 0 }}>
+          Test update started. It takes a few minutes. The result is in the Azure portal: {resourceGroup ?? "your resource group"} →
+          the updater job → Execution history.
+        </div>
+      ) : (
+        <button className="btn btn--secondary btn--sm" onClick={start} disabled={state === "starting"}>
+          {state === "starting" ? "Starting…" : "Run test update"}
+        </button>
+      )}
+      {error && <div className="alert alert--critical" style={{ marginTop: "0.5rem", marginBottom: 0 }}>{error}</div>}
     </div>
   );
 }

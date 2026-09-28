@@ -134,7 +134,7 @@ def test_run_job_waits_for_success_and_reports_failure(monkeypatch):
 
 def test_reads_the_requested_version_from_the_app(monkeypatch):
     _running(monkeypatch, "v0.1.5-rc1")
-    monkeypatch.setattr(azure_update, "requested_version", lambda url: "v0.1.5-rc2" if url.endswith("/api/update-request") else "")
+    monkeypatch.setattr(azure_update, "requested_update", lambda url: ("v0.1.5-rc2", False) if url.endswith("/api/update-request") else ("", False))
     arm = FakeArm()
 
     update({k: v for k, v in ENV.items() if k != "TARGET_VERSION"}, arm)
@@ -144,9 +144,41 @@ def test_reads_the_requested_version_from_the_app(monkeypatch):
 
 def test_no_request_means_no_update(monkeypatch):
     _running(monkeypatch, "v0.1.5-rc1")
-    monkeypatch.setattr(azure_update, "requested_version", lambda _url: "")
+    monkeypatch.setattr(azure_update, "requested_update", lambda _url: ("", False))
     arm = FakeArm()
 
     with pytest.raises(UpdateError, match="refusing update"):
+        update({k: v for k, v in ENV.items() if k != "TARGET_VERSION"}, arm)
+    assert arm.calls == []
+
+
+def test_rehearsal_runs_every_step_on_the_running_version(monkeypatch):
+    _running(monkeypatch, "v0.1.5-rc2")
+    monkeypatch.setattr(azure_update, "requested_update", lambda _url: ("v0.1.5-rc2", True))
+    arm = FakeArm()
+
+    update({k: v for k, v in ENV.items() if k != "TARGET_VERSION"}, arm)
+
+    assert arm.calls == [
+        ("retag", "jobs/yadt-migrate", "v0.1.5-rc2"),
+        ("run", "yadt-migrate"),
+        ("retag", "containerApps/yadt-worker", "v0.1.5-rc2"),
+        ("retag", "containerApps/yadt-api", "v0.1.5-rc2"),
+        ("retag", "jobs/yadt-updater", "v0.1.5-rc2"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("requested", "running"),
+    [("v0.1.5-rc3", "v0.1.5-rc2"), ("v0.1.5-rc1", "v0.1.5-rc2"), ("latest", "latest"), ("v0.1.5-rc2", None)],
+)
+def test_rehearsal_cannot_switch_versions(monkeypatch, requested, running):
+    """A rehearsal of anything but the exact running release is refused, so
+    it can't be used to install (or downgrade to) another version."""
+    _running(monkeypatch, running)
+    monkeypatch.setattr(azure_update, "requested_update", lambda _url: (requested, True))
+    arm = FakeArm()
+
+    with pytest.raises(UpdateError, match="refusing test update"):
         update({k: v for k, v in ENV.items() if k != "TARGET_VERSION"}, arm)
     assert arm.calls == []

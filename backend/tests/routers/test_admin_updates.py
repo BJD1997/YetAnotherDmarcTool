@@ -53,9 +53,10 @@ async def test_triggering_records_the_requested_version_for_the_updater(api, mon
     async with owner_factory() as db:
         state = await update_check.get_or_create_state(db)
         state.requested_version = None
+        state.requested_rehearsal = False
         state.latest_version = "v0.1.5-rc2"
         await db.commit()
-    assert (await client.get("/api/update-request")).json() == {"version": None}
+    assert (await client.get("/api/update-request")).json() == {"version": None, "rehearsal": False}
 
     monkeypatch.setattr(settings, "app_version", "v0.1.5-rc1")
     triggered = []
@@ -69,4 +70,28 @@ async def test_triggering_records_the_requested_version_for_the_updater(api, mon
     assert triggered == ["v0.1.5-rc2"]
     # Readable without a session — the Azure updater job has none.
     client.cookies.clear()
-    assert (await client.get("/api/update-request")).json() == {"version": "v0.1.5-rc2"}
+    assert (await client.get("/api/update-request")).json() == {"version": "v0.1.5-rc2", "rehearsal": False}
+
+
+async def test_test_update_rehearses_the_running_version_on_azure(api, monkeypatch):
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+    monkeypatch.setattr(settings, "app_version", "v0.1.5-rc3")
+    triggered = []
+
+    async def fake_trigger(version):
+        triggered.append(version)
+
+    monkeypatch.setattr(updater_client, "trigger_update", fake_trigger)
+
+    # Not on Azure: refused.
+    monkeypatch.setattr(settings, "azure_updater_job_id", None)
+    assert (await client.post("/api/admin/updates/rehearse")).status_code == 409
+    assert (await client.get("/api/admin/updates")).json()["rehearsal_available"] is False
+
+    monkeypatch.setattr(settings, "azure_updater_job_id", "/subscriptions/s/resourceGroups/rg/providers/Microsoft.App/jobs/yadt-updater")
+    monkeypatch.setattr(settings, "azure_update_client_id", "trigger-client")
+    assert (await client.get("/api/admin/updates")).json()["rehearsal_available"] is True
+    assert (await client.post("/api/admin/updates/rehearse")).status_code == 202
+    assert triggered == ["v0.1.5-rc3"]
+    assert (await client.get("/api/update-request")).json() == {"version": "v0.1.5-rc3", "rehearsal": True}

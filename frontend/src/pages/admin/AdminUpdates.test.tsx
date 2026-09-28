@@ -5,19 +5,21 @@ import { renderWithAppProviders } from "../../test/render";
 import AdminUpdates from "./AdminUpdates";
 
 const status = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
+const actions = vi.hoisted(() => ({ rehearse: vi.fn() }));
 vi.mock("../../hooks/useAdmin", () => ({
   useAdminUpdates: () => ({ data: status.value, isLoading: false }),
   useAdminUpdateActions: () => ({
     setPrereleases: { mutate: vi.fn() },
     checkNow: { mutate: vi.fn(), mutateAsync: vi.fn() },
     triggerUpdate: { mutate: vi.fn(), mutateAsync: vi.fn() },
+    rehearse: actions.rehearse,
   }),
 }));
 
 const BASE = {
   running_version: "v0.1.5-beta14", latest_version: "v0.1.5-rc1", latest_release_url: null,
   latest_release_notes: "notes", latest_published_at: null, checked_at: null, check_error: null,
-  include_prereleases: true, update_available: true, is_dev_build: false,
+  include_prereleases: true, update_available: true, is_dev_build: false, rehearsal_available: false,
 };
 
 describe("AdminUpdates", () => {
@@ -46,4 +48,26 @@ describe("AdminUpdates", () => {
 
     expect(screen.getByRole("button", { name: "Update now" })).toBeInTheDocument();
   });
+
+  it("offers a test update on Azure and says where to see the result", async () => {
+    actions.rehearse.mockResolvedValueOnce({});
+    status.value = {
+      ...BASE, update_available: false, self_update_available: true, rehearsal_available: true,
+      deployment_platform: "azure-container-apps", azure_resource_group: "rg-yadt",
+    };
+    renderWithAppProviders(<AdminUpdates />);
+
+    screen.getByRole("button", { name: "Run test update" }).click();
+
+    expect(await screen.findByText(/Test update started/)).toHaveTextContent("rg-yadt");
+    expect(actions.rehearse).toHaveBeenCalledOnce();
+  });
+
+  it("doesn't offer a test update elsewhere", () => {
+    status.value = { ...BASE, self_update_available: true, deployment_platform: null, azure_resource_group: null };
+    renderWithAppProviders(<AdminUpdates />);
+
+    expect(screen.queryByRole("button", { name: "Run test update" })).not.toBeInTheDocument();
+  });
 });
+

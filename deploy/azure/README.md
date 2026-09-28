@@ -124,6 +124,10 @@ How it's locked down:
   this resource group's container apps and jobs: read, update, start, and read
   job runs. No delete, no exec, no assigning identities.
 
+**Test the updater** (same page, Azure only) runs every one of those steps on
+the version you already run, so you can check the permissions before a real
+update exists. Nothing changes; the app restarts briefly.
+
 Creating those custom roles needs **Owner** or **User Access Administrator**
 on the resource group at deployment time. Role assignments can take a few
 minutes to apply after a fresh deployment. If the first **Update now** is

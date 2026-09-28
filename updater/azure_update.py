@@ -22,7 +22,7 @@ import time
 import urllib.error
 import urllib.request
 
-from server import check_requested_version
+from server import _parse_version, check_requested_version
 
 ARM = "https://management.azure.com"
 API_VERSION = "2024-03-01"
@@ -133,23 +133,40 @@ def running_version(health_url: str) -> str | None:
         return None
 
 
-def requested_version(request_url: str) -> str:
+def requested_update(request_url: str) -> tuple[str, bool]:
+    """(version, rehearsal) as the admin requested it; ("", False) if none."""
     try:
-        return _http("GET", request_url)[1].get("version") or ""
+        body = _http("GET", request_url)[1]
     except (UpdateError, OSError, ValueError):
-        return ""
+        return "", False
+    return body.get("version") or "", bool(body.get("rehearsal"))
+
+
+def check_rehearsal(requested: str, running: str | None) -> str | None:
+    """A rehearsal runs every step on the version already running — so it
+    must be exactly that version (and a real release), never a way to switch
+    versions."""
+    if _parse_version(requested) is None:
+        return f"{requested!r} is not a release tag"
+    if requested != running:
+        return f"a test update must target the running version ({running}), not {requested}"
+    return None
 
 
 def update(env: dict, arm: Arm | None = None) -> None:
-    version = env.get("TARGET_VERSION") or requested_version(env["UPDATE_REQUEST_URL"])
-    refusal = check_requested_version(version, running_version(env["APP_HEALTH_URL"]))
+    if env.get("TARGET_VERSION"):
+        version, rehearsal = env["TARGET_VERSION"], env.get("REHEARSAL") == "1"
+    else:
+        version, rehearsal = requested_update(env["UPDATE_REQUEST_URL"])
+    running = running_version(env["APP_HEALTH_URL"])
+    refusal = check_rehearsal(version, running) if rehearsal else check_requested_version(version, running)
     if refusal is not None:
-        raise UpdateError(f"refusing update: {refusal}")
+        raise UpdateError(f"refusing {'test ' if rehearsal else ''}update: {refusal}")
 
     repos = [r for r in env["IMAGE_REPOS"].split(",") if r]
     arm = arm or Arm(managed_identity_token(env["AZURE_CLIENT_ID"]), env["SUBSCRIPTION_ID"], env["RESOURCE_GROUP"])
 
-    log(f"updating to {version}")
+    log(f"test update: every step on the running {version}, nothing changes" if rehearsal else f"updating to {version}")
     log("1/4 database migrations")
     arm.retag(f"jobs/{env['MIGRATE_JOB']}", repos, version)
     arm.run_job(env["MIGRATE_JOB"])
@@ -159,7 +176,7 @@ def update(env: dict, arm: Arm | None = None) -> None:
     arm.retag(f"containerApps/{env['API_APP']}", repos, version)
     log("4/4 updater")
     arm.retag(f"jobs/{env['UPDATER_JOB']}", repos, version)
-    log(f"update to {version} completed")
+    log(f"test update on {version} completed — all steps and permissions work" if rehearsal else f"update to {version} completed")
 
 
 if __name__ == "__main__":
