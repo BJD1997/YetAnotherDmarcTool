@@ -154,6 +154,11 @@ class Settings(BaseSettings):
     # same "unconfigured optional feature is off" pattern as elsewhere.
     updater_url: str | None = None
     updater_shared_secret: str | None = None
+    # Where this instance runs, for the admin console's update instructions
+    # when there's no updater sidecar (Azure Container Apps has no Docker
+    # socket to give one). Set by the Azure template; unset = Docker Compose.
+    deployment_platform: str | None = None  # "azure-container-apps"
+    azure_resource_group: str | None = None
 
     # Worker (app/workers/scheduler.py): the Postgres advisory-lock key the
     # leader is elected on. leader_database_url is the connection the leader's
@@ -191,6 +196,10 @@ class Settings(BaseSettings):
     @property
     def entra_sso_redirect_uri(self) -> str:
         return f"{self.public_base_url}/api/auth/callback"
+
+    @property
+    def self_update_available(self) -> bool:
+        return bool(self.updater_url and self.updater_shared_secret)
 
     @property
     def hosted_reports_domain(self) -> str | None:

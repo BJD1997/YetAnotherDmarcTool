@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "5259645336212868892"
+      "templateHash": "8670519643616835976"
     }
   },
   "parameters": {
@@ -1323,7 +1323,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "958876831121766152"
+              "templateHash": "17281077517261933064"
             }
           },
           "parameters": {
@@ -1449,7 +1449,7 @@
               }
             },
             "apiSecrets": "[concat(createArray(createObject('name', 'app-database-url', 'keyVaultUrl', format('{0}secrets/app-database-url', parameters('vaultUri')), 'identity', parameters('identityId')), createObject('name', 'fernet-key', 'keyVaultUrl', format('{0}secrets/fernet-key', parameters('vaultUri')), 'identity', parameters('identityId'))), if(parameters('deployEntraSsoSecret'), createArray(createObject('name', 'entra-sso-client-secret', 'keyVaultUrl', format('{0}secrets/entra-sso-client-secret', parameters('vaultUri')), 'identity', parameters('identityId'))), createArray()), if(parameters('deployCloudflareSecret'), createArray(createObject('name', 'cloudflare-api-token', 'keyVaultUrl', format('{0}secrets/cloudflare-api-token', parameters('vaultUri')), 'identity', parameters('identityId'))), createArray()))]",
-            "apiEnv": "[concat(createArray(createObject('name', 'DATABASE_URL', 'secretRef', 'app-database-url'), createObject('name', 'FERNET_KEY', 'secretRef', 'fernet-key'), createObject('name', 'PUBLIC_BASE_URL', 'value', variables('publicBaseUrl')), createObject('name', 'DNS_RESOLVER_HOST', 'value', '127.0.0.1'), createObject('name', 'RATE_LIMIT_BACKEND', 'value', 'postgres'), createObject('name', 'FORWARDED_ALLOW_IPS', 'value', format('100.100.0.0/16,{0}', parameters('acaSubnetPrefix'))), createObject('name', 'APP_VERSION', 'value', parameters('imageTag'))), if(parameters('deployEntraSsoSecret'), createArray(createObject('name', 'ENTRA_SSO_CLIENT_ID', 'value', parameters('entraSsoClientId')), createObject('name', 'ENTRA_SSO_CLIENT_SECRET', 'secretRef', 'entra-sso-client-secret'), createObject('name', 'ENTRA_SSO_AUTHORITY', 'value', parameters('entraSsoAuthority'))), createArray()), variables('hostedReportsEnv'), if(parameters('deployCloudflareSecret'), createArray(createObject('name', 'CLOUDFLARE_API_TOKEN', 'secretRef', 'cloudflare-api-token'), createObject('name', 'CLOUDFLARE_ZONE_ID', 'value', parameters('cloudflareZoneId'))), createArray()))]",
+            "apiEnv": "[concat(createArray(createObject('name', 'DATABASE_URL', 'secretRef', 'app-database-url'), createObject('name', 'FERNET_KEY', 'secretRef', 'fernet-key'), createObject('name', 'PUBLIC_BASE_URL', 'value', variables('publicBaseUrl')), createObject('name', 'DNS_RESOLVER_HOST', 'value', '127.0.0.1'), createObject('name', 'RATE_LIMIT_BACKEND', 'value', 'postgres'), createObject('name', 'FORWARDED_ALLOW_IPS', 'value', format('100.100.0.0/16,{0}', parameters('acaSubnetPrefix'))), createObject('name', 'DEPLOYMENT_PLATFORM', 'value', 'azure-container-apps'), createObject('name', 'AZURE_RESOURCE_GROUP', 'value', resourceGroup().name), createObject('name', 'APP_VERSION', 'value', parameters('imageTag'))), if(parameters('deployEntraSsoSecret'), createArray(createObject('name', 'ENTRA_SSO_CLIENT_ID', 'value', parameters('entraSsoClientId')), createObject('name', 'ENTRA_SSO_CLIENT_SECRET', 'secretRef', 'entra-sso-client-secret'), createObject('name', 'ENTRA_SSO_AUTHORITY', 'value', parameters('entraSsoAuthority'))), createArray()), variables('hostedReportsEnv'), if(parameters('deployCloudflareSecret'), createArray(createObject('name', 'CLOUDFLARE_API_TOKEN', 'secretRef', 'cloudflare-api-token'), createObject('name', 'CLOUDFLARE_ZONE_ID', 'value', parameters('cloudflareZoneId'))), createArray()))]",
             "workerSecrets": "[concat(createArray(createObject('name', 'app-database-url', 'keyVaultUrl', format('{0}secrets/app-database-url', parameters('vaultUri')), 'identity', parameters('identityId')), createObject('name', 'fernet-key', 'keyVaultUrl', format('{0}secrets/fernet-key', parameters('vaultUri')), 'identity', parameters('identityId')), createObject('name', 'keda-pg-connection', 'keyVaultUrl', format('{0}secrets/keda-pg-connection', parameters('vaultUri')), 'identity', parameters('identityId'))), if(parameters('deployEntraMailSecret'), createArray(createObject('name', 'entra-mail-client-secret', 'keyVaultUrl', format('{0}secrets/entra-mail-client-secret', parameters('vaultUri')), 'identity', parameters('identityId'))), createArray()))]",
             "workerEnv": "[concat(createArray(createObject('name', 'DATABASE_URL', 'secretRef', 'app-database-url'), createObject('name', 'FERNET_KEY', 'secretRef', 'fernet-key'), createObject('name', 'DNS_RESOLVER_HOST', 'value', '127.0.0.1'), createObject('name', 'RATE_LIMIT_BACKEND', 'value', 'postgres'), createObject('name', 'APP_VERSION', 'value', parameters('imageTag'))), if(parameters('deployEntraMailSecret'), createArray(createObject('name', 'ENTRA_MAIL_CLIENT_ID', 'value', parameters('entraMailClientId')), createObject('name', 'ENTRA_MAIL_CLIENT_SECRET', 'secretRef', 'entra-mail-client-secret')), createArray()), variables('hostedReportsEnv'))]"
           },

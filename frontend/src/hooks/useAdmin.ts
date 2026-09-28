@@ -57,6 +57,10 @@ export interface UpdateStatus {
   include_prereleases: boolean;
   update_available: boolean;
   is_dev_build: boolean;
+  // No updater sidecar (Azure, Portainer): show how to update instead.
+  self_update_available: boolean;
+  deployment_platform: string | null;
+  azure_resource_group: string | null;
 }
 
 export interface AdminJobRun {

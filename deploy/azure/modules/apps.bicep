@@ -137,6 +137,16 @@ var apiEnv = concat(
       value: '100.100.0.0/16,${acaSubnetPrefix}'
     }
     {
+      // No updater sidecar on ACA; the admin console shows the redeploy
+      // command for this resource group instead of "Update now".
+      name: 'DEPLOYMENT_PLATFORM'
+      value: 'azure-container-apps'
+    }
+    {
+      name: 'AZURE_RESOURCE_GROUP'
+      value: resourceGroup().name
+    }
+    {
       name: 'APP_VERSION'
       value: imageTag
     }

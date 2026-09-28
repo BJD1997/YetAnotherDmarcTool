@@ -1,3 +1,4 @@
+from app.config import settings
 from tests.conftest import login_as_platform_admin
 
 
@@ -25,3 +26,20 @@ async def test_update_settings(api):
 
     assert response.status_code == 200
     assert response.json()["include_prereleases"] is True
+
+
+async def test_status_says_how_this_deployment_updates(api, monkeypatch):
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+
+    monkeypatch.setattr(settings, "updater_url", None)
+    monkeypatch.setattr(settings, "deployment_platform", "azure-container-apps")
+    monkeypatch.setattr(settings, "azure_resource_group", "rg-yadt")
+    body = (await client.get("/api/admin/updates")).json()
+    assert (body["self_update_available"], body["deployment_platform"], body["azure_resource_group"]) == (
+        False, "azure-container-apps", "rg-yadt",
+    )
+
+    monkeypatch.setattr(settings, "updater_url", "http://updater:9999")
+    monkeypatch.setattr(settings, "updater_shared_secret", "s3cret")
+    assert (await client.get("/api/admin/updates")).json()["self_update_available"] is True

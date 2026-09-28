@@ -27,6 +27,11 @@ def _status_out(state: UpdateCheckState) -> dict:
         "check_error": state.check_error,
         "include_prereleases": state.include_prereleases,
         "update_available": update_available,
+        # False: no updater sidecar here (Azure, Portainer) — the console shows
+        # how this deployment updates instead of an "Update now" button.
+        "self_update_available": settings.self_update_available,
+        "deployment_platform": settings.deployment_platform,
+        "azure_resource_group": settings.azure_resource_group,
     }
 
 
