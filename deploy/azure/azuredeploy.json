@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "14502834196745096464"
+      "templateHash": "4652855609575508132"
     }
   },
   "parameters": {
@@ -245,6 +245,18 @@
     {
       "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
       "apiVersion": "2023-01-31",
+      "name": "[format('{0}-update-trigger-id', variables('namePrefixLower'))]",
+      "location": "[parameters('location')]"
+    },
+    {
+      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+      "apiVersion": "2023-01-31",
+      "name": "[format('{0}-updater-id', variables('namePrefixLower'))]",
+      "location": "[parameters('location')]"
+    },
+    {
+      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+      "apiVersion": "2023-01-31",
       "name": "[format('{0}-deploy-id', variables('namePrefixLower'))]",
       "location": "[parameters('location')]"
     },
@@ -295,12 +307,6 @@
         "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-deploy-id', variables('namePrefixLower')))]",
         "[resourceId('Microsoft.Resources/deployments', 'environment')]"
       ]
-    },
-    {
-      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
-      "apiVersion": "2023-01-31",
-      "name": "[format('{0}-update-trigger-id', variables('namePrefixLower'))]",
-      "location": "[parameters('location')]"
     },
     {
       "type": "Microsoft.Resources/deployments",
@@ -1672,6 +1678,9 @@
           },
           "triggerPrincipalId": {
             "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-update-trigger-id', variables('namePrefixLower'))), '2023-01-31').principalId]"
+          },
+          "updaterIdentityName": {
+            "value": "[format('{0}-updater-id', variables('namePrefixLower'))]"
           }
         },
         "template": {
@@ -1681,7 +1690,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "9434079003155314173"
+              "templateHash": "12634671048238447292"
             }
           },
           "parameters": {
@@ -1717,18 +1726,18 @@
               "metadata": {
                 "description": "Principal id of the api identity allowed to start this job."
               }
+            },
+            "updaterIdentityName": {
+              "type": "string",
+              "metadata": {
+                "description": "Name of the updater job's identity (created early in main.bicep)."
+              }
             }
           },
           "variables": {
             "jobName": "[format('{0}-updater', parameters('namePrefix'))]"
           },
           "resources": [
-            {
-              "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
-              "apiVersion": "2023-01-31",
-              "name": "[format('{0}-updater-id', parameters('namePrefix'))]",
-              "location": "[parameters('location')]"
-            },
             {
               "type": "Microsoft.Authorization/roleDefinitions",
               "apiVersion": "2022-04-01",
@@ -1761,14 +1770,13 @@
             {
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
-              "name": "[guid(resourceGroup().id, resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-updater-id', parameters('namePrefix'))), resourceId('Microsoft.Authorization/roleDefinitions', guid(resourceGroup().id, 'yadt-updater-role')))]",
+              "name": "[guid(resourceGroup().id, resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('updaterIdentityName')), resourceId('Microsoft.Authorization/roleDefinitions', guid(resourceGroup().id, 'yadt-updater-role')))]",
               "properties": {
                 "roleDefinitionId": "[resourceId('Microsoft.Authorization/roleDefinitions', guid(resourceGroup().id, 'yadt-updater-role'))]",
-                "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-updater-id', parameters('namePrefix'))), '2023-01-31').principalId]",
+                "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('updaterIdentityName')), '2023-01-31').principalId]",
                 "principalType": "ServicePrincipal"
               },
               "dependsOn": [
-                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-updater-id', parameters('namePrefix')))]",
                 "[resourceId('Microsoft.Authorization/roleDefinitions', guid(resourceGroup().id, 'yadt-updater-role'))]"
               ]
             },
@@ -1780,7 +1788,7 @@
               "identity": {
                 "type": "UserAssigned",
                 "userAssignedIdentities": {
-                  "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-updater-id', parameters('namePrefix'))))]": {}
+                  "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('updaterIdentityName')))]": {}
                 }
               },
               "properties": {
@@ -1847,7 +1855,7 @@
                         },
                         {
                           "name": "AZURE_CLIENT_ID",
-                          "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-updater-id', parameters('namePrefix'))), '2023-01-31').clientId]"
+                          "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('updaterIdentityName')), '2023-01-31').clientId]"
                         }
                       ]
                     }
@@ -1855,8 +1863,7 @@
                 }
               },
               "dependsOn": [
-                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-updater-id', parameters('namePrefix')))]",
-                "[resourceId('Microsoft.Authorization/roleAssignments', guid(resourceGroup().id, resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-updater-id', parameters('namePrefix'))), resourceId('Microsoft.Authorization/roleDefinitions', guid(resourceGroup().id, 'yadt-updater-role'))))]"
+                "[resourceId('Microsoft.Authorization/roleAssignments', guid(resourceGroup().id, resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('updaterIdentityName')), resourceId('Microsoft.Authorization/roleDefinitions', guid(resourceGroup().id, 'yadt-updater-role'))))]"
               ]
             },
             {
@@ -1907,7 +1914,8 @@
       "dependsOn": [
         "[resourceId('Microsoft.Resources/deployments', 'apps')]",
         "[resourceId('Microsoft.Resources/deployments', 'environment')]",
-        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-update-trigger-id', variables('namePrefixLower')))]"
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-update-trigger-id', variables('namePrefixLower')))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('{0}-updater-id', variables('namePrefixLower')))]"
       ]
     }
   ],

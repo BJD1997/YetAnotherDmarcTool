@@ -247,6 +247,22 @@ module environment 'modules/environment.bicep' = {
   }
 }
 
+// In-app updates (modules/updater.bicep): the api's identity for starting
+// the updater job (and nothing else), and the updater job's own identity.
+// Created here, at the start of the deployment and with no dependencies, so
+// they've become visible to Container Apps by the time the apps and the job
+// that use them are created (a just-created identity fails with
+// IdentityDoesNotExist).
+resource triggerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: '${namePrefixLower}-update-trigger-id'
+  location: location
+}
+
+resource updaterIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: '${namePrefixLower}-updater-id'
+  location: location
+}
+
 // Dedicated identity for the deploymentScript to start the migrate job.
 resource deployIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: '${namePrefixLower}-deploy-id'
@@ -315,11 +331,6 @@ resource runMigrate 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
   ]
 }
 
-// The api's identity for starting the updater job (and nothing else).
-resource triggerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
-  name: '${namePrefixLower}-update-trigger-id'
-  location: location
-}
 
 module apps 'modules/apps.bicep' = {
   name: 'apps'
@@ -366,6 +377,7 @@ module updater 'modules/updater.bicep' = {
     imageRepos: imageRepos
     apiUrl: apps.outputs.apiUrl
     triggerPrincipalId: triggerIdentity.properties.principalId
+    updaterIdentityName: updaterIdentity.name
   }
 }
 

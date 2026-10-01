@@ -23,12 +23,16 @@ param imageRepos string
 param apiUrl string
 @description('Principal id of the api identity allowed to start this job.')
 param triggerPrincipalId string
+@description('Name of the updater job\'s identity (created early in main.bicep).')
+param updaterIdentityName string
 
 var jobName = '${namePrefix}-updater'
 
-resource updaterIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
-  name: '${namePrefix}-updater-id'
-  location: location
+// Created in main.bicep at the start of the deployment, not here: a
+// brand-new identity takes a while to become visible to Container Apps, and
+// creating the job right after it failed with IdentityDoesNotExist.
+resource updaterIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
+  name: updaterIdentityName
 }
 
 // Custom role names are unique per tenant, hence the resource group in them.
