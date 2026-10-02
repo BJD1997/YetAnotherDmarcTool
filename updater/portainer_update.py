@@ -20,7 +20,9 @@ import ssl
 import urllib.error
 import urllib.request
 
-TIMEOUT_SECONDS = 600  # Portainer answers once the redeploy (image pulls included) is done
+# Portainer (checked with 2.45) answers right away and pulls and redeploys
+# in the background; older versions answer when it's done.
+TIMEOUT_SECONDS = 600
 
 
 class PortainerError(Exception):
@@ -83,9 +85,17 @@ class Portainer:
                 message = exc.reason
             if exc.code == 404 and path.startswith(f"/api/stacks/{self.stack_id}"):
                 message = f"Portainer has no stack {self.stack_id} (check PORTAINER_STACK_ID): {message}"
+            elif exc.code in (401, 403):
+                message = f"Portainer refused the access token (check PORTAINER_API_KEY): {message}"
             raise PortainerError(f"{method} {path.split('?')[0]} → {exc.code}: {message}") from exc
         except (urllib.error.URLError, OSError) as exc:
-            raise PortainerError(f"can't reach Portainer at {self.url}: {exc}") from exc
+            hint = ""
+            if "CERTIFICATE_VERIFY_FAILED" in str(exc):
+                hint = (
+                    " — Portainer's certificate isn't trusted (out of the box it's self-signed): use Portainer's "
+                    "http:// port (9000) on a network the stack shares with it, or set PORTAINER_TLS_VERIFY=false"
+                )
+            raise PortainerError(f"can't reach Portainer at {self.url}: {exc}{hint}") from exc
 
     def redeploy(self, version: str) -> None:
         stack = self._call("GET", f"/api/stacks/{self.stack_id}")

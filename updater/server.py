@@ -200,7 +200,7 @@ def _run_portainer_update(version: str) -> None:
     print(f"asking Portainer to redeploy the stack on {version}", flush=True)
     try:
         portainer_update.Portainer.from_env().redeploy(version)
-        print(f"update to {version} completed successfully", flush=True)
+        print(f"Portainer accepted the update to {version}: it pulls the images and redeploys the stack", flush=True)
     except portainer_update.PortainerError as exc:
         print(f"update to {version} failed: {exc}", flush=True)
 

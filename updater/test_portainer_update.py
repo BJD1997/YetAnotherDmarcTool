@@ -84,7 +84,7 @@ def test_redeploys_the_stack_with_the_new_tag(fake_portainer):
 
 def test_errors_say_what_portainer_said(fake_portainer):
     url, _seen = fake_portainer
-    with pytest.raises(PortainerError, match="Invalid API key"):
+    with pytest.raises(PortainerError, match="check PORTAINER_API_KEY"):
         Portainer(url, "wrong", "7").redeploy("v0.2.0")
     with pytest.raises(PortainerError, match="stack 8"):
         Portainer(url, "ptr_token", "8").redeploy("v0.2.0")
