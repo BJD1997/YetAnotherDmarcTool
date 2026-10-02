@@ -879,3 +879,30 @@ async def test_dmarc_policy_builder_insufficient_data_recommends_monitor_only(ap
     body = response.json()
     assert body["current_record_lookup_error"] is True
     assert body["recommendation"]["policy"] == "none"
+
+
+async def test_detected_subdomains_get_their_top_level_parent_whatever_the_case(api):
+    """Regression: a detected "Shop.Example.com" (report generators don't
+    always lower-case) didn't match the registered example.com, so "Add"
+    created it as a root domain, pending verification. A deeper subdomain
+    must get the top-level domain as parent (domains nest one level), and a
+    registered name never shows as detected."""
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin)
+    await login_as(client, owner_factory, user)
+    parent = await _add_domain(owner_factory, org, verification_status=DomainVerificationStatus.verified)
+    async with owner_factory() as db:
+        db.add(Domain(organization_id=org.id, name=f"web02.{parent.name}", parent_domain_id=parent.id,
+                      verification_status=DomainVerificationStatus.verified))
+        await db.commit()
+    for header_from in ("Shop.Example.com", f"x.web02.{parent.name}", parent.name.upper()):
+        report = await _add_aggregate_report(owner_factory, org, None, org_name="reporter.com")
+        await _add_aggregate_record(owner_factory, org, None, report, header_from=header_from, count=3)
+
+    detected = {d["name"]: d for d in (await client.get("/api/dmarc/detected-domains")).json()}
+
+    assert parent.name not in detected
+    for name in ("shop.example.com", f"x.web02.{parent.name}"):
+        assert detected[name]["suggested_parent_id"] == str(parent.id), name
+        added = (await client.post("/api/domains", json={"name": name, "parent_domain_id": detected[name]["suggested_parent_id"]})).json()
+        assert (added["parent_domain_id"], added["verification_status"]) == (str(parent.id), "verified")

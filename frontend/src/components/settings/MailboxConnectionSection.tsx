@@ -1,32 +1,46 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Mail, RefreshCw, ChevronDown, ChevronUp, History } from "lucide-react";
 import { ApiError } from "../../api/client";
 import { ReportFreshnessValue } from "../overview/widgets";
 import { useMailboxConnection, useMailboxJobRuns, useResyncMailbox, useSetMailboxConnection } from "../../hooks/useMailboxConnection";
 import { useCurrentOrganization } from "../../hooks/useOrganization";
+import { queryKeys } from "../../hooks/queryKeys";
+
+// How long the page waits for a sync it started to show up before giving up.
+const SYNC_WAIT_MS = 120_000;
 
 // Shared between Settings.tsx and the onboarding wizard — one implementation
 // of the mailbox-connect mutation/UI, not two.
 export default function MailboxConnectionSection({ canManage }: { canManage: boolean }) {
   const { data: org } = useCurrentOrganization();
 
-  // pollingSince drives a short-lived refetchInterval right after a
-  // save/resync — catches the real sync result (kicked off immediately by
-  // the backend, not on the next scheduler tick) much faster than a fixed
-  // delay, and correctly waits for a FRESH last_sync_at rather than just
-  // "any" status, so re-saving an already-connected mailbox doesn't read a
-  // stale status left over from the previous connection.
-  const [pollingSince, setPollingSince] = useState<number | null>(null);
+  // After a save/resync the sync runs on the worker, a few seconds to a
+  // minute later. `syncFrom` is the last_sync_at from before the click
+  // (undefined = not syncing): the sync is done once the server reports a
+  // different one — compared with the server's own value, not the browser
+  // clock, which can differ from it. Gives up after SYNC_WAIT_MS.
+  const [syncFrom, setSyncFrom] = useState<string | null | undefined>(undefined);
+  const syncing = syncFrom !== undefined;
+  const queryClient = useQueryClient();
 
-  const { data: connection, error } = useMailboxConnection({
-    refetchInterval: (query) => {
-      if (pollingSince === null) return false;
-      const conn = query.state.data;
-      const resolved = !!conn?.last_sync_at && new Date(conn.last_sync_at).getTime() >= pollingSince;
-      if (resolved || Date.now() - pollingSince > 15000) return false;
-      return 1500;
-    },
-  });
+  const { data: connection, error } = useMailboxConnection({ refetchInterval: syncing ? 2000 : false });
+
+  useEffect(() => {
+    if (!syncing) return;
+    const finish = () => {
+      setSyncFrom(undefined);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.mailboxConnection.jobRuns });
+    };
+    if (connection && connection.last_sync_at !== syncFrom) {
+      finish();
+      return;
+    }
+    const timer = setTimeout(finish, SYNC_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [syncing, syncFrom, connection, queryClient]);
+
+  const startWaiting = () => setSyncFrom(connection?.last_sync_at ?? null);
 
   const [mailbox, setMailbox] = useState("");
   const [editing, setEditing] = useState(false);
@@ -39,12 +53,12 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
       setSaveError(null);
       setEditing(false);
       setMailbox("");
-      setPollingSince(Date.now());
+      startWaiting();
     },
     (err) => setSaveError(err instanceof ApiError ? err.message : "failed to save mailbox"),
   );
 
-  const resync = useResyncMailbox(() => setPollingSince(Date.now()));
+  const resync = useResyncMailbox(startWaiting);
 
   const consentLinks = org?.entra_consent_urls;
   const consentGuidance = consentLinks && (
@@ -200,9 +214,9 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
           {canManage && connection.last_sync_status === "error" && consentCta}
           {canManage && (
             <div className="chip-row" style={{ marginTop: "0.6rem" }}>
-              <button className="btn btn--secondary btn--sm" onClick={() => resync.mutate()} disabled={resync.isPending}>
+              <button className="btn btn--secondary btn--sm" onClick={() => resync.mutate()} disabled={resync.isPending || syncing}>
                 <RefreshCw />
-                {resync.isPending || resync.isSuccess ? "Syncing…" : "Resync now"}
+                {resync.isPending || syncing ? "Syncing…" : "Resync now"}
               </button>
               <button
                 className="btn btn--ghost btn--sm"
