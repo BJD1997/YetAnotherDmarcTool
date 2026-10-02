@@ -7,6 +7,7 @@ import { useDismissNotification, useNotifications, useNotificationsCount } from 
 
 function age(iso: string): string {
   const minutes = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60_000));
+  if (minutes < 1) return "just now";
   if (minutes < 60) return `${minutes}m ago`;
   if (minutes < 48 * 60) return `${Math.round(minutes / 60)}h ago`;
   return `${Math.round(minutes / (24 * 60))}d ago`;
