@@ -68,7 +68,9 @@ export default function GeneralTab() {
 
       {canManage && (
         <>
-          <hr className="divider" />
+          {/* Only between sections: without the mailbox section above, a
+              leading divider pushed this tab's content below the others'. */}
+          {org.entra_tenant_id && <hr className="divider" />}
           <h3 className="section-title">SPF "all" recommendation</h3>
           <p className="section-hint">How the SPF check scores a record ending in -all (hardfail) vs ~all (softfail).</p>
           <SpfModeSection org={org} />

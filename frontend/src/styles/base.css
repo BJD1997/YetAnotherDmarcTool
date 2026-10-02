@@ -10,6 +10,12 @@ body {
   padding: 0;
 }
 
+/* Keep room for the scrollbar on every page, so going from a long page
+   (Settings → General) to a short one doesn't shift the layout sideways. */
+html {
+  scrollbar-gutter: stable;
+}
+
 body {
   background: var(--plane);
   color: var(--ink-primary);
