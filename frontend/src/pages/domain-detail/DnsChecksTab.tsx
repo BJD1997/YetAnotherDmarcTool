@@ -36,7 +36,7 @@ const CHECK_CATEGORIES: { label: string; types: CheckType[] }[] = [
   { label: "Readiness", types: ["dmarcbis"] },
 ];
 
-const SEVERITY_RANK: Record<CheckStatus, number> = { fail: 0, error: 1, warn: 2, pass: 3 };
+const SEVERITY_RANK: Record<CheckStatus, number> = { fail: 0, error: 1, warn: 2, pass: 3, pending: 4 };
 
 function recommendationOf(r: CheckResult): string | null {
   const rec = (r.details as { recommendation?: unknown } | null)?.recommendation;

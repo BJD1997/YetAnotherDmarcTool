@@ -1,5 +1,5 @@
 export type CheckType = "spf" | "dkim" | "dmarc" | "dmarcbis" | "mta_sts" | "tls_rpt" | "dane" | "mx" | "starttls";
-export type CheckStatus = "pass" | "warn" | "fail" | "error";
+export type CheckStatus = "pass" | "warn" | "fail" | "error" | "pending";
 
 export interface CheckResult {
   id: string;

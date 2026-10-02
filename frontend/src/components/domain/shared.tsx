@@ -43,12 +43,14 @@ export function Stat({ label, value }: { label: string; value: string | number }
 
 // CheckStatus -> dataviz status role. "error" (couldn't determine) reads as
 // more ambiguous than "fail" (confirmed non-compliant), so it maps to the
-// mid-severity "serious" role rather than the worst one.
-const STATUS_TO_ROLE: Record<CheckStatus, "good" | "warning" | "serious" | "critical"> = {
+// mid-severity "serious" role rather than the worst one. "pending" (no
+// result yet, e.g. waiting for TLS-RPT reports) is neither.
+const STATUS_TO_ROLE: Record<CheckStatus, "good" | "warning" | "serious" | "critical" | "neutral"> = {
   pass: "good",
   warn: "warning",
   error: "serious",
   fail: "critical",
+  pending: "neutral",
 };
 
 export function StatusBadge({ status }: { status: CheckStatus }) {
