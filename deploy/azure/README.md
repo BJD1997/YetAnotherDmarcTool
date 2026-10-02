@@ -156,6 +156,17 @@ This path deploys directly from `main.bicep`, no compiled ARM template needed, a
   on `Burstable` (`test`/`small`'s default SKU) at all — and it requires a
   region with Availability Zone support; an incompatible region surfaces as an
   Azure deployment-time validation error, not a pre-flight warning.
+- **No STARTTLS check by default.** The STARTTLS check connects to each MX
+  host on port 25, and Azure blocks outbound port 25 for every subscription
+  type except Enterprise Agreement (and MCA-E); Microsoft no longer grants
+  exceptions, and a NAT gateway or firewall doesn't get around it. So on Azure
+  the check is off (`enableStarttlsCheck=false`) and left out of each domain's
+  grade, rather than failing for every domain. The other inbound checks (MX,
+  MTA-STS, DANE, TLS-RPT) only use DNS and HTTPS and work as usual. Only turn
+  it on if your subscription allows port 25 out. v0.2.0 is planned to get
+  STARTTLS results from the TLS-RPT reports senders like Google and Microsoft
+  send instead, for domains whose TLS-RPT record points at the app's mailbox
+  (see the [Roadmap](https://github.com/BJD1997/YetAnotherDmarcTool/wiki/Roadmap)).
 - **Redeploying into a resource group you deleted can collide on the Key Vault
   name.** The vault's name is derived from `uniqueString(resourceGroup().id)`,
   which is stable for the same resource-group name/subscription, and soft-delete
