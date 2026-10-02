@@ -6,6 +6,7 @@ from app.models.background_job import BackgroundJob
 from app.models.dkim_selector import DkimSelector
 from app.models.rate_limit_hit import RateLimitHit
 from app.models.dismissed_detected_domain import DismissedDetectedDomain
+from app.models.domain_trend import DomainTrend
 from app.models.dmarc_aggregate import DmarcAggregateRecord, DmarcAggregateReport
 from app.models.dmarc_forensic import DmarcForensicReport
 from app.models.dns_check import DnsCheckResult
@@ -32,6 +33,7 @@ __all__ = [
     "BackgroundJob",
     "DkimSelector",
     "DismissedDetectedDomain",
+    "DomainTrend",
     "DmarcAggregateRecord",
     "DmarcAggregateReport",
     "DmarcForensicReport",

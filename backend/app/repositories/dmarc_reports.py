@@ -266,6 +266,38 @@ async def windowed_totals_excluding_blocked(db: AsyncSession, domain_id: UUID, s
     return int(total_count), int(pass_count)
 
 
+async def daily_totals_excluding_blocked(db: AsyncSession, domain_id: UUID, since: datetime) -> list[tuple]:
+    """(day, total_count, dmarc_pass_count) per day since `since` — the same
+    population windowed_totals_excluding_blocked rates (blocked senders out,
+    unverified reports out via the ORM filter), bucketed on the report's
+    date_range_begin. For the per-domain trend."""
+    dmarc_pass = (DmarcAggregateRecord.dkim_result == AuthResult.pass_) | (
+        DmarcAggregateRecord.spf_result == AuthResult.pass_
+    )
+    blocked_source_ips = (
+        select(SourceIpIdentity.source_ip)
+        .join(SenderReview, SenderReview.service_label == SourceIpIdentity.service_label)
+        .where(SenderReview.domain_id == domain_id, SenderReview.status == SenderReviewStatus.blocked)
+    )
+    day = func.date_trunc("day", DmarcAggregateReport.date_range_begin).label("day")
+    rows = await db.execute(
+        select(
+            day,
+            func.coalesce(func.sum(DmarcAggregateRecord.count), 0),
+            func.coalesce(func.sum(case((dmarc_pass, DmarcAggregateRecord.count), else_=0)), 0),
+        )
+        .select_from(DmarcAggregateRecord)
+        .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
+        .where(
+            DmarcAggregateRecord.domain_id == domain_id,
+            DmarcAggregateReport.date_range_begin >= since,
+            DmarcAggregateRecord.source_ip.not_in(blocked_source_ips),
+        )
+        .group_by(day)
+    )
+    return [(d.date(), int(total), int(passed)) for d, total, passed in rows]
+
+
 async def latest_published_policy_for_domain(db: AsyncSession, domain_id: UUID) -> str | None:
     return (
         await db.execute(
