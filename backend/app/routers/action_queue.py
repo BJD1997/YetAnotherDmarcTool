@@ -1,5 +1,6 @@
 import dataclasses
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,12 +11,14 @@ from app.models.user import User
 from app.repositories.domains import get_owned_domain, list_domains_for_org
 from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.services.dmarc_analytics import service_breakdown_multi
+from app.services.rating.domain_rating import RATING_WINDOW_DAYS
 from app.services.action_queue.rules import (
     domain_ready_for_stricter_policy,
     high_volume_failure,
     likely_spoofed_sender,
     low_compliance_domain,
     mailbox_stopped_receiving_reports,
+    merge_sender_items,
     parked_domain_not_locked_down,
     reviewed_service_labels,
     rua_destination_broken,
@@ -51,7 +54,11 @@ async def action_queue(
     # connection sits held (see service_breakdown_multi's own docstring) —
     # looping it per domain here was the same shape of bug the sender-
     # inventory endpoint had before it got the same batching treatment.
-    services_by_domain = await service_breakdown_multi(db, [d.id for d in domains]) if domains else {}
+    # The same 90 days the failing-messages count (and the domain rating)
+    # use, and the Senders list's default window, so every number in the
+    # queue describes the same mail.
+    since = datetime.now(timezone.utc) - timedelta(days=RATING_WINDOW_DAYS)
+    services_by_domain = await service_breakdown_multi(db, [d.id for d in domains], since=since) if domains else {}
 
     for domain in domains:
         services = services_by_domain.get(domain.id, [])
@@ -63,7 +70,7 @@ async def action_queue(
         items += sender_alignment_issue(domain, services)
         items += await domain_ready_for_stricter_policy(db, domain)
         items += await low_compliance_domain(db, domain)
-        items += await high_volume_failure(db, domain)
+        items += await high_volume_failure(db, domain, services)
         items += await spf_lookup_limit_risk(db, domain)
         items += await rua_destination_broken(db, domain, mailbox_address)
         items += await parked_domain_not_locked_down(domain)
@@ -79,5 +86,6 @@ async def action_queue(
     # critical DNS-blocking item still sorts after a warning-level
     # high-volume-failure item, since the category itself already encodes
     # "this kind of problem matters more."
+    items = merge_sender_items(items)
     items.sort(key=lambda i: (i.category, _SEVERITY_ORDER.get(i.severity, 5)))
     return [dataclasses.asdict(i) for i in items]

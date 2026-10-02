@@ -44,6 +44,7 @@ async def _add_sender(
     disposition: Disposition = Disposition.none,
     dkim_result: AuthResult = AuthResult.pass_,
     spf_result: AuthResult = AuthResult.pass_,
+    days_ago: int = 1,
 ) -> None:
     """Seeds one DMARC report + record from `source_ip`, enough for
     service_breakdown/service_breakdown_multi to surface it as a sender —
@@ -56,8 +57,8 @@ async def _add_sender(
             domain_id=domain.id,
             report_id=str(uuid.uuid4()),
             org_name="google.com",
-            date_range_begin=now - timedelta(days=1),
-            date_range_end=now,
+            date_range_begin=now - timedelta(days=days_ago),
+            date_range_end=now - timedelta(days=days_ago - 1),
             policy_published_domain=domain.name,
             policy_p="quarantine",
             received_at=now,
@@ -297,3 +298,34 @@ async def test_action_queue_not_ready_to_tighten_on_low_volume(api):
 
     item = next(i for i in items if "not ready" in i["title"])
     assert "10 of 50" in item["action_hint"]
+
+
+async def test_failing_sender_gets_one_item_not_two(api):
+    """Regression: a domain whose failures come from one misaligned sender
+    showed two items, "N failing messages (x%)" and "sender: y% SPF / z% DKIM",
+    over different windows (90 days vs all time) and with different links.
+    Now one item names the sender, carries its alignment and links to it."""
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org, verification_status=DomainVerificationStatus.verified)
+    await _add_sender(owner_factory, org, domain, source_ip="203.0.113.80", count=100)
+    await _add_sender(
+        owner_factory, org, domain, source_ip="203.0.113.81", count=100,
+        disposition=Disposition.reject, dkim_result=AuthResult.fail, spf_result=AuthResult.fail,
+    )
+    # Only seen 120 days ago: outside the 90-day window, so no item of its own.
+    await _add_sender(
+        owner_factory, org, domain, source_ip="203.0.113.82", count=100,
+        dkim_result=AuthResult.fail, spf_result=AuthResult.fail, days_ago=120,
+    )
+
+    items = (await client.get("/api/action-queue", params={"domain_id": str(domain.id)})).json()
+
+    about_failing_sender = [i for i in items if "203.0.113.81" in i["title"] or "203.0.113.81" in (i["link_path"] or "")]
+    assert len(about_failing_sender) == 1
+    [item] = about_failing_sender
+    assert "100 failing messages (50.0%)" in item["title"]
+    assert "0.0% SPF / 0.0% DKIM" in item["action_hint"]
+    assert item["link_path"] == f"/domains/{domain.id}/senders?highlight=203.0.113.81"
+    assert not any("203.0.113.82" in i["title"] for i in items)
