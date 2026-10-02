@@ -5,6 +5,7 @@ import type { Domain } from "../../api/types";
 import type { SenderInventoryRow, SenderReviewStatus, SenderReviewUpdate, SenderSourceIp } from "../../api/overview";
 import { useAuth } from "../../auth/AuthContext";
 import { useInView } from "../../hooks/useInView";
+import { useCurrentOrganization } from "../../hooks/useOrganization";
 import { useSenderInventory, useUpdateSenderReview } from "../../hooks/useOverviewResources";
 import { ServiceBadge, riskScore, passRateStyle } from "../domain/shared";
 
@@ -24,10 +25,13 @@ const BLOCKED_LOW_VOLUME_THRESHOLD = 10;
 // still shows everything.
 const WINDOW_OPTIONS: { label: string; days: number | null }[] = [
   { label: "Last 30 days", days: 30 },
+  { label: "Last 60 days", days: 60 },
   { label: "Last 90 days", days: 90 },
+  { label: "Last 180 days", days: 180 },
   { label: "All time", days: null },
 ];
-const DEFAULT_WINDOW_DAYS: number | null = 90;
+// Until the organization (and its rating period) has loaded.
+const FALLBACK_WINDOW_DAYS = 90;
 
 type FilterKey = "all" | "failing" | "unknown" | "approved" | "needs_owner" | "spoofed" | "rdns" | "archived";
 
@@ -93,7 +97,11 @@ export default function SenderInventory({ domainId, domains }: { domainId: strin
   const highlightLabel = searchParams.get("highlight");
   const [filter, setFilter] = useState<FilterKey>("all");
   const [showBlockedGroup, setShowBlockedGroup] = useState(false);
-  const [windowDays, setWindowDays] = useState<number | null>(DEFAULT_WINDOW_DAYS);
+  // Defaults to the organization's rating period (Settings → General), the
+  // same window the Action queue counts in; undefined = not changed here.
+  const { data: org } = useCurrentOrganization();
+  const [chosenWindowDays, setWindowDays] = useState<number | null | undefined>(undefined);
+  const windowDays = chosenWindowDays === undefined ? (org?.rating_window_days ?? FALLBACK_WINDOW_DAYS) : chosenWindowDays;
   const { ref: cardRef, inView } = useInView<HTMLDivElement>();
   const highlightedRowRef = useRef<HTMLTableRowElement | null>(null);
 

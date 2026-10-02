@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useOutletContext } from "react-router-dom";
 import { ApiError } from "../../api/client";
-import type { Organization, ReportSenderCheck, SpfAllQualifierMode } from "../../api/types";
+import type { Organization, RatingWindowDays, ReportSenderCheck, SpfAllQualifierMode } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import MailboxConnectionSection from "../../components/settings/MailboxConnectionSection";
 import { useUpdateOrganization } from "../../hooks/useOrganization";
@@ -73,6 +73,14 @@ export default function GeneralTab() {
           <SpfModeSection org={org} />
 
           <hr className="divider" />
+          <h3 className="section-title">Rating period</h3>
+          <p className="section-hint">
+            How far back each domain's grade, failing-message count and sender list look. Shorter reacts faster to a fix;
+            longer is steadier.
+          </p>
+          <RatingWindowSection org={org} />
+
+          <hr className="divider" />
           <h3 className="section-title">Report sender check</h3>
           <p className="section-hint">
             Anyone can email a report to your reporting address. This decides which reports count, based on how their
@@ -88,6 +96,40 @@ export default function GeneralTab() {
         </>
       )}
     </section>
+  );
+}
+
+const RATING_WINDOWS: RatingWindowDays[] = [30, 60, 90, 180];
+
+function RatingWindowSection({ org }: { org: Organization }) {
+  const [error, setError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const setWindow = useUpdateOrganization(
+    () => {
+      setError(null);
+      // Grades, counts and the Senders list all change with it.
+      void queryClient.invalidateQueries();
+    },
+    (err) => setError(err instanceof ApiError ? err.message : "failed to save"),
+  );
+
+  return (
+    <div style={{ display: "grid", gap: "0.5rem", maxWidth: 260 }}>
+      <select
+        aria-label="Rating period"
+        className="input"
+        value={org.rating_window_days}
+        disabled={setWindow.isPending}
+        onChange={(e) => setWindow.mutate({ name: org.name, rating_window_days: Number(e.target.value) as RatingWindowDays })}
+      >
+        {RATING_WINDOWS.map((d) => (
+          <option key={d} value={d}>
+            Last {d} days{d === 90 ? " (default)" : ""}
+          </option>
+        ))}
+      </select>
+      {error && <div className="alert alert--critical" style={{ margin: 0 }}>{error}</div>}
+    </div>
   );
 }
 

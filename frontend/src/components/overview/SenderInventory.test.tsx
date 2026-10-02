@@ -96,7 +96,9 @@ describe("SenderInventory ?highlight=", () => {
     renderInventory("/domains/domain-1/senders?highlight=recent-sender");
 
     await waitFor(() => expect(screen.getByText("recent-sender")).toBeInTheDocument());
-    expect(getMock.mock.calls.every(([url]) => String(url).includes("days=90"))).toBe(true);
+    const inventoryCalls = getMock.mock.calls.filter(([url]) => String(url).includes("sender-inventory"));
+    expect(inventoryCalls.length).toBeGreaterThan(0);
+    expect(inventoryCalls.every(([url]) => String(url).includes("days=90"))).toBe(true);
   });
 
   it("widens to all time when the highlighted sender isn't in the 90-day window", async () => {
@@ -116,7 +118,7 @@ describe("SenderInventory ?highlight=", () => {
     renderInventory("/domains/domain-1/senders");
 
     await waitFor(() => expect(screen.getByText("normal-sender")).toBeInTheDocument());
-    const [url] = getMock.mock.calls[0];
+    const [url] = getMock.mock.calls.find(([u]) => String(u).includes("sender-inventory"))!;
     expect(url).toContain("days=90");
   });
 });
@@ -150,5 +152,19 @@ describe("SenderInventory filter correctness", () => {
     renderInventory("/domains/domain-1/senders");
 
     expect(await screen.findByRole("button", { name: "Failing (1)" })).toBeInTheDocument();
+  });
+});
+
+describe("SenderInventory window", () => {
+  it("defaults to the organization's rating period", async () => {
+    getMock.mockImplementation(async (url: string) =>
+      url.startsWith("/organizations/current") ? { rating_window_days: 30 } : { [DOMAIN.id]: [row({ service_label: "s" })] },
+    );
+
+    renderInventory("/domains/domain-1/senders");
+
+    await waitFor(() =>
+      expect(getMock.mock.calls.some(([url]) => String(url).includes("days=30"))).toBe(true),
+    );
   });
 });

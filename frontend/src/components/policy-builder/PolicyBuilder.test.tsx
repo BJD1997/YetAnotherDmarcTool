@@ -24,6 +24,7 @@ const ORG: Organization = {
   hosted_mailbox_opt_in: false,
   is_demo_read_only: false,
   report_sender_check: "standard",
+  rating_window_days: 90,
   entra_consent_urls: null,
 };
 
