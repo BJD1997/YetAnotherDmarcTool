@@ -25,6 +25,7 @@ from app.services.ingestion.sender_auth import SenderAuth, left_out_reason
 from app.services.dmarc_narrative import dkim_narratives, spf_narratives
 from app.services.dns_checks.dmarc_record import DmarcRecordInfo, check_rua_destination, fetch_current_dmarc_record
 from app.services.dns_checks.resolver import DnsLookupError
+from app.services.notifications.sources import detected_domain_items
 from app.services.rating.domain_rating import compute_domain_rating, domain_policy_readiness, policy_stability_days
 from app.services.rating.policy_recommendation import build_policy_recommendation
 from app.services.rating.score import DomainRating
@@ -678,87 +679,7 @@ async def detected_domains(
     parented in one step) or of another *detected* domain (informational —
     our one-level nesting model means the detected apex should generally be
     added first)."""
-    detected: dict[str, dict] = {}
-
-    # Needed up front (not just for the suggested-parent annotation below):
-    # match_domain's ancestor walk means a subdomain of an already-registered
-    # domain always resolves to that ancestor's domain_id, never NULL — so a
-    # domain_id IS NULL filter alone would never catch it. Filtering out
-    # exact registered names instead (further down) is what actually surfaces
-    # that case, e.g. a subdomain sending real mail whose parent is
-    # registered but which itself never was, exactly the gap that left
-    # a real customer subdomain invisible until its mail started bouncing.
-    registered = await dmarc_reports_repo.registered_domains_by_name(db, user.organization_id)
-    registered_names = set(registered.keys())
-
-    dismissed_names = await dmarc_reports_repo.dismissed_domain_names(db, user.organization_id)
-
-    for name, report_count, message_volume in await dmarc_reports_repo.unmatched_aggregate_domain_counts(
-        db, user.organization_id
-    ):
-        detected[name] = {"report_count": report_count, "message_volume": int(message_volume)}
-
-    for name, report_count, message_volume in await dmarc_reports_repo.unmatched_record_header_from_counts(
-        db, user.organization_id
-    ):
-        if name in registered_names:
-            continue
-        entry = detected.setdefault(name, {"report_count": 0, "message_volume": 0})
-        entry["report_count"] += report_count
-        entry["message_volume"] += int(message_volume)
-
-    for name, report_count, message_volume in await dmarc_reports_repo.unmatched_tls_rpt_domain_counts(
-        db, user.organization_id
-    ):
-        entry = detected.setdefault(name, {"report_count": 0, "message_volume": 0})
-        entry["report_count"] += report_count
-        entry["message_volume"] += int(message_volume)
-
-    for name, report_count in await dmarc_reports_repo.unmatched_forensic_domain_counts(db, user.organization_id):
-        entry = detected.setdefault(name, {"report_count": 0, "message_volume": 0})
-        entry["report_count"] += report_count
-
-    for name in dismissed_names:
-        detected.pop(name, None)
-
-    detected_names = set(detected.keys())
-
-    items = []
-    for name, stats in detected.items():
-        suggested_parent_id: str | None = None
-        suggested_parent_name: str | None = None
-        relationship = "apex"
-
-        # Prefer the longest (most specific) registered ancestor, in case
-        # more than one registered domain is a suffix match.
-        for reg_name, reg_id in sorted(registered.items(), key=lambda kv: -len(kv[0])):
-            if name.endswith(f".{reg_name}"):
-                suggested_parent_id = str(reg_id)
-                suggested_parent_name = reg_name
-                relationship = "subdomain_of_registered"
-                break
-
-        if suggested_parent_id is None:
-            for other in sorted(detected_names, key=len):
-                if other != name and name.endswith(f".{other}"):
-                    relationship = "subdomain_of_detected"
-                    suggested_parent_name = other
-                    break
-
-        items.append(
-            {
-                "name": name,
-                "report_count": stats["report_count"],
-                "message_volume": stats["message_volume"],
-                "relationship": relationship,
-                "suggested_parent_id": suggested_parent_id,
-                "suggested_parent_name": suggested_parent_name,
-            }
-        )
-
-    # Apex-looking entries first, then shorter (more likely-apex) names first.
-    items.sort(key=lambda x: (x["relationship"] != "apex", len(x["name"]), -x["report_count"]))
-    return items
+    return await detected_domain_items(db, user.organization_id)
 
 
 @router.post("/dmarc/detected-domains/{name}/dismiss", status_code=status.HTTP_204_NO_CONTENT)
