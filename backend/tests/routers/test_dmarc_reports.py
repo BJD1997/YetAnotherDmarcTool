@@ -198,7 +198,7 @@ async def test_sender_inventory_lazily_creates_pending_reviews(api):
     client, owner_factory = api
     org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin)
     await login_as(client, owner_factory, user)
-    domain = await _add_domain(owner_factory, org)
+    domain = await _add_domain(owner_factory, org, verification_status=DomainVerificationStatus.verified)
     report = await _add_aggregate_report(owner_factory, org, domain)
     await _add_aggregate_record(owner_factory, org, domain, report, source_ip="203.0.113.10", count=5)
 
@@ -216,7 +216,7 @@ async def test_sender_inventory_second_call_reuses_existing_review(api):
     client, owner_factory = api
     org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin)
     await login_as(client, owner_factory, user)
-    domain = await _add_domain(owner_factory, org)
+    domain = await _add_domain(owner_factory, org, verification_status=DomainVerificationStatus.verified)
     report = await _add_aggregate_report(owner_factory, org, domain)
     await _add_aggregate_record(owner_factory, org, domain, report, source_ip="203.0.113.10")
 
@@ -235,8 +235,8 @@ async def test_sender_inventory_multi_batches_across_domains(api):
     client, owner_factory = api
     org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin)
     await login_as(client, owner_factory, user)
-    domain_a = await _add_domain(owner_factory, org, name="a.example.com")
-    domain_b = await _add_domain(owner_factory, org, name="b.example.com")
+    domain_a = await _add_domain(owner_factory, org, name="a.example.com", verification_status=DomainVerificationStatus.verified)
+    domain_b = await _add_domain(owner_factory, org, name="b.example.com", verification_status=DomainVerificationStatus.verified)
     report_a = await _add_aggregate_report(owner_factory, org, domain_a)
     report_b = await _add_aggregate_report(owner_factory, org, domain_b)
     await _add_aggregate_record(owner_factory, org, domain_a, report_a, source_ip="203.0.113.10", count=5)
@@ -258,8 +258,8 @@ async def test_sender_inventory_multi_includes_empty_domains_with_no_traffic(api
     client, owner_factory = api
     org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin)
     await login_as(client, owner_factory, user)
-    domain_with_traffic = await _add_domain(owner_factory, org, name="busy.example.com")
-    domain_quiet = await _add_domain(owner_factory, org, name="quiet.example.com")
+    domain_with_traffic = await _add_domain(owner_factory, org, name="busy.example.com", verification_status=DomainVerificationStatus.verified)
+    domain_quiet = await _add_domain(owner_factory, org, name="quiet.example.com", verification_status=DomainVerificationStatus.verified)
     report = await _add_aggregate_report(owner_factory, org, domain_with_traffic)
     await _add_aggregate_record(owner_factory, org, domain_with_traffic, report, source_ip="203.0.113.10", count=5)
 
@@ -277,7 +277,7 @@ async def test_sender_inventory_multi_reuses_existing_reviews(api):
     client, owner_factory = api
     org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin)
     await login_as(client, owner_factory, user)
-    domain = await _add_domain(owner_factory, org)
+    domain = await _add_domain(owner_factory, org, verification_status=DomainVerificationStatus.verified)
     report = await _add_aggregate_report(owner_factory, org, domain)
     await _add_aggregate_record(owner_factory, org, domain, report, source_ip="203.0.113.10")
 
@@ -296,11 +296,11 @@ async def test_sender_inventory_multi_drops_domain_ids_not_owned_by_org(api):
     client, owner_factory = api
     org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin)
     await login_as(client, owner_factory, user)
-    domain = await _add_domain(owner_factory, org)
+    domain = await _add_domain(owner_factory, org, verification_status=DomainVerificationStatus.verified)
     report = await _add_aggregate_report(owner_factory, org, domain)
     await _add_aggregate_record(owner_factory, org, domain, report, source_ip="203.0.113.10")
     other_org, _other_user = await seed_org_and_user(owner_factory, entra=True)
-    other_domain = await _add_domain(owner_factory, other_org, name="other-org.example.com")
+    other_domain = await _add_domain(owner_factory, other_org, name="other-org.example.com", verification_status=DomainVerificationStatus.verified)
 
     response = await client.get(f"/api/dmarc/sender-inventory?domain_ids={domain.id}&domain_ids={other_domain.id}")
 

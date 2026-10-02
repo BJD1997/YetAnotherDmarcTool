@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user
+from app.models.enums import DomainVerificationStatus
 from app.models.user import User
 from app.repositories.domains import get_owned_domain, list_domains_for_org
 from app.repositories.mailbox_connections import get_org_mailbox_connection
@@ -58,19 +59,23 @@ async def action_queue(
     # use, and the Senders list's default window, so every number in the
     # queue describes the same mail.
     since = datetime.now(timezone.utc) - timedelta(days=RATING_WINDOW_DAYS)
-    services_by_domain = await service_breakdown_multi(db, [d.id for d in domains], since=since) if domains else {}
+    # Sender items wait until a domain is verified, like its senders list,
+    # rating and DNS checks.
+    verified = [d for d in domains if d.verification_status == DomainVerificationStatus.verified]
+    services_by_domain = await service_breakdown_multi(db, [d.id for d in verified], since=since) if verified else {}
 
     for domain in domains:
-        services = services_by_domain.get(domain.id, [])
-        # Also computed once per domain and shared by the two rules that
-        # need it, rather than each independently re-querying it.
-        reviewed_labels = await reviewed_service_labels(db, domain.id)
-        items += unknown_sender_above_threshold(domain, services, reviewed_labels)
-        items += likely_spoofed_sender(domain, services, reviewed_labels)
-        items += sender_alignment_issue(domain, services)
+        if domain.verification_status == DomainVerificationStatus.verified:
+            services = services_by_domain.get(domain.id, [])
+            # Also computed once per domain and shared by the two rules that
+            # need it, rather than each independently re-querying it.
+            reviewed_labels = await reviewed_service_labels(db, domain.id)
+            items += unknown_sender_above_threshold(domain, services, reviewed_labels)
+            items += likely_spoofed_sender(domain, services, reviewed_labels)
+            items += sender_alignment_issue(domain, services)
+            items += await high_volume_failure(db, domain, services)
         items += await domain_ready_for_stricter_policy(db, domain)
         items += await low_compliance_domain(db, domain)
-        items += await high_volume_failure(db, domain, services)
         items += await spf_lookup_limit_risk(db, domain)
         items += await rua_destination_broken(db, domain, mailbox_address)
         items += await parked_domain_not_locked_down(domain)

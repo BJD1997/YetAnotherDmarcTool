@@ -26,6 +26,9 @@ export default function Overview() {
   const { user } = useAuth();
 
   const { data: domains } = useDomains();
+  // The domain picker and the Senders list only cover verified domains:
+  // there's nothing to show for one until it's verified.
+  const verifiedDomains = (domains ?? []).filter((d) => d.verification_status === "verified");
   const { data: onboarding, isLoading: onboardingLoading } = useOnboardingStatus();
   const { data: org } = useCurrentOrganization();
   // Same population that can reach /admin at all — a plain org user would
@@ -112,7 +115,7 @@ export default function Overview() {
       )}
 
       <CommandBar
-        domains={domains ?? []}
+        domains={verifiedDomains}
         domainId={domainId}
         onDomainChange={setDomain}
         days={days}
@@ -133,7 +136,7 @@ export default function Overview() {
         </div>
       </div>
 
-      <SenderInventory domainId={domainId} domains={domains ?? []} />
+      <SenderInventory domainId={domainId} domains={verifiedDomains} />
     </section>
   );
 }
