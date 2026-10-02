@@ -361,14 +361,14 @@ async def daily_totals_excluding_blocked(db: AsyncSession, domain_id: UUID, sinc
     return [(d.date(), int(total), int(passed)) for d, total, passed in rows]
 
 
-async def auth_domains_for_ips(
-    db: AsyncSession, domain_id: UUID, ips: list[str], since: datetime
-) -> tuple[dict[str, int], dict[str, int]]:
-    """({spf domain: messages}, {dkim domain: messages}) for the domain's mail
-    from `ips` since `since`, from the reports' auth_results — which domains
-    a sender actually authenticates as, for Ask AI's sender prompts."""
+async def sender_auth_details(db: AsyncSession, domain_id: UUID, ips: list[str], since: datetime) -> dict:
+    """How a sender's mail (from `ips`, since `since`) authenticated, from
+    the reports' auth_results, for Ask AI's sender questions:
+    {"spf_domains": {domain: messages}, "dkim_domains": {domain: messages},
+     "dkim_selectors": {(domain, selector): {"pass": n, "fail": n}},
+     "reporters": {reporting organization: messages}}."""
     rows = await db.execute(
-        select(DmarcAggregateRecord.auth_results, DmarcAggregateRecord.count)
+        select(DmarcAggregateRecord.auth_results, DmarcAggregateRecord.count, DmarcAggregateReport.org_name)
         .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
         .where(
             DmarcAggregateRecord.domain_id == domain_id,
@@ -376,15 +376,24 @@ async def auth_domains_for_ips(
             DmarcAggregateReport.date_range_begin >= since,
         )
     )
-    spf: dict[str, int] = {}
-    dkim: dict[str, int] = {}
-    for auth_results, count in rows:
-        for target, key in ((spf, "spf"), (dkim, "dkim")):
-            for entry in (auth_results or {}).get(key) or []:
-                name = (entry.get("domain") or "").lower()
-                if name:
-                    target[name] = target.get(name, 0) + count
-    return spf, dkim
+    out: dict = {"spf_domains": {}, "dkim_domains": {}, "dkim_selectors": {}, "reporters": {}}
+    for auth_results, count, reporter in rows:
+        auth_results = auth_results or {}
+        for entry in auth_results.get("spf") or []:
+            name = (entry.get("domain") or "").lower()
+            if name:
+                out["spf_domains"][name] = out["spf_domains"].get(name, 0) + count
+        for entry in auth_results.get("dkim") or []:
+            name = (entry.get("domain") or "").lower()
+            if not name:
+                continue
+            out["dkim_domains"][name] = out["dkim_domains"].get(name, 0) + count
+            key = (name, entry.get("selector") or "?")
+            tally = out["dkim_selectors"].setdefault(key, {"pass": 0, "fail": 0})
+            tally["pass" if (entry.get("result") or "").lower() == "pass" else "fail"] += count
+        if reporter:
+            out["reporters"][reporter] = out["reporters"].get(reporter, 0) + count
+    return out
 
 
 async def latest_published_policy_for_domain(db: AsyncSession, domain_id: UUID) -> str | None:

@@ -357,7 +357,11 @@ function SenderInventoryRowView({
             )}
             {row.dmarc_pass_pct !== null && row.dmarc_pass_pct < 90 && (
               <span style={{ marginLeft: "0.4rem" }}>
-                <AskAiButton domainId={row.domain_id} hint={{ kind: "sender", subject: row.service_label }} />
+                <AskAiButton
+                  domainId={row.domain_id}
+                  hint={{ kind: "sender", subject: row.service_label }}
+                  issue={`Sender "${row.service_label}" passes DMARC on only ${row.dmarc_pass_pct}% of its mail.`}
+                />
               </span>
             )}
             {row.likely_spoofed && row.status === "pending" && (

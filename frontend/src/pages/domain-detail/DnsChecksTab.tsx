@@ -341,7 +341,11 @@ function CheckRow({
           )}
         </div>
         {(status === "warn" || status === "fail" || status === "error") && (
-          <AskAiButton domainId={domainId} hint={{ kind: "dns_check", subject: checkType }} />
+          <AskAiButton
+            domainId={domainId}
+            hint={{ kind: "dns_check", subject: checkType }}
+            issue={`${CHECK_LABELS[checkType]} check: ${primary.summary}`}
+          />
         )}
         {hasMoreEvidence && (
           <span style={{ flexShrink: 0, color: "var(--ink-muted)" }}>{expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span>

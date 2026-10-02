@@ -20,7 +20,11 @@ async def _offline(monkeypatch):
         return None
 
     monkeypatch.setattr(service_identifier, "resolve_ptr", _none)
+    async def _no_mx(*args, **kwargs):
+        return []
+
     monkeypatch.setattr(prompts, "current_record", _none)
+    monkeypatch.setattr(prompts, "mx_hosts", _no_mx)
 
 
 async def _setup(owner_factory, *, verified=True):
@@ -50,6 +54,8 @@ async def test_off_until_turned_on(api):
     response = await client.get("/api/ask-ai/prompt", params=params)
     assert response.status_code == 200
     assert "203.0.113.80" in response.json()["prompt"]
+    with_issue = await client.get("/api/ask-ai/prompt", params={**params, "issue": "Unreviewed sender"})
+    assert "The issue: Unreviewed sender" in with_issue.json()["prompt"]
 
     assert (await client.get("/api/ask-ai/prompt", params={**params, "kind": "everything"})).status_code == 422
     assert (await client.get("/api/ask-ai/prompt", params={**params, "subject": "nobody"})).status_code == 404

@@ -24,6 +24,7 @@ async def ask_ai_prompt(
     kind: Literal["dns_check", "sender", "compliance"],
     domain_id: uuid.UUID,
     subject: str | None = Query(None, max_length=255),
+    issue: str | None = Query(None, max_length=500),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict:
@@ -34,7 +35,7 @@ async def ask_ai_prompt(
     if domain.verification_status != DomainVerificationStatus.verified:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "domain isn't verified yet")
     try:
-        prompt = await build_prompt(db, domain, kind, subject)
+        prompt = await build_prompt(db, domain, kind, subject, issue)
     except ValueError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     # build_prompt may have cached new sender identities; nothing else is written.

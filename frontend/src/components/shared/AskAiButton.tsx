@@ -20,7 +20,9 @@ function stop(e: MouseEvent) {
 /** "Ask AI" for one issue, when the organization has turned it on
  *  (Settings → General). Shows the exact prompt first; nothing is sent
  *  anywhere until the user opens it in their own AI account. */
-export default function AskAiButton({ domainId, hint }: { domainId: string; hint: AskAiHint }) {
+/** `issue` is the issue as shown to the user (a title and hint), so the
+ *  question says what it's about. */
+export default function AskAiButton({ domainId, hint, issue }: { domainId: string; hint: AskAiHint; issue?: string }) {
   const { data: org } = useCurrentOrganization();
   const [open, setOpen] = useState(false);
   if (!org?.ask_ai_enabled) return null;
@@ -38,13 +40,23 @@ export default function AskAiButton({ domainId, hint }: { domainId: string; hint
         <Sparkles size={13} />
         Ask AI
       </button>
-      {open && createPortal(<AskAiDialog domainId={domainId} hint={hint} onClose={() => setOpen(false)} />, document.body)}
+      {open && createPortal(<AskAiDialog domainId={domainId} hint={hint} issue={issue} onClose={() => setOpen(false)} />, document.body)}
     </>
   );
 }
 
-function AskAiDialog({ domainId, hint, onClose }: { domainId: string; hint: AskAiHint; onClose: () => void }) {
-  const { data, isLoading, error } = useAskAiPrompt(domainId, hint, true);
+function AskAiDialog({
+  domainId,
+  hint,
+  issue,
+  onClose,
+}: {
+  domainId: string;
+  hint: AskAiHint;
+  issue?: string;
+  onClose: () => void;
+}) {
+  const { data, isLoading, error } = useAskAiPrompt(domainId, hint, issue, true);
   const [copied, setCopied] = useState(false);
   const prompt = data?.prompt ?? "";
   const encoded = encodeURIComponent(prompt);

@@ -16,7 +16,7 @@ export function IssueRow({ item, linkTo }: { item: ActionItem; linkTo?: string }
           </div>
         )}
       </div>
-      {item.ask_ai && item.domain_id && <AskAiButton domainId={item.domain_id} hint={item.ask_ai} />}
+      {item.ask_ai && item.domain_id && <AskAiButton domainId={item.domain_id} hint={item.ask_ai} issue={`${item.title}. ${item.action_hint}`} />}
       {linkTo && <ChevronRight size={14} style={{ flexShrink: 0, color: "var(--ink-muted)" }} />}
     </>
   );

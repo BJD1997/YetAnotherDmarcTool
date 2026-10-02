@@ -40,6 +40,15 @@ describe("AskAiButton", () => {
 
     expect(await screen.findByLabelText("Prompt")).toHaveValue(PROMPT);
     expect(getMock).toHaveBeenCalledWith("/ask-ai/prompt?kind=sender&domain_id=d1&subject=mailer.example");
+  });
+
+  it("passes the issue along", async () => {
+    renderWithAppProviders(<AskAiButton domainId="d1" hint={HINT} issue="Sender fails DMARC" />);
+    fireEvent.click(await screen.findByRole("button", { name: /Ask AI/ }));
+    await screen.findByLabelText("Prompt");
+    expect(getMock).toHaveBeenCalledWith(
+      "/ask-ai/prompt?kind=sender&domain_id=d1&subject=mailer.example&issue=Sender+fails+DMARC",
+    );
     const encoded = encodeURIComponent(PROMPT);
     expect(screen.getByRole("link", { name: "Open in Claude" })).toHaveAttribute("href", `https://claude.ai/new?q=${encoded}`);
     expect(screen.getByRole("link", { name: "Open in ChatGPT" })).toHaveAttribute("href", `https://chatgpt.com/?q=${encoded}`);

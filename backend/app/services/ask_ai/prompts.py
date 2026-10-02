@@ -21,7 +21,7 @@ from app.repositories import dmarc_reports as dmarc_reports_repo
 from app.repositories.trends import get_trend
 from app.services.dmarc_analytics import service_breakdown
 from app.services.dns_checks.dmarc_record import fetch_current_dmarc_record
-from app.services.dns_checks.resolver import DnsLookupError, resolve_txt
+from app.services.dns_checks.resolver import DnsLookupError, resolve_mx, resolve_txt
 from app.services.dns_checks.tls_rpt_check import fetch_current_tls_rpt_record
 from app.services.rating.domain_rating import latest_findings_by_type, rating_window_days
 
@@ -29,11 +29,34 @@ KINDS = ("dns_check", "sender", "compliance")
 MAX_PROMPT_CHARS = 6000
 MAX_IPS = 10
 
-INTRO = (
-    "I run DMARC monitoring for my domain. Help me fix the issue below. Explain the likely cause, "
-    "then give step-by-step fixes with exact DNS records where relevant. Ask if you need more information."
-)
-OUTRO = "Data from my DMARC aggregate reports and DNS."
+INTRO = "I monitor DMARC for my domain and need help fixing an issue."
+OUTRO = """Please answer with:
+1. The likely cause.
+2. Step-by-step fixes, with the exact DNS records or settings, and where to change them for the mail services above.
+3. How to check it worked (for example, what the next DMARC reports should show).
+4. Risks: anything that could stop legitimate mail, such as tightening the DMARC policy before every sender passes.
+Ask me if you need more information. The data comes from my DMARC aggregate reports and DNS."""
+MAX_ISSUE_CHARS = 300
+
+# Mail services recognized from MX hosts and SPF includes, so the answer can
+# give steps for the right admin portal.
+_PROVIDERS: list[tuple[tuple[str, ...], str]] = [
+    (("protection.outlook.com", "outlook.com"), "Microsoft 365"),
+    (("google.com", "googlemail.com"), "Google Workspace"),
+    (("smtp2go",), "SMTP2GO"),
+    (("sendgrid",), "SendGrid"),
+    (("mailgun",), "Mailgun"),
+    (("amazonses",), "Amazon SES"),
+    (("mcsv.net", "mandrillapp", "mailchimp"), "Mailchimp"),
+    (("zoho",), "Zoho Mail"),
+    (("protonmail", "proton.me"), "Proton Mail"),
+    (("mimecast",), "Mimecast"),
+    (("pphosted",), "Proofpoint"),
+    (("sendinblue", "brevo"), "Brevo"),
+    (("postmarkapp",), "Postmark"),
+    (("sparkpostmail",), "SparkPost"),
+    (("messagelabs",), "Broadcom Email Security"),
+]
 
 _EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _CHECK_NAMES = {
@@ -81,6 +104,43 @@ async def current_record(kind: str, domain_name: str) -> str | None:
     return None
 
 
+async def mx_hosts(domain_name: str) -> list[str]:
+    try:
+        return [host.rstrip(".").lower() for _pref, host in sorted(await resolve_mx(domain_name))]
+    except DnsLookupError:
+        return []
+
+
+def _providers(hosts: list[str]) -> list[str]:
+    found: list[str] = []
+    for host in hosts:
+        for patterns, name in _PROVIDERS:
+            if any(p in host for p in patterns) and name not in found:
+                found.append(name)
+    return found
+
+
+async def _mail_setup(domain_name: str) -> str | None:
+    """e.g. "receives mail via Microsoft 365; SPF allows Microsoft 365, SMTP2GO"."""
+    parts = []
+    mx = await mx_hosts(domain_name)
+    inbound = _providers(mx)
+    if inbound:
+        parts.append(f"receives mail via {', '.join(inbound)}")
+    elif mx:
+        parts.append(f"MX: {', '.join(mx[:3])}")
+    spf = await current_record("spf", domain_name) or ""
+    includes = [
+        t.split(":", 1)[1] if t.lower().startswith("include:") else t.split("=", 1)[1]
+        for t in spf.split()
+        if t.lower().startswith(("include:", "redirect="))
+    ]
+    allowed = _providers([i.lower() for i in includes])
+    if allowed:
+        parts.append(f"SPF allows {', '.join(allowed)}")
+    return f"Mail setup: {'; '.join(parts)}." if parts else None
+
+
 def _record_line(label: str, record: str | None) -> str:
     return f"Current {label} record: {record}" if record else f"Current {label} record: none published"
 
@@ -121,7 +181,7 @@ async def _sender(db: AsyncSession, domain: Domain, subject: str | None) -> list
     if sender is None:
         raise ValueError(f"no sender {subject!r} for this domain in the last {days} days")
     ips = sender["source_ips"][:MAX_IPS]
-    spf_domains, dkim_domains = await dmarc_reports_repo.auth_domains_for_ips(
+    details = await dmarc_reports_repo.sender_auth_details(
         db, domain.id, [ip["source_ip"] for ip in sender["source_ips"]], since
     )
     lines = [
@@ -137,10 +197,21 @@ async def _sender(db: AsyncSession, domain: Domain, subject: str | None) -> list
         lines.append(f'- {ip["source_ip"]} ({ptr}): {ip["volume"]:,} messages')
     if len(sender["source_ips"]) > MAX_IPS:
         lines.append(f'- and {len(sender["source_ips"]) - MAX_IPS} more')
-    for label, seen in (("SPF (envelope-from) domains it uses", spf_domains), ("DKIM signing domains it uses", dkim_domains)):
+    for label, seen in (
+        ("SPF (envelope-from) domains it uses", details["spf_domains"]),
+        ("DKIM signing domains it uses", details["dkim_domains"]),
+    ):
         if seen:
             top = sorted(seen.items(), key=lambda kv: -kv[1])[:5]
             lines.append(f"{label}: " + ", ".join(f"{name} ({count:,})" for name, count in top))
+    if details["dkim_selectors"]:
+        lines.append("DKIM signatures seen (selector, signing domain):")
+        top = sorted(details["dkim_selectors"].items(), key=lambda kv: -(kv[1]["pass"] + kv[1]["fail"]))[:5]
+        for (dkim_domain, selector), tally in top:
+            lines.append(f"- {selector} ({dkim_domain}): {tally['pass']:,} passed, {tally['fail']:,} failed")
+    if details["reporters"]:
+        top = sorted(details["reporters"].items(), key=lambda kv: -kv[1])[:5]
+        lines.append("Reported by: " + ", ".join(f"{name} ({count:,})" for name, count in top))
     lines.append(_record_line("SPF", await current_record("spf", domain.name)))
     lines.append(_record_line("DMARC", await current_record("dmarc", domain.name)))
     lines.append("For DMARC to pass, SPF or DKIM must pass with a domain that aligns with the From domain.")
@@ -181,9 +252,20 @@ async def _compliance(db: AsyncSession, domain: Domain, _subject: str | None) ->
 _BUILDERS = {"dns_check": _dns_check, "sender": _sender, "compliance": _compliance}
 
 
-async def build_prompt(db: AsyncSession, domain: Domain, kind: str, subject: str | None) -> str:
+async def build_prompt(
+    db: AsyncSession, domain: Domain, kind: str, subject: str | None, issue: str | None = None
+) -> str:
+    """`issue` is the issue as the user saw it (an Action queue item's title
+    and hint, a check's summary), so the question says what's being asked
+    about, not just the data."""
     builder = _BUILDERS.get(kind)
     if builder is None:
         raise ValueError(f"unknown kind {kind!r}")
-    body = "\n".join(await builder(db, domain, subject))
-    return cap(redact(f"{INTRO}\n\n{body}\n\n{OUTRO}"))
+    head = [INTRO]
+    if issue and issue.strip():
+        head.append(f"The issue: {' '.join(issue.split())[:MAX_ISSUE_CHARS]}")
+    body = await builder(db, domain, subject)
+    setup = await _mail_setup(domain.name)
+    if setup:
+        body.insert(1, setup)
+    return cap(redact("\n".join(head) + "\n\n" + "\n".join(body) + "\n\n" + OUTRO))

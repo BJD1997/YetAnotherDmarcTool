@@ -28,12 +28,16 @@ async def _offline(monkeypatch):
 
     async def _record(kind, domain_name):
         return {
-            "spf": "v=spf1 include:_spf.example.net -all",
+            "spf": "v=spf1 include:spf.protection.outlook.com include:spf.smtp2go.com -all",
             "dmarc": "v=DMARC1; p=none; rua=mailto:reports+abc@hosted.example",
         }.get(kind)
 
+    async def _mx(domain_name):
+        return ["example-com.mail.protection.outlook.com"]
+
     monkeypatch.setattr(service_identifier, "resolve_ptr", _no_ptr)
     monkeypatch.setattr(prompts, "current_record", _record)
+    monkeypatch.setattr(prompts, "mx_hosts", _mx)
 
 
 async def _seed(owner_factory):
@@ -68,7 +72,7 @@ async def _seed(owner_factory):
                     created_at=now,
                     auth_results={
                         "spf": [{"scope": "mfrom", "domain": "bounce.esp.example", "result": "pass"}],
-                        "dkim": [{"selector": "s1", "domain": "esp.example", "result": "pass"}],
+                        "dkim": [{"selector": "s1", "domain": "esp.example", "result": "pass" if result == AuthResult.pass_ else "fail"}],
                     },
                 )
             )
@@ -76,11 +80,11 @@ async def _seed(owner_factory):
     return org, domain
 
 
-async def _build(owner_factory, org, domain, kind, subject):
+async def _build(owner_factory, org, domain, kind, subject, issue=None):
     async with owner_factory() as db:
         await set_org_context(db, org.id)
         domain = await db.get(Domain, domain.id)
-        text = await prompts.build_prompt(db, domain, kind, subject)
+        text = await prompts.build_prompt(db, domain, kind, subject, issue)
         await db.rollback()
     return text
 
@@ -110,7 +114,9 @@ async def test_sender_prompt(api):
     assert "203.0.113.70" in text and "40 messages" in text
     assert "0.0% SPF aligned" in text and "0.0% DKIM aligned" in text
     assert "bounce.esp.example" in text and "esp.example" in text
-    assert "v=spf1 include:_spf.example.net -all" in text
+    assert "v=spf1 include:spf.protection.outlook.com include:spf.smtp2go.com -all" in text
+    assert "s1 (esp.example): 0 passed, 40 failed" in text
+    assert "Reported by: google.com (40)" in text
     _assert_private_left_out(text)
 
 
@@ -143,3 +149,30 @@ def test_redact():
     assert prompts.redact("rua=mailto:a.b+c@x.example, mailto:d@e.nl") == (
         "rua=mailto:<your reporting address>, mailto:<your reporting address>"
     )
+
+
+async def test_prompts_say_the_issue_mail_setup_and_answer_structure(api):
+    _client, owner_factory = api
+    org, domain = await _seed(owner_factory)
+    text = await _build(
+        owner_factory, org, domain, "sender", "203.0.113.70",
+        issue='example.com sender "203.0.113.70": 0.0% SPF / 0.0% DKIM. Contact admin@test.example',
+    )
+
+    assert 'The issue: example.com sender "203.0.113.70": 0.0% SPF / 0.0% DKIM.' in text
+    assert "Mail setup: receives mail via Microsoft 365; SPF allows Microsoft 365, SMTP2GO." in text
+    for part in ("1. The likely cause", "2. Step-by-step fixes", "3. How to check", "4. Risks"):
+        assert part in text
+    _assert_private_left_out(text)
+
+
+async def test_mail_setup_follows_spf_redirect(monkeypatch):
+    async def _record(kind, domain_name):
+        return "v=spf1 redirect=_spf.google.com" if kind == "spf" else None
+
+    async def _no_mx(domain_name):
+        return []
+
+    monkeypatch.setattr(prompts, "current_record", _record)
+    monkeypatch.setattr(prompts, "mx_hosts", _no_mx)
+    assert await prompts._mail_setup("example.com") == "Mail setup: SPF allows Google Workspace."
