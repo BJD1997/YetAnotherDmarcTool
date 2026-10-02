@@ -11,7 +11,7 @@ from app.models.user import User
 from app.repositories.domains import get_owned_domain, list_domains_for_org
 from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.services.dmarc_analytics import service_breakdown_multi
-from app.services.rating.domain_rating import RATING_WINDOW_DAYS
+from app.services.rating.domain_rating import rating_window_days
 from app.services.action_queue.rules import (
     domain_ready_for_stricter_policy,
     high_volume_failure,
@@ -57,7 +57,7 @@ async def action_queue(
     # The same 90 days the failing-messages count (and the domain rating)
     # use, and the Senders list's default window, so every number in the
     # queue describes the same mail.
-    since = datetime.now(timezone.utc) - timedelta(days=RATING_WINDOW_DAYS)
+    since = datetime.now(timezone.utc) - timedelta(days=await rating_window_days(db, user.organization_id))
     services_by_domain = await service_breakdown_multi(db, [d.id for d in domains], since=since) if domains else {}
 
     for domain in domains:

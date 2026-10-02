@@ -329,3 +329,25 @@ async def test_failing_sender_gets_one_item_not_two(api):
     assert "0.0% SPF / 0.0% DKIM" in item["action_hint"]
     assert item["link_path"] == f"/domains/{domain.id}/senders?highlight=203.0.113.81"
     assert not any("203.0.113.82" in i["title"] for i in items)
+
+
+async def test_failing_count_follows_the_org_rating_window(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org, verification_status=DomainVerificationStatus.verified)
+    await _add_sender(owner_factory, org, domain, source_ip="203.0.113.90", count=100, days_ago=2)
+    await _add_sender(
+        owner_factory, org, domain, source_ip="203.0.113.91", count=100,
+        dkim_result=AuthResult.fail, spf_result=AuthResult.fail, days_ago=45,
+    )
+
+    def failing(items):
+        return [i for i in items if "failing messages" in i["title"]]
+
+    at_90 = (await client.get("/api/action-queue", params={"domain_id": str(domain.id)})).json()
+    assert len(failing(at_90)) == 1
+
+    assert (await client.patch("/api/organizations/current", json={"name": "Org", "rating_window_days": 30})).status_code == 200
+    at_30 = (await client.get("/api/action-queue", params={"domain_id": str(domain.id)})).json()
+    assert failing(at_30) == []

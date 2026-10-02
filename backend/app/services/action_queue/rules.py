@@ -34,10 +34,10 @@ from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.services.dns_checks.dmarc_record import check_rua_destination, fetch_current_dmarc_record
 from app.services.dns_checks.resolver import DnsLookupError
 from app.services.rating.domain_rating import (
-    RATING_WINDOW_DAYS,
     READY_TO_ENFORCE_MIN_PASS_PCT,
     READY_TO_ENFORCE_MIN_VOLUME,
     _windowed_totals,
+    rating_window_days,
     compute_domain_rating,
     domain_policy_readiness,
     latest_findings_by_type,
@@ -257,10 +257,8 @@ async def domain_ready_for_stricter_policy(db: AsyncSession, domain: Domain) -> 
             )
         ]
     if r.pass_rate_pct is None:
-        blocker = (
-            f"{r.total_volume:,} of {READY_TO_ENFORCE_MIN_VOLUME} messages needed in the last "
-            f"{RATING_WINDOW_DAYS} days"
-        )
+        days = await rating_window_days(db, domain.organization_id)
+        blocker = f"{r.total_volume:,} of {READY_TO_ENFORCE_MIN_VOLUME} messages needed in the last {days} days"
     else:
         blocker = f"{r.pass_rate_pct}% pass rate, needs {READY_TO_ENFORCE_MIN_PASS_PCT:g}%"
     return [
@@ -314,7 +312,7 @@ async def high_volume_failure(db: AsyncSession, domain: Domain, services: list[d
     with what the rating itself is scoring. Names the sender behind most of
     the failures (from `services`, the same 90-day window) and links to it,
     so merge_sender_items folds it together with that sender's own items."""
-    total, passed = await _windowed_totals(db, domain.id)
+    total, passed = await _windowed_totals(db, domain)
     failed = total - passed
     if total == 0 or failed < HIGH_VOLUME_FAILURE_MIN_COUNT:
         return []
