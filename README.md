@@ -26,6 +26,7 @@ password: lantern-maple-falcon-willow-989
 - 🕵️ Surfaces unregistered subdomains & DKIM selectors seen in real traffic
 - 🏢 Multi-tenant enforced at the database layer (Postgres RLS)
 - 🔑 Microsoft Entra SSO or local email + password + TOTP, chosen per organization
+- ⬆️ Updates itself from the admin console, on Docker Compose and Azure
 
 → **[Core Concepts](https://github.com/BJD1997/YetAnotherDmarcTool/wiki/Core-Concepts)** for how each of these works.
 
@@ -43,11 +44,11 @@ Open `https://<your-domain>/admin`, log in with your bootstrap credentials, crea
 
 ## ☁️ Deploy on Azure
 
-A managed, autoscaling deployment (private Postgres + Key Vault, KEDA-scaled Container Apps, a Test/Small/Medium/Large sizing picker) — this branch's own addition, not yet on `main`.
+A managed, autoscaling deployment on Azure Container Apps: private Postgres and Key Vault, KEDA-scaled api and worker, a Test/Small/Medium/Large sizing picker, and **Update now** in the admin console through an updater job.
 
 [![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FBJD1997%2FYetAnotherDmarcTool%2Fmain%2Fdeploy%2Fazure%2Fazuredeploy.json/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2FBJD1997%2FYetAnotherDmarcTool%2Fmain%2Fdeploy%2Fazure%2FcreateUiDefinition.json)
 
-Compiled and cross-checked (`bicep build` clean, 0 errors/warnings) but not yet tested against a live subscription — the manual `az deployment group create` path is the fallback if anything doesn't resolve as expected. Full parameters, prerequisites, and that manual path → **[`deploy/azure/README.md`](deploy/azure/README.md)** · narrative overview → **[Deploying on Azure Container Apps](https://github.com/BJD1997/YetAnotherDmarcTool/wiki/Deploying-on-Azure-Container-Apps)**.
+Stable since v0.1.5, deployed and updated in place on a live subscription. One trade-off: Azure blocks outbound port 25, so the STARTTLS check is off there (from v0.2.0 it uses TLS-RPT reports instead). Parameters, prerequisites, the CLI deployment and the trade-offs → **[`deploy/azure/README.md`](deploy/azure/README.md)** · overview → **[Deploying on Azure Container Apps](https://github.com/BJD1997/YetAnotherDmarcTool/wiki/Deploying-on-Azure-Container-Apps)**.
 
 ## 🏗️ Architecture
 
@@ -72,7 +73,9 @@ Compiled and cross-checked (`bicep build` clean, 0 errors/warnings) but not yet 
 ```
 
 `api`/`worker` are the same image, different commands; `migrate` runs
-Alembic + bootstraps the first admin before either starts.
+Alembic + bootstraps the first admin before either starts. The optional
+`updater` sidecar applies a new release when an admin clicks **Update
+now** (on Azure, an updater job does the same).
 
 → **[Architecture & Internals](https://github.com/BJD1997/YetAnotherDmarcTool/wiki/Architecture-and-Internals)** for the full tech stack + licenses.
 
