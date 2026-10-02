@@ -179,6 +179,15 @@ var apiEnv = concat(
       value: entraSsoAuthority
     }
   ] : [],
+  // The api only needs the mail app's client ID (for the admin-consent
+  // links in onboarding); the secret stays with the worker, which does the
+  // mailbox syncs.
+  deployEntraMailSecret ? [
+    {
+      name: 'ENTRA_MAIL_CLIENT_ID'
+      value: entraMailClientId
+    }
+  ] : [],
   hostedReportsEnv,
   deployCloudflareSecret ? [
     {

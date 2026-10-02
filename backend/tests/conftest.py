@@ -165,9 +165,8 @@ async def api(migrated_db):
     own copy of `engine`), since each of those modules imports directly from
     app.db.session rather than going through dependency injection:
     demo_read_only's enforce_demo_read_only middleware, and mailbox_poll_job's
-    poll_org_mailbox — which set_mailbox_connection/resync_mailbox_connection
-    dispatch as a real BackgroundTask that DOES execute under ASGITransport,
-    so without this patch it would try to reach the prod database.
+    poll_org_mailbox — which the worker runs; the api only queues it now, but
+    the patch stays so nothing in a test can reach the prod database.
     `owner_factory` is for test setup that must bypass RLS (seeding orgs/users
     directly), same superuser role rls_sessions uses. Also clears the shared
     `login_limiter`/`otp_limiter` in-memory rate-limit state at the start of
