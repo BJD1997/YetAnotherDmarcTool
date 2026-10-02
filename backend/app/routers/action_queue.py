@@ -12,7 +12,6 @@ from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.services.dmarc_analytics import service_breakdown_multi
 from app.services.action_queue.rules import (
     domain_ready_for_stricter_policy,
-    enforcement_readiness_notice,
     high_volume_failure,
     likely_spoofed_sender,
     low_compliance_domain,
@@ -42,13 +41,6 @@ async def action_queue(
         domains = await list_domains_for_org(db, user.organization_id)
 
     items = list(await mailbox_stopped_receiving_reports(db, user.organization_id))
-
-    # enforcement_readiness_notice is inherently org-wide (not "0 out of the
-    # 1 domain you happen to have selected") — only evaluated, and only
-    # added, when no domain_id filter is active. `domains` is already the
-    # full org list in that case.
-    if domain_id is None:
-        items += await enforcement_readiness_notice(db, domains)
 
     connection = await get_org_mailbox_connection(db, user.organization_id)
     mailbox_address = connection.mailbox_address if connection is not None else None

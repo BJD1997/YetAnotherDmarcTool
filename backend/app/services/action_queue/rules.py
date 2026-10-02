@@ -34,6 +34,9 @@ from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.services.dns_checks.dmarc_record import check_rua_destination, fetch_current_dmarc_record
 from app.services.dns_checks.resolver import DnsLookupError
 from app.services.rating.domain_rating import (
+    RATING_WINDOW_DAYS,
+    READY_TO_ENFORCE_MIN_PASS_PCT,
+    READY_TO_ENFORCE_MIN_VOLUME,
     _windowed_totals,
     compute_domain_rating,
     domain_policy_readiness,
@@ -233,49 +236,39 @@ async def mailbox_stopped_receiving_reports(db: AsyncSession, organization_id: u
 
 
 async def domain_ready_for_stricter_policy(db: AsyncSession, domain: Domain) -> list[ActionItem]:
+    """Ready for the next policy step — or, when there is a next step but
+    the domain isn't ready, what's in the way. Both open the domain's
+    Policy Builder."""
     r = await domain_policy_readiness(db, domain)
-    if not r.ready:
+    if not r.eligible:
         return []
-    return [
-        ActionItem(
-            severity="good",
-            category=CATEGORY_POLICY_READY,
-            title=f"{domain.name}: ready for p={r.next_rung}",
-            action_hint=f"{r.pass_rate_pct}% pass rate over {r.total_volume:,} msgs — open Policy Builder",
-            domain_id=str(domain.id),
-            link_path=f"/domains/{domain.id}/dns?open=policy-builder",
+    link_path = f"/domains/{domain.id}/dns?open=policy-builder"
+    if r.ready:
+        return [
+            ActionItem(
+                severity="good",
+                category=CATEGORY_POLICY_READY,
+                title=f"{domain.name}: ready for p={r.next_rung}",
+                action_hint=f"{r.pass_rate_pct}% pass rate over {r.total_volume:,} msgs — open Policy Builder",
+                domain_id=str(domain.id),
+                link_path=link_path,
+            )
+        ]
+    if r.pass_rate_pct is None:
+        blocker = (
+            f"{r.total_volume:,} of {READY_TO_ENFORCE_MIN_VOLUME} messages needed in the last "
+            f"{RATING_WINDOW_DAYS} days"
         )
-    ]
-
-
-async def enforcement_readiness_notice(db: AsyncSession, domains: list[Domain]) -> list[ActionItem]:
-    """Org-wide only — the caller should pass this the FULL org domain list
-    regardless of any single-domain filter it's otherwise applying. Only
-    fires when there's real headroom to tighten policy somewhere
-    (eligible_count > 0 and none of those are ready): if every domain is
-    already at p=reject, eligible_count is 0 and this stays correctly
-    silent rather than flagging "0 ready to enforce" forever, which would
-    otherwise be permanently true even in the best possible state."""
-    eligible_count = 0
-    ready_count = 0
-    for domain in domains:
-        r = await domain_policy_readiness(db, domain)
-        if r.eligible:
-            eligible_count += 1
-            if r.ready:
-                ready_count += 1
-
-    if eligible_count == 0 or ready_count > 0:
-        return []
-
+    else:
+        blocker = f"{r.pass_rate_pct}% pass rate, needs {READY_TO_ENFORCE_MIN_PASS_PCT:g}%"
     return [
         ActionItem(
             severity="neutral",
             category=CATEGORY_POLICY_READY,
-            title=f"{eligible_count} domain{'s' if eligible_count != 1 else ''} could tighten policy",
-            action_hint="See Domains Needing Attention for what's blocking them",
-            domain_id=None,
-            link_path="/domains",
+            title=f"{domain.name}: not ready for p={r.next_rung} yet",
+            action_hint=f"{blocker} — open Policy Builder",
+            domain_id=str(domain.id),
+            link_path=link_path,
         )
     ]
 

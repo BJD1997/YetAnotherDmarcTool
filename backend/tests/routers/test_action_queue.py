@@ -261,3 +261,39 @@ async def test_action_queue_fetches_reviewed_labels_once_per_domain(api, monkeyp
 
     assert response.status_code == 200
     assert sorted(calls) == sorted([domain_a.id, domain_b.id])
+
+
+async def test_action_queue_not_ready_to_tighten_names_the_domain_and_blocker(api):
+    """Regression: this used to be one org-wide "N domains could tighten
+    policy" item linking to the general Domains page, which said neither
+    which domain nor what was in the way."""
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org, verification_status=DomainVerificationStatus.verified)
+    await _add_sender(owner_factory, org, domain, source_ip="203.0.113.60", count=60)
+    await _add_sender(
+        owner_factory, org, domain, source_ip="203.0.113.61", count=40,
+        dkim_result=AuthResult.fail, spf_result=AuthResult.fail,
+    )
+
+    items = (await client.get("/api/action-queue")).json()
+
+    item = next(i for i in items if "not ready" in i["title"])
+    assert item["title"] == "example.com: not ready for p=reject yet"
+    assert "60" in item["action_hint"] and "98" in item["action_hint"]
+    assert item["link_path"] == f"/domains/{domain.id}/dns?open=policy-builder"
+    assert not any("could tighten" in i["title"] for i in items)
+
+
+async def test_action_queue_not_ready_to_tighten_on_low_volume(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org, verification_status=DomainVerificationStatus.verified)
+    await _add_sender(owner_factory, org, domain, source_ip="203.0.113.70", count=10)
+
+    items = (await client.get("/api/action-queue", params={"domain_id": str(domain.id)})).json()
+
+    item = next(i for i in items if "not ready" in i["title"])
+    assert "10 of 50" in item["action_hint"]

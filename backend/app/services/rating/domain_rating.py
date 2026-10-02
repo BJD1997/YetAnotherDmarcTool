@@ -3,7 +3,7 @@ pass rate + latest DNS-check findings for one domain, score them, and (via
 domain_policy_readiness) judge whether a domain has room to tighten its
 DMARC policy and is actually ready to. Shared by /domains/{id}/rating,
 /domains/ranked, /dmarc/posture, and the action-queue's
-domain_ready_for_stricter_policy / enforcement_readiness_notice rules —
+domain_ready_for_stricter_policy rule —
 one implementation of each computation, not four."""
 
 import dataclasses
