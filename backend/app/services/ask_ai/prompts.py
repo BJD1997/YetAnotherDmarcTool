@@ -41,7 +41,7 @@ MAX_ISSUE_CHARS = 300
 # Mail services recognized from MX hosts and SPF includes, so the answer can
 # give steps for the right admin portal.
 _PROVIDERS: list[tuple[tuple[str, ...], str]] = [
-    (("protection.outlook.com", "outlook.com"), "Microsoft 365"),
+    (("protection.outlook.com", "outlook.com", "mx.microsoft"), "Microsoft 365"),
     (("google.com", "googlemail.com"), "Google Workspace"),
     (("smtp2go",), "SMTP2GO"),
     (("sendgrid",), "SendGrid"),
@@ -204,7 +204,9 @@ async def _sender(db: AsyncSession, domain: Domain, subject: str | None) -> list
         if seen:
             top = sorted(seen.items(), key=lambda kv: -kv[1])[:5]
             lines.append(f"{label}: " + ", ".join(f"{name} ({count:,})" for name, count in top))
-    if details["dkim_selectors"]:
+    if not details["dkim_selectors"]:
+        lines.append("DKIM signatures seen: none (this sender's mail isn't DKIM-signed).")
+    else:
         lines.append("DKIM signatures seen (selector, signing domain):")
         top = sorted(details["dkim_selectors"].items(), key=lambda kv: -(kv[1]["pass"] + kv[1]["fail"]))[:5]
         for (dkim_domain, selector), tally in top:

@@ -176,3 +176,7 @@ async def test_mail_setup_follows_spf_redirect(monkeypatch):
     monkeypatch.setattr(prompts, "current_record", _record)
     monkeypatch.setattr(prompts, "mx_hosts", _no_mx)
     assert await prompts._mail_setup("example.com") == "Mail setup: SPF allows Google Workspace."
+
+
+def test_microsofts_newer_mx_names_are_recognized():
+    assert prompts._providers(["example-com.x-v1.mx.microsoft"]) == ["Microsoft 365"]
