@@ -119,7 +119,9 @@ def config_problems() -> list[str]:
     # The Docker Compose files always point the api at the updater; it only
     # accepts requests carrying this secret. (Portainer and Azure update
     # another way and don't set UPDATER_URL.)
-    if settings.updater_url and not settings.updater_shared_secret:
+    if settings.updater_url and not settings.updater_shared_secret and settings.deployment_platform == "portainer":
+        pass  # optional on Portainer: a tip, see config_tips()
+    elif settings.updater_url and not settings.updater_shared_secret:
         found.append(
             "UPDATER_SHARED_SECRET isn't set, so Update now in the admin console can't work: the updater "
             "rejects every request without it. Generate one with: openssl rand -hex 32 — and set it "
@@ -140,6 +142,13 @@ def config_tips() -> list[str]:
     """Optional integrations that aren't set up, with what they'd add. Not
     problems: a setup without them works."""
     tips: list[str] = []
+    if settings.deployment_platform == "portainer" and not settings.updater_shared_secret:
+        tips.append(
+            "Update now isn't set up, so updates mean changing IMAGE_TAG and redeploying the stack by hand. To "
+            "update from the admin console instead, set UPDATER_SHARED_SECRET (openssl rand -hex 32), "
+            "PORTAINER_URL, PORTAINER_API_KEY (a Portainer access token) and PORTAINER_STACK_ID (the id= in "
+            "the stack's Portainer address). See https://github.com/BJD1997/YetAnotherDmarcTool/wiki/Deploying-with-Portainer"
+        )
     if not settings.entra_sso_client_id:
         tips.append(
             "Microsoft sign-in isn't set up, so organizations sign in with local accounts only. To let them "

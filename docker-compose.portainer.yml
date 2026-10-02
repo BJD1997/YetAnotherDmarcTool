@@ -16,6 +16,9 @@
 #
 # Required variables: FERNET_KEY, PUBLIC_BASE_URL, POSTGRES_PASSWORD,
 # DMARC_APP_DB_PASSWORD. Set API_HOST_PORT if :8000 is taken on the host.
+# Optional, for Update now in the admin console: UPDATER_SHARED_SECRET,
+# PORTAINER_URL, PORTAINER_API_KEY and PORTAINER_STACK_ID (see the wiki's
+# "Deploying with Portainer").
 # See the README "Deploy with Portainer" section for the full list.
 
 configs:
@@ -132,6 +135,11 @@ services:
     environment:
       <<: *app-environment
       DATABASE_URL: postgresql+asyncpg://dmarc_app:${DMARC_APP_DB_PASSWORD}@db:5432/${POSTGRES_DB:-dmarc}
+      # In-app updates (Update now): the api only asks the updater below,
+      # with this secret; Update now stays off while it's empty.
+      DEPLOYMENT_PLATFORM: portainer
+      UPDATER_URL: http://updater:9999
+      UPDATER_SHARED_SECRET: ${UPDATER_SHARED_SECRET:-}
     ports:
       - "${API_HOST_PORT:-8000}:8000"
     depends_on:
@@ -154,6 +162,25 @@ services:
         condition: service_completed_successfully
       resolver:
         condition: service_started
+    networks:
+      - internal
+
+  # Update now: asks Portainer's API to redeploy this stack with the new
+  # IMAGE_TAG, so Portainer stays in charge of it (a plain `docker compose`
+  # update would leave Portainer's copy on the old version, and its next
+  # redeploy would roll the app back). Only this container holds the
+  # Portainer access token; no Docker socket needed. Optional: leave
+  # UPDATER_SHARED_SECRET empty to keep updating by hand.
+  updater:
+    image: ghcr.io/bjd1997/yetanotherdmarctool-updater:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      UPDATER_SHARED_SECRET: ${UPDATER_SHARED_SECRET:-}
+      PORTAINER_URL: ${PORTAINER_URL:-}
+      PORTAINER_API_KEY: ${PORTAINER_API_KEY:-}
+      PORTAINER_STACK_ID: ${PORTAINER_STACK_ID:-}
+      PORTAINER_TLS_VERIFY: ${PORTAINER_TLS_VERIFY:-true}
+      UPDATER_APP_HEALTH_URL: http://api:8000/api/health
     networks:
       - internal
 

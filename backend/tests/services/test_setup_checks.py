@@ -164,3 +164,13 @@ def test_starttls_probe_on_azure(clean_settings):
     assert "STARTTLS_CHECK_MODE=tls_rpt" in problems()
     clean_settings.setattr(settings, "starttls_check_mode", "tls_rpt")
     assert setup_checks.config_problems() == []
+
+
+def test_portainer_updates_are_optional(clean_settings):
+    clean_settings.setattr(settings, "deployment_platform", "portainer")
+    clean_settings.setattr(settings, "updater_url", "http://updater:9999")
+    assert setup_checks.config_problems() == []
+    assert "PORTAINER_API_KEY" in "\n".join(setup_checks.config_tips())
+
+    clean_settings.setattr(settings, "updater_shared_secret", "x" * 32)
+    assert not any("PORTAINER" in tip for tip in setup_checks.config_tips())
