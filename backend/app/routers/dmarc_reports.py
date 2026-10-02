@@ -195,8 +195,12 @@ async def sender_inventory(
     via the row's created_at, no separate first-seen tracking needed.
 
     `days` windows to senders with traffic in the last N days, so retired
-    senders/IPs (a decommissioned host) drop out of the view; omitted = all-time."""
-    await get_owned_domain(db, domain_id, user.organization_id)
+    senders/IPs (a decommissioned host) drop out of the view; omitted = all-time.
+
+    Empty until the domain is verified, like its rating and DNS checks."""
+    domain = await get_owned_domain(db, domain_id, user.organization_id)
+    if domain.verification_status != DomainVerificationStatus.verified:
+        return []
     since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
     services = await service_breakdown(db, domain_id, since=since)
     if not services:
@@ -233,8 +237,13 @@ async def sender_inventory_multi(
 
     Silently drops any domain_id not owned by the caller's org rather than
     404ing, since this is an aggregate endpoint over a caller-supplied list —
-    one bad id shouldn't fail every other domain's data."""
-    owned_ids = {d.id for d in await list_domains_for_org(db, user.organization_id)}
+    one bad id shouldn't fail every other domain's data. Unverified domains
+    are left out the same way: senders wait until a domain is verified."""
+    owned_ids = {
+        d.id
+        for d in await list_domains_for_org(db, user.organization_id)
+        if d.verification_status == DomainVerificationStatus.verified
+    }
     valid_ids = [d for d in dict.fromkeys(domain_ids) if d in owned_ids]
     if not valid_ids:
         return {}

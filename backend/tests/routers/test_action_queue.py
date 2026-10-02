@@ -128,8 +128,8 @@ async def test_action_queue_flags_unreviewed_senders_across_multiple_domains(api
     client, owner_factory = api
     org, user = await seed_org_and_user(owner_factory)
     await login_as(client, owner_factory, user)
-    domain_a = await _add_domain(owner_factory, org, name="a.example.com")
-    domain_b = await _add_domain(owner_factory, org, name="b.example.com")
+    domain_a = await _add_domain(owner_factory, org, name="a.example.com", verification_status=DomainVerificationStatus.verified)
+    domain_b = await _add_domain(owner_factory, org, name="b.example.com", verification_status=DomainVerificationStatus.verified)
     await _add_sender(owner_factory, org, domain_a, source_ip="203.0.113.10", count=60)
     await _add_sender(owner_factory, org, domain_b, source_ip="203.0.113.20", count=75)
 
@@ -149,7 +149,7 @@ async def test_action_queue_items_link_to_their_specific_subject_not_the_domain_
     client, owner_factory = api
     org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin)
     await login_as(client, owner_factory, user)
-    domain = await _add_domain(owner_factory, org)
+    domain = await _add_domain(owner_factory, org, verification_status=DomainVerificationStatus.verified)
     await _add_sender(owner_factory, org, domain, source_ip="203.0.113.10", count=60)
 
     response = await client.get("/api/action-queue")
@@ -214,8 +214,8 @@ async def test_action_queue_batches_service_breakdown_across_domains(api, monkey
     client, owner_factory = api
     org, user = await seed_org_and_user(owner_factory)
     await login_as(client, owner_factory, user)
-    domain_a = await _add_domain(owner_factory, org, name="a.example.com")
-    domain_b = await _add_domain(owner_factory, org, name="b.example.com")
+    domain_a = await _add_domain(owner_factory, org, name="a.example.com", verification_status=DomainVerificationStatus.verified)
+    domain_b = await _add_domain(owner_factory, org, name="b.example.com", verification_status=DomainVerificationStatus.verified)
     await _add_sender(owner_factory, org, domain_a, source_ip="203.0.113.10", count=60)
     await _add_sender(owner_factory, org, domain_b, source_ip="203.0.113.20", count=75)
 
@@ -244,8 +244,8 @@ async def test_action_queue_fetches_reviewed_labels_once_per_domain(api, monkeyp
     client, owner_factory = api
     org, user = await seed_org_and_user(owner_factory)
     await login_as(client, owner_factory, user)
-    domain_a = await _add_domain(owner_factory, org, name="a.example.com")
-    domain_b = await _add_domain(owner_factory, org, name="b.example.com")
+    domain_a = await _add_domain(owner_factory, org, name="a.example.com", verification_status=DomainVerificationStatus.verified)
+    domain_b = await _add_domain(owner_factory, org, name="b.example.com", verification_status=DomainVerificationStatus.verified)
     await _add_sender(owner_factory, org, domain_a, source_ip="203.0.113.10", count=60)
     await _add_sender(owner_factory, org, domain_b, source_ip="203.0.113.20", count=75)
 
@@ -410,3 +410,22 @@ async def test_trend_endpoint_is_org_scoped(api):
     body = (await client.get(f"/api/domains/{domain.id}/trend")).json()
     assert (body["state"], body["recent_pass_pct"], body["baseline_pass_pct"]) == ("down", 91.2, 99.1)
     assert (await client.get(f"/api/domains/{other.id}/trend")).status_code == 404
+
+
+async def test_unverified_domain_shows_no_senders_yet(api):
+    """Senders (and the Action queue's sender items) wait until the domain is
+    verified, like its grade and DNS checks already do."""
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org)  # pending verification
+    await _add_sender(
+        owner_factory, org, domain, source_ip="203.0.113.95", count=100,
+        disposition=Disposition.reject, dkim_result=AuthResult.fail, spf_result=AuthResult.fail,
+    )
+
+    assert (await client.get(f"/api/domains/{domain.id}/dmarc/sender-inventory")).json() == []
+    assert (await client.get("/api/dmarc/sender-inventory", params={"domain_ids": [str(domain.id)]})).json() == {}
+    items = (await client.get("/api/action-queue")).json()
+    assert not any("203.0.113.95" in (i["title"] + (i["link_path"] or "")) for i in items)
+    assert not any("failing messages" in i["title"] for i in items)

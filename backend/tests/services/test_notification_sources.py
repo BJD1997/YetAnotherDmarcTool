@@ -91,3 +91,19 @@ async def test_selectors_only_blocked_senders_use_are_left_out(api):
         await db.rollback()
 
     assert findings == []
+
+
+async def test_unverified_domains_get_no_selector_notifications(api):
+    _client, owner_factory = api
+    org, _user = await seed_org_and_user(owner_factory)
+    async with owner_factory() as db:
+        domain = Domain(organization_id=org.id, name="example.com")  # pending verification
+        db.add(domain)
+        await db.flush()
+        await _record(db, org, domain, 2, "203.0.113.60", [{"selector": "s1", "domain": "example.com", "result": "pass"}])
+        await db.commit()
+
+    async with owner_factory() as db:
+        await set_org_context(db, org.id)
+        assert await new_selectors(db, org.id) == []
+        await db.rollback()

@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.domain import Domain
+from app.models.enums import DomainVerificationStatus
 from app.repositories import dmarc_reports as dmarc_reports_repo
 from app.repositories.selectors import known_selector_names_for_org
 from app.services.dmarc_narrative import describe_alignment
@@ -126,7 +127,16 @@ async def new_selectors(db: AsyncSession, organization_id: uuid.UUID) -> list[Se
     rows = await dmarc_reports_repo.recent_dkim_selectors_for_org(db, organization_id, since)
     known = await known_selector_names_for_org(db, organization_id)
     domains = {
-        d.id: d for d in (await db.execute(select(Domain).where(Domain.organization_id == organization_id))).scalars()
+        # Verified domains only: until then a domain's reports could be anyone's mail.
+        d.id: d
+        for d in (
+            await db.execute(
+                select(Domain).where(
+                    Domain.organization_id == organization_id,
+                    Domain.verification_status == DomainVerificationStatus.verified,
+                )
+            )
+        ).scalars()
     }
 
     # (domain_id, selector) -> {source_ip: volume}
