@@ -11,3 +11,4 @@ class OrganizationUpdateRequest(BaseModel):
     hosted_mailbox_opt_in: bool | None = None
     report_sender_check: ReportSenderCheck | None = None
     rating_window_days: Literal[30, 60, 90, 180] | None = None
+    ask_ai_enabled: bool | None = None

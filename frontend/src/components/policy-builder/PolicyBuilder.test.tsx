@@ -25,6 +25,7 @@ const ORG: Organization = {
   is_demo_read_only: false,
   report_sender_check: "standard",
   rating_window_days: 90,
+  ask_ai_enabled: false,
   entra_consent_urls: null,
 };
 

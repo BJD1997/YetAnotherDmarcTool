@@ -22,6 +22,7 @@ const ORG = {
   hosted_mailbox_opt_in: false,
   report_sender_check: "standard",
   rating_window_days: 90,
+  ask_ai_enabled: false,
   is_demo_read_only: false,
   entra_consent_urls: null,
 };
@@ -48,6 +49,20 @@ describe("GeneralTab rating period", () => {
     fireEvent.change(select, { target: { value: "30" } });
     await waitFor(() =>
       expect(patchMock).toHaveBeenCalledWith("/organizations/current", { name: "Org", rating_window_days: 30 }),
+    );
+  });
+});
+
+describe("GeneralTab Ask AI", () => {
+  it("is off until turned on, and saves the choice", async () => {
+    patchMock.mockResolvedValue({ ...ORG, ask_ai_enabled: true });
+    renderWithAppProviders(<GeneralTab />);
+
+    const box = screen.getByLabelText("Show Ask AI buttons for this organization") as HTMLInputElement;
+    expect(box.checked).toBe(false);
+    fireEvent.click(box);
+    await waitFor(() =>
+      expect(patchMock).toHaveBeenCalledWith("/organizations/current", { name: "Org", ask_ai_enabled: true }),
     );
   });
 });
