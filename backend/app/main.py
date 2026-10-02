@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -32,35 +33,65 @@ from app.routers import (
     sign_in_events,
     users,
 )
-from app.services.auth.admin_access import admin_access_problem
-from app.services.crypto.secrets import SecretKeyNotConfigured, fernet_key_problem
+from app.services import setup_checks
+from app.services.crypto.secrets import SecretKeyNotConfigured
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 logger = logging.getLogger(__name__)
+WORKER_CHECK_GRACE_SECONDS = 120
+WORKER_CHECK_INTERVAL_SECONDS = 300
 
-async def _warn_if_admin_console_unreachable() -> None:
+async def _log_setup_problems() -> None:
+    """SETUP PROBLEM lines at startup (see app/services/setup_checks.py)."""
+    problems = setup_checks.config_problems()
     try:
         async with async_session_factory() as db:
             await set_platform_admin_context(db, is_admin=True)
-            problem = await admin_access_problem(db)
+            problems += await setup_checks.database_problems(db)
             await db.rollback()
     except Exception:
-        logger.exception("couldn't check whether anyone can sign in to the admin console")
-        return
-    if problem:
-        logger.warning("SETUP PROBLEM: %s", problem)
+        logger.exception("couldn't run the setup checks against the database")
+    dns = await setup_checks.dns_problem()
+    if dns:
+        problems.append(dns)
+    for problem in problems:
+        logger.warning(setup_checks.PREFIX + problem)
+    for tip in setup_checks.config_tips():
+        logger.warning(setup_checks.TIP_PREFIX + tip)
+
+
+async def _watch_worker() -> None:
+    """Warns when no worker is running, and says so when one is back.
+    Starts after a grace period: the worker may start after the api."""
+    await asyncio.sleep(WORKER_CHECK_GRACE_SECONDS)
+    was_running = True
+    while True:
+        try:
+            async with async_session_factory() as db:
+                running = await setup_checks.worker_running(db)
+                await db.rollback()
+        except Exception:
+            logger.exception("couldn't check whether a worker is running")
+        else:
+            if was_running and not running:
+                logger.warning(setup_checks.PREFIX + setup_checks.NO_WORKER)
+            elif running and not was_running:
+                logger.warning("SETUP PROBLEM RESOLVED: a worker is running again")
+            was_running = running
+        await asyncio.sleep(WORKER_CHECK_INTERVAL_SECONDS)
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     await assert_rls_enforced()
-    # Warn loudly rather than refuse to start: the app works until someone
-    # sets up two-factor sign-in, and that then says what to fix too.
-    problem = fernet_key_problem()
-    if problem:
-        logger.error("SETUP PROBLEM: %s", problem)
-    await _warn_if_admin_console_unreachable()
-    yield
+    # Warn loudly rather than refuse to start: the app works, and whoever
+    # set it up sees what to fix in the log they look at first.
+    await _log_setup_problems()
+    watcher = asyncio.create_task(_watch_worker())
+    try:
+        yield
+    finally:
+        watcher.cancel()
 
 
 app = FastAPI(
@@ -88,6 +119,18 @@ async def _statement_error(_request: Request, exc: StatementError) -> Response:
         return _key_problem_response(exc.orig)
     logger.error("database error", exc_info=exc)
     return PlainTextResponse("Internal Server Error", status_code=500)
+
+
+@app.middleware("http")
+async def _note_setup_problems(request: Request, call_next):
+    setup_checks.note_request(
+        request.url.path,
+        request.headers.get("host", ""),
+        request.client.host if request.client else None,
+        dict(request.headers),
+        request.url.scheme,
+    )
+    return await call_next(request)
 
 
 app.middleware("http")(add_security_headers)
