@@ -670,36 +670,39 @@ async def detected_domains(
     registered = await dmarc_reports_repo.registered_domains_by_name(db, user.organization_id)
     registered_names = set(registered.keys())
 
-    dismissed_names = await dmarc_reports_repo.dismissed_domain_names(db, user.organization_id)
+    dismissed_names = {n.lower() for n in await dmarc_reports_repo.dismissed_domain_names(db, user.organization_id)}
+    registered_lower = {name.lower() for name in registered_names}
+
+    # Report generators don't always lower-case domain names ("Shop.Example.com"),
+    # so names are normalized before comparing, or a subdomain of a registered
+    # domain shows up as an unrelated one and gets added without its parent.
+    def _add(raw: str, report_count: int, message_volume: int) -> None:
+        name = (raw or "").strip().lower().rstrip(".")
+        if not name or name in registered_lower:
+            return
+        entry = detected.setdefault(name, {"report_count": 0, "message_volume": 0})
+        entry["report_count"] += report_count
+        entry["message_volume"] += int(message_volume)
 
     for name, report_count, message_volume in await dmarc_reports_repo.unmatched_aggregate_domain_counts(
         db, user.organization_id
     ):
-        detected[name] = {"report_count": report_count, "message_volume": int(message_volume)}
-
+        _add(name, report_count, message_volume)
     for name, report_count, message_volume in await dmarc_reports_repo.unmatched_record_header_from_counts(
         db, user.organization_id
     ):
-        if name in registered_names:
-            continue
-        entry = detected.setdefault(name, {"report_count": 0, "message_volume": 0})
-        entry["report_count"] += report_count
-        entry["message_volume"] += int(message_volume)
-
+        _add(name, report_count, message_volume)
     for name, report_count, message_volume in await dmarc_reports_repo.unmatched_tls_rpt_domain_counts(
         db, user.organization_id
     ):
-        entry = detected.setdefault(name, {"report_count": 0, "message_volume": 0})
-        entry["report_count"] += report_count
-        entry["message_volume"] += int(message_volume)
-
+        _add(name, report_count, message_volume)
     for name, report_count in await dmarc_reports_repo.unmatched_forensic_domain_counts(db, user.organization_id):
-        entry = detected.setdefault(name, {"report_count": 0, "message_volume": 0})
-        entry["report_count"] += report_count
+        _add(name, report_count, 0)
 
     for name in dismissed_names:
         detected.pop(name, None)
 
+    apex_registered = await dmarc_reports_repo.apex_domains_by_name(db, user.organization_id)
     detected_names = set(detected.keys())
 
     items = []
@@ -708,9 +711,10 @@ async def detected_domains(
         suggested_parent_name: str | None = None
         relationship = "apex"
 
-        # Prefer the longest (most specific) registered ancestor, in case
-        # more than one registered domain is a suffix match.
-        for reg_name, reg_id in sorted(registered.items(), key=lambda kv: -len(kv[0])):
+        # The parent is the registered top-level domain it falls under:
+        # domains nest one level only, so a registered subdomain (say
+        # web02.example.com for x.web02.example.com) can't be the parent.
+        for reg_name, reg_id in sorted(apex_registered.items(), key=lambda kv: -len(kv[0])):
             if name.endswith(f".{reg_name}"):
                 suggested_parent_id = str(reg_id)
                 suggested_parent_name = reg_name
