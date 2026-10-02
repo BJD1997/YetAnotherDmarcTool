@@ -137,3 +137,9 @@ export interface SenderReviewUpdate {
 
 export const DATE_RANGE_PRESETS = [7, 30, 90] as const;
 export type DateRangeDays = (typeof DATE_RANGE_PRESETS)[number];
+
+// GET /dmarc/discoveries — what the reports turned up for an org admin to act on.
+export interface Discoveries {
+  domains: { name: string; message_volume: number; relationship: "apex" | "subdomain_of_registered" | "subdomain_of_detected" }[];
+  selectors: { domain_id: string; domain_name: string; selectors: { selector: string; message_volume: number }[] }[];
+}

@@ -16,6 +16,7 @@ export function useAddDetectedDomain(onSuccess?: () => void, onError?: (error: E
       queryClient.invalidateQueries({ queryKey: queryKeys.domains.all });
       queryClient.invalidateQueries({ queryKey: queryKeys.domains.ranked });
       queryClient.invalidateQueries({ queryKey: queryKeys.detectedDomains });
+      queryClient.invalidateQueries({ queryKey: queryKeys.discoveries });
       onSuccess?.();
     },
     onError,
@@ -28,6 +29,7 @@ export function useDismissDetectedDomain(onSuccess?: () => void, onError?: (erro
     mutationFn: (item: DetectedDomain) => api.post<void>(`/dmarc/detected-domains/${encodeURIComponent(item.name)}/dismiss`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.detectedDomains });
+      queryClient.invalidateQueries({ queryKey: queryKeys.discoveries });
       onSuccess?.();
     },
     onError,

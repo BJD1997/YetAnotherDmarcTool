@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "../api/client";
 import type { Domain } from "../api/types";
-import type { ActionItem, Posture, SenderInventoryRow, SenderReviewUpdate, TrendPoint } from "../api/overview";
+import type { ActionItem, Discoveries, Posture, SenderInventoryRow, SenderReviewUpdate, TrendPoint } from "../api/overview";
 import { queryKeys } from "./queryKeys";
 
 export function useHealth() {
@@ -63,4 +63,8 @@ export function useUpdateSenderReview() {
       api.patch<SenderReviewUpdate>(`/domains/${domain_id}/dmarc/sender-inventory/${encodeURIComponent(service_label)}`, body),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.senderInventory.all }),
   });
+}
+
+export function useDiscoveries(enabled: boolean) {
+  return useQuery({ queryKey: queryKeys.discoveries, queryFn: () => api.get<Discoveries>("/dmarc/discoveries"), enabled, staleTime: 5 * 60 * 1000 });
 }

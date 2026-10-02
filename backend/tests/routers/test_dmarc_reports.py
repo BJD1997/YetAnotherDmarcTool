@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest_asyncio
 
+from app.models.dkim_selector import DkimSelector
 from app.models.dmarc_aggregate import DmarcAggregateRecord, DmarcAggregateReport
 from app.models.domain import Domain
 from app.models.enums import AuthResult, Disposition, DomainVerificationStatus, UserRole
@@ -81,6 +82,7 @@ async def _add_aggregate_record(
     spf_result: AuthResult = AuthResult.pass_,
     dkim_result: AuthResult = AuthResult.pass_,
     header_from: str | None = None,
+    auth_results: dict | None = None,
 ) -> DmarcAggregateRecord:
     async with owner_factory() as db:
         record = DmarcAggregateRecord(
@@ -93,7 +95,7 @@ async def _add_aggregate_record(
             dkim_result=dkim_result,
             spf_result=spf_result,
             header_from=header_from or (domain.name if domain is not None else "unmatched.example"),
-            auth_results={},
+            auth_results=auth_results or {},
             created_at=datetime.now(timezone.utc),
         )
         db.add(record)
@@ -879,3 +881,50 @@ async def test_dmarc_policy_builder_insufficient_data_recommends_monitor_only(ap
     body = response.json()
     assert body["current_record_lookup_error"] is True
     assert body["recommendation"]["policy"] == "none"
+
+
+async def test_discoveries_lists_unadded_domains_and_unmonitored_selectors(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org, verification_status=DomainVerificationStatus.verified)
+    async with owner_factory() as db:
+        db.add(DkimSelector(organization_id=org.id, domain_id=domain.id, selector="known"))
+        await db.commit()
+    dkim = {
+        "dkim": [
+            {"selector": "new1", "domain": domain.name, "result": "pass"},
+            {"selector": "known", "domain": domain.name, "result": "pass"},
+            {"selector": "esp", "domain": "esp-unrelated.net", "result": "pass"},  # not aligned
+        ]
+    }
+    recent = await _add_aggregate_report(owner_factory, org, domain)
+    await _add_aggregate_record(owner_factory, org, domain, recent, count=7, auth_results=dkim)
+    old = await _add_aggregate_report(
+        owner_factory, org, domain, date_range_begin=datetime.now(timezone.utc) - timedelta(days=45)
+    )
+    await _add_aggregate_record(
+        owner_factory, org, domain, old, count=3,
+        auth_results={"dkim": [{"selector": "stale", "domain": domain.name, "result": "pass"}]},
+    )
+    unmatched = await _add_aggregate_report(owner_factory, org, None, org_name="reporter.com")
+    await _add_aggregate_record(owner_factory, org, None, unmatched, header_from="other-brand.example", count=5)
+
+    body = (await client.get("/api/dmarc/discoveries")).json()
+
+    assert "other-brand.example" in {d["name"] for d in body["domains"]}
+    assert body["selectors"] == [
+        {
+            "domain_id": str(domain.id),
+            "domain_name": domain.name,
+            "selectors": [{"selector": "new1", "message_volume": 7}],
+        }
+    ]
+
+
+async def test_discoveries_is_for_org_admins(api):
+    client, owner_factory = api
+    _org, user = await seed_org_and_user(owner_factory, role=UserRole.member)
+    await login_as(client, owner_factory, user)
+
+    assert (await client.get("/api/dmarc/discoveries")).status_code == 403
