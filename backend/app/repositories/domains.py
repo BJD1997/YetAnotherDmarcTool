@@ -77,3 +77,10 @@ async def mark_pending_subdomains_verified(db: AsyncSession, parent_domain_id: U
         .where(Domain.parent_domain_id == parent_domain_id, Domain.verification_status == DomainVerificationStatus.pending)
         .values(verification_status=DomainVerificationStatus.verified, verified_at=verified_at)
     )
+
+
+async def list_hosted_domain_names_for_org(db: AsyncSession, organization_id: UUID) -> set[str]:
+    result = await db.execute(
+        select(Domain.name).where(Domain.organization_id == organization_id, Domain.hosted_report_address.is_not(None))
+    )
+    return set(result.scalars())

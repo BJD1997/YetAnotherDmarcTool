@@ -1,4 +1,4 @@
-import { useMemo, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import type { TrendPoint } from "../../api/overview";
 import { useTrend } from "../../hooks/useOverviewResources";
 
@@ -35,8 +35,9 @@ function toRows(points: TrendPoint[]): Row[] {
   }));
 }
 
-const WIDTH = 720;
-const HEIGHT = 200;
+// Fallback size before the first measurement (and in tests, which have no
+// ResizeObserver); after that the chart draws at its box's real pixel size.
+const DEFAULT_SIZE = { width: 720, height: 200 };
 const PAD = { top: 16, right: 16, bottom: 28, left: 34 };
 
 export default function TrendChart({ domainId, days }: { domainId: string | null; days: number }) {
@@ -47,7 +48,7 @@ export default function TrendChart({ domainId, days }: { domainId: string | null
   const rows = useMemo(() => toRows(data ?? []), [data]);
 
   return (
-    <div className="card">
+    <div className="card overview-widget trend-card">
       <div className="card-header">
         <h3>Authentication trend</h3>
         {rows.length > 0 && (
@@ -59,7 +60,11 @@ export default function TrendChart({ domainId, days }: { domainId: string | null
 
       {isLoading && <p className="muted">Loading…</p>}
       {!isLoading && rows.length === 0 && <p className="empty-state">No aggregate reports in this range.</p>}
-      {!isLoading && rows.length > 0 && (tableView ? <TrendTable rows={rows} /> : <TrendSvg rows={rows} />)}
+      {!isLoading && rows.length > 0 && (
+        <div className={tableView ? "overview-widget-scroll" : "overview-widget-fill"}>
+          {tableView ? <TrendTable rows={rows} /> : <TrendSvg rows={rows} />}
+        </div>
+      )}
     </div>
   );
 }
@@ -67,7 +72,7 @@ export default function TrendChart({ domainId, days }: { domainId: string | null
 function TrendTable({ rows }: { rows: Row[] }) {
   return (
     <div className="table-wrap">
-      <table className="table">
+      <table className="table table--sticky-head">
         <thead>
           <tr>
             <th>Date</th>
@@ -95,8 +100,25 @@ function TrendTable({ rows }: { rows: Row[] }) {
   );
 }
 
+function useBoxSize<T extends HTMLElement>() {
+  const ref = useRef<T>(null);
+  const [size, setSize] = useState(DEFAULT_SIZE);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      if (width > 0 && height > 0) setSize({ width: Math.round(width), height: Math.round(height) });
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  return [ref, size] as const;
+}
+
 function TrendSvg({ rows }: { rows: Row[] }) {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const [boxRef, { width: WIDTH, height: HEIGHT }] = useBoxSize<HTMLDivElement>();
   const innerWidth = WIDTH - PAD.left - PAD.right;
   const innerHeight = HEIGHT - PAD.top - PAD.bottom;
 
@@ -116,80 +138,69 @@ function TrendSvg({ rows }: { rows: Row[] }) {
 
   const gridLines = [0, 25, 50, 75, 100];
   const hovered = hoverIndex !== null ? rows[hoverIndex] : null;
-  const labelStride = Math.max(1, Math.ceil(rows.length / 8));
+  // The legend always shows one day's numbers (the hovered one, else the
+  // latest), so it keeps the same size whether or not you hover.
+  const shown = hovered ?? rows[rows.length - 1];
+  const labelStride = Math.max(1, Math.ceil(rows.length / Math.max(2, Math.floor(innerWidth / 70))));
 
   return (
-    <div>
-      <div className="chip-row" style={{ marginBottom: "0.75rem" }}>
+    <>
+      <div className="chip-row trend-legend">
         {SERIES.map((s) => (
-          <span
-            key={s.key}
-            className="chip-row"
-            style={{ gap: "0.35rem", fontSize: "0.8rem", color: "var(--ink-secondary)" }}
-          >
-            <span
-              style={{ width: 10, height: 10, borderRadius: 2, background: s.color, display: "inline-block" }}
-            />
+          <span key={s.key} className="chip-row" style={{ gap: "0.35rem", fontSize: "0.8rem", color: "var(--ink-secondary)" }}>
+            <span style={{ width: 10, height: 10, borderRadius: 2, background: s.color, display: "inline-block" }} />
             {s.label}
+            <strong className="num" style={{ color: "var(--ink)" }}>{shown[s.key]}%</strong>
           </span>
         ))}
+        <span className="muted num" style={{ fontSize: "0.8rem", marginLeft: "auto" }}>
+          {hovered ? "" : "latest: "}
+          {shown.date} · {shown.total.toLocaleString()} msgs
+        </span>
       </div>
-      <svg
-        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-        style={{ width: "100%", height: "auto", overflow: "visible", display: "block" }}
-        onMouseMove={handleMove}
-        onMouseLeave={() => setHoverIndex(null)}
-      >
-        {gridLines.map((g) => (
-          <g key={g}>
-            <line x1={PAD.left} x2={WIDTH - PAD.right} y1={yFor(g)} y2={yFor(g)} stroke="var(--border)" strokeWidth={1} />
-            <text x={PAD.left - 8} y={yFor(g)} textAnchor="end" dominantBaseline="middle" fontSize={10} fill="var(--ink-muted)">
-              {g}
-            </text>
-          </g>
-        ))}
+      <div ref={boxRef} className="trend-plot">
+        <svg
+          width={WIDTH}
+          height={HEIGHT}
+          viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
+          style={{ display: "block", overflow: "visible" }}
+          onMouseMove={handleMove}
+          onMouseLeave={() => setHoverIndex(null)}
+        >
+          {gridLines.map((g) => (
+            <g key={g}>
+              <line x1={PAD.left} x2={WIDTH - PAD.right} y1={yFor(g)} y2={yFor(g)} stroke="var(--border)" strokeWidth={1} />
+              <text x={PAD.left - 8} y={yFor(g)} textAnchor="end" dominantBaseline="middle" fontSize={11} fill="var(--ink-muted)">
+                {g}
+              </text>
+            </g>
+          ))}
 
-        {rows.map((r, i) =>
-          i % labelStride === 0 ? (
-            <text key={r.date} x={xFor(i)} y={HEIGHT - 8} textAnchor="middle" fontSize={10} fill="var(--ink-muted)">
-              {r.date.slice(5)}
-            </text>
-          ) : null,
-        )}
+          {rows.map((r, i) =>
+            i % labelStride === 0 ? (
+              <text key={r.date} x={xFor(i)} y={HEIGHT - 8} textAnchor="middle" fontSize={11} fill="var(--ink-muted)">
+                {r.date.slice(5)}
+              </text>
+            ) : null,
+          )}
 
-        {SERIES.map((s) => (
-          <path key={s.key} d={pathFor(s.key)} fill="none" stroke={s.color} strokeWidth={2} />
-        ))}
+          {SERIES.map((s) => (
+            <path key={s.key} d={pathFor(s.key)} fill="none" stroke={s.color} strokeWidth={2} />
+          ))}
 
-        {hovered && hoverIndex !== null && (
-          <line
-            x1={xFor(hoverIndex)}
-            x2={xFor(hoverIndex)}
-            y1={PAD.top}
-            y2={HEIGHT - PAD.bottom}
-            stroke="var(--border-strong)"
-            strokeWidth={1}
-            strokeDasharray="3,3"
-          />
-        )}
-      </svg>
-      {hovered && (
-        <div className="table-wrap" style={{ marginTop: "0.5rem" }}>
-          <table className="table">
-            <tbody>
-              <tr>
-                <td className="muted">{hovered.date}</td>
-                <td className="num">{hovered.total.toLocaleString()} msgs</td>
-                {SERIES.map((s) => (
-                  <td key={s.key} className="num" style={{ color: s.color }}>
-                    {hovered[s.key]}%
-                  </td>
-                ))}
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
+          {hovered && hoverIndex !== null && (
+            <line
+              x1={xFor(hoverIndex)}
+              x2={xFor(hoverIndex)}
+              y1={PAD.top}
+              y2={HEIGHT - PAD.bottom}
+              stroke="var(--border-strong)"
+              strokeWidth={1}
+              strokeDasharray="3,3"
+            />
+          )}
+        </svg>
+      </div>
+    </>
   );
 }

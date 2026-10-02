@@ -5,6 +5,7 @@ import AdminLogin from "./pages/admin/AdminLogin";
 import AdminOrganizations from "./pages/admin/AdminOrganizations";
 import AdminJobRuns from "./pages/admin/AdminJobRuns";
 import AdminUpdates from "./pages/admin/AdminUpdates";
+import AdminSignIns from "./pages/admin/AdminSignIns";
 import Overview from "./pages/Overview";
 import Onboarding from "./pages/Onboarding";
 import Domains from "./pages/Domains";
@@ -19,6 +20,7 @@ import InboundTab from "./pages/domain-detail/InboundTab";
 import Team from "./pages/Team";
 import SettingsLayout from "./pages/SettingsLayout";
 import GeneralTab from "./pages/settings/GeneralTab";
+import AccountTab from "./pages/settings/AccountTab";
 import DomainsTab from "./pages/settings/DomainsTab";
 import SignInActivityTab from "./pages/settings/SignInActivityTab";
 import Shell from "./components/Shell";
@@ -48,6 +50,16 @@ export default function App() {
           <RequireAdminAuth>
             <AdminShell>
               <AdminJobRuns />
+            </AdminShell>
+          </RequireAdminAuth>
+        }
+      />
+      <Route
+        path="/admin/sign-ins"
+        element={
+          <RequireAdminAuth>
+            <AdminShell>
+              <AdminSignIns />
             </AdminShell>
           </RequireAdminAuth>
         }
@@ -131,6 +143,7 @@ export default function App() {
         }
       >
         <Route index element={<GeneralTab />} />
+        <Route path="account" element={<AccountTab />} />
         <Route path="domains" element={<DomainsTab />} />
         <Route path="sign-in-activity" element={<SignInActivityTab />} />
       </Route>

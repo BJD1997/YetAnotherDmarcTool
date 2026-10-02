@@ -1,18 +1,53 @@
 import { useState } from "react";
-import { useSignInEvents } from "../../hooks/useSignInEvents";
+import { useSignInEvents, type SignInEvent } from "../../hooks/useSignInEvents";
+import { LoadMoreButton } from "../shared/LoadMoreButton";
 
-const LIMIT = 50;
+const ACCOUNT_CHANGES: Record<string, string> = {
+  password_changed: "Changed their password",
+  authenticator_replaced: "Replaced their authenticator",
+  password_reset_by_admin: "Password reset",
+  mfa_reset_by_admin: "Two-factor authentication reset",
+  password_reset_by_platform_admin: "Password reset by platform admin",
+  mfa_reset_by_platform_admin: "Two-factor authentication reset by platform admin",
+};
 
-export default function SignInEventsSection() {
+function reasonText(event: SignInEvent): string {
+  if (event.result === "failure") return event.failure_reason ?? "";
+  if (event.result !== "account_change") return "";
+  const action = ACCOUNT_CHANGES[event.failure_reason ?? ""] ?? event.failure_reason ?? "";
+  return event.actor_email ? `${action} (by ${event.actor_email})` : action;
+}
+
+const RESULT_BADGE: Record<SignInEvent["result"], { className: string; label: string }> = {
+  success: { className: "badge--good", label: "success" },
+  failure: { className: "badge--critical", label: "failure" },
+  account_change: { className: "badge--neutral", label: "account change" },
+};
+
+const METHOD_LABELS: Record<SignInEvent["auth_method"], string> = {
+  entra: "Microsoft",
+  local: "local",
+  platform_admin: "break-glass",
+};
+
+// endpoint: an org's own log by default; the admin console passes
+// "/admin/sign-in-events" for break-glass sign-ins (one method only, so no
+// method filter there).
+export default function SignInEventsSection({ endpoint = "/sign-in-events" }: { endpoint?: string }) {
   const [resultFilter, setResultFilter] = useState("");
   const [authMethodFilter, setAuthMethodFilter] = useState("");
+  const showMethodFilter = endpoint === "/sign-in-events";
 
-  const params = new URLSearchParams({ limit: String(LIMIT) });
+  // No explicit limit param — the backend's own default (50, see
+  // /sign-in-events' `limit: int = Query(50, ...)`) is relied on, matching
+  // the other four paginated hooks (DMARC by-day, TLS-RPT, Admin
+  // Organizations, Admin Job Runs), none of which set it explicitly either.
+  const params = new URLSearchParams();
   if (resultFilter) params.set("result", resultFilter);
   if (authMethodFilter) params.set("auth_method", authMethodFilter);
   const filterQS = params.toString();
 
-  const query = useSignInEvents(filterQS);
+  const query = useSignInEvents(filterQS, endpoint);
 
   const events = query.data?.pages.flatMap((page) => page.events) ?? [];
 
@@ -23,12 +58,15 @@ export default function SignInEventsSection() {
           <option value="">Any result</option>
           <option value="success">Success</option>
           <option value="failure">Failure</option>
+          <option value="account_change">Account change</option>
         </select>
-        <select className="input" value={authMethodFilter} onChange={(e) => setAuthMethodFilter(e.target.value)}>
-          <option value="">Any method</option>
-          <option value="entra">Microsoft</option>
-          <option value="local">Local</option>
-        </select>
+        {showMethodFilter && (
+          <select className="input" value={authMethodFilter} onChange={(e) => setAuthMethodFilter(e.target.value)}>
+            <option value="">Any method</option>
+            <option value="entra">Microsoft</option>
+            <option value="local">Local</option>
+          </select>
+        )}
       </div>
 
       {query.isLoading && <p className="muted">Loading…</p>}
@@ -54,12 +92,12 @@ export default function SignInEventsSection() {
                   <tr key={event.id} style={event.result === "failure" ? { background: "var(--critical-wash)" } : undefined}>
                     <td>{event.email ?? "—"}</td>
                     <td>
-                      <span className="badge badge--neutral">{event.auth_method === "entra" ? "Microsoft" : "local"}</span>
+                      <span className="badge badge--neutral">{METHOD_LABELS[event.auth_method]}</span>
                     </td>
                     <td>
-                      <span className={`badge ${event.result === "success" ? "badge--good" : "badge--critical"}`}>{event.result}</span>
+                      <span className={`badge ${RESULT_BADGE[event.result].className}`}>{RESULT_BADGE[event.result].label}</span>
                     </td>
-                    <td className="muted">{event.result === "failure" ? event.failure_reason : ""}</td>
+                    <td className="muted">{reasonText(event)}</td>
                     <td className="muted">{event.ip_address ?? "—"}</td>
                     <td className="muted" style={{ maxWidth: "16rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={event.user_agent ?? undefined}>
                       {event.user_agent ?? "—"}
@@ -75,16 +113,11 @@ export default function SignInEventsSection() {
         </div>
       )}
 
-      {query.hasNextPage && (
-        <button
-          className="btn btn--secondary"
-          style={{ marginTop: "0.75rem" }}
-          onClick={() => query.fetchNextPage()}
-          disabled={query.isFetchingNextPage}
-        >
-          {query.isFetchingNextPage ? "Loading…" : "Load more"}
-        </button>
-      )}
+      <LoadMoreButton
+        hasNextPage={query.hasNextPage}
+        isFetchingNextPage={query.isFetchingNextPage}
+        onClick={() => query.fetchNextPage()}
+      />
     </div>
   );
 }

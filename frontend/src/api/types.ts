@@ -3,6 +3,7 @@ export interface CurrentUser {
   email: string;
   display_name: string | null;
   role: "org_admin" | "member";
+  auth_method: "entra" | "local";
   organization_id: string;
 }
 
@@ -13,6 +14,8 @@ export interface EntraConsentUrls {
 
 export type SpfAllQualifierMode = "strict" | "conditional";
 
+export type ReportSenderCheck = "standard" | "strict" | "off";
+
 export interface Organization {
   id: string;
   name: string;
@@ -21,6 +24,8 @@ export interface Organization {
   is_operator: boolean;
   spf_all_qualifier_mode: SpfAllQualifierMode;
   hosted_mailbox_opt_in: boolean;
+  report_sender_check: ReportSenderCheck;
+  is_demo_read_only: boolean;
   entra_consent_urls: EntraConsentUrls | null;
 }
 
@@ -59,6 +64,14 @@ export interface AdminMe {
   id: string;
   email: string;
   auth_type: "local" | "operator_org";
+  organization_name: string | null;
+  // The browser also holds the other kind of admin sign-in.
+  can_switch: boolean;
+}
+
+export interface AdminSessionOptions {
+  local: { email: string; organization_name: null } | null;
+  operator_org: { email: string; organization_name: string } | null;
 }
 
 export interface TeamMember {
@@ -68,5 +81,6 @@ export interface TeamMember {
   role: "org_admin" | "member";
   status: "active" | "disabled";
   auth_method: "entra" | "local";
+  mfa_enrolled: boolean;
   last_login_at: string | null;
 }

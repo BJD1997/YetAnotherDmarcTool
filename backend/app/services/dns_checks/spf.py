@@ -188,7 +188,7 @@ async def check(
                 Finding(
                     status="warn",
                     summary="SPF ends in ~all (softfail) — consider -all once you're confident in the record",
-                    details={"recommendation": "Once the Outbound email table shows a consistently high pass rate for a few weeks, tighten this to -all."},
+                    details={"recommendation": "Once Senders shows a consistently high pass rate for a few weeks, tighten this to -all."},
                 )
             )
     else:

@@ -5,7 +5,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
-from app.models.enums import OrganizationStatus, SpfAllQualifierMode
+from app.models.enums import OrganizationStatus, ReportSenderCheck, SpfAllQualifierMode
 from app.models.mixins import TimestampMixin, UUIDPkMixin
 from app.models.pg_enum import pg_enum
 
@@ -28,10 +28,10 @@ class Organization(UUIDPkMixin, TimestampMixin, Base):
         default=OrganizationStatus.active,
     )
 
-    # At most one organization may have this set (enforced by a partial
-    # unique index — see the migration) — its org_admins can access the
-    # platform-admin API surface (/admin/*) through their normal Entra SSO
-    # session, no separate local-auth login needed. The local platform_admin
+    # Operator orgs' org_admins can access the platform-admin API surface
+    # (/admin/*) through their normal session, no separate local-auth login
+    # needed. Any number of orgs may be flagged (0026 dropped the original
+    # one-org limit); set from the admin console. The local platform_admin
     # login (see PlatformAdmin) stays available as a break-glass fallback.
     is_operator: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
@@ -40,6 +40,14 @@ class Organization(UUIDPkMixin, TimestampMixin, Base):
         pg_enum(SpfAllQualifierMode, "spf_all_qualifier_mode"),
         nullable=False,
         default=SpfAllQualifierMode.strict,
+    )
+
+    # How strictly incoming reports are checked for forgery; changing it
+    # re-evaluates reports already received (Settings, org admins).
+    report_sender_check: Mapped[ReportSenderCheck] = mapped_column(
+        pg_enum(ReportSenderCheck, "report_sender_check"),
+        nullable=False,
+        default=ReportSenderCheck.standard,
     )
 
     # Explicit opt-in for orgs that COULD set up their own MailboxConnection

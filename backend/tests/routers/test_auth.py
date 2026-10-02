@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 from tests.conftest import login_as, login_as_platform_admin, seed_org_and_user
 
 
@@ -56,6 +57,12 @@ from app.models.enums import UserRole, UserStatus
 from app.models.user import User
 from app.services.auth.password import hash_password
 from app.services.crypto import secrets as crypto_secrets
+
+
+def _next_code(secret: str) -> str:
+    """The next 30-second step's code: codes are single-use, and the current
+    one was already spent confirming enrollment."""
+    return pyotp.TOTP(secret).at(datetime.now() + timedelta(seconds=30))
 
 
 @pytest.fixture(autouse=True)
@@ -165,11 +172,39 @@ async def test_full_local_login_enroll_and_verify_flow(api):
     assert second_login.status_code == 200
     assert second_login.json()["needs_enrollment"] is False
 
-    verify_response = await client.post("/api/auth/verify-otp", json={"code": pyotp.TOTP(secret).now()})
+    verify_response = await client.post("/api/auth/verify-otp", json={"code": _next_code(secret)})
     assert verify_response.status_code == 204
 
     final_me = await client.get("/api/auth/me")
     assert final_me.status_code == 200
+
+
+async def test_enrolled_user_cannot_reenroll_with_attacker_chosen_secret(api):
+    """Regression: an attacker holding only the password must not be able to
+    swap in their own TOTP secret via the enrollment endpoints and get a
+    session — that would make MFA worthless against a stolen password."""
+    client, owner_factory = api
+    org, _user = await seed_org_and_user(owner_factory, entra=False)
+    local_user = await _seed_local_user_with_password(owner_factory, org)
+    password = "correct horse battery staple"
+    await client.post("/api/auth/local-login", json={"email": local_user.email, "password": password})
+    real_secret = (await client.post("/api/auth/enroll-otp")).json()["secret"]
+    await client.post("/api/auth/enroll-otp/confirm", json={"secret": real_secret, "code": pyotp.TOTP(real_secret).now()})
+    await client.post("/api/auth/logout")
+
+    # Attacker: correct password, but no access to the real authenticator.
+    await client.post("/api/auth/local-login", json={"email": local_user.email, "password": password})
+    attacker_secret = pyotp.random_base32()
+
+    assert (await client.post("/api/auth/enroll-otp")).status_code == 409
+    hijack = await client.post(
+        "/api/auth/enroll-otp/confirm", json={"secret": attacker_secret, "code": pyotp.TOTP(attacker_secret).now()}
+    )
+    assert hijack.status_code == 409
+    assert (await client.get("/api/auth/me")).status_code == 401
+
+    # The real second factor is untouched and still works.
+    assert (await client.post("/api/auth/verify-otp", json={"code": _next_code(real_secret)})).status_code == 204
 
 
 async def test_verify_otp_rejects_wrong_code(api):

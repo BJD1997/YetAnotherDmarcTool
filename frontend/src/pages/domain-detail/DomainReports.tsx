@@ -14,6 +14,7 @@ import { reportsFilterQuery } from "../../api/dmarc";
 import { DATE_RANGE_PRESETS } from "../../api/overview";
 import { Stat } from "../../components/domain/shared";
 import { useDmarcRecordDetail, useDmarcReportsByDay, useDmarcReportsSummary, useGroupedDmarcReports } from "../../hooks/useDmarcReports";
+import LeftOutReportsNotice from "../../components/domain/LeftOutReportsNotice";
 
 function dispositionRole(disposition: string): "good" | "warning" | "critical" {
   if (disposition === "reject") return "critical";
@@ -65,7 +66,8 @@ export default function DomainReports() {
 
   const grouping: Grouping = (params.get("group") as Grouping) || "day";
   const filters: ReportsFilters = {
-    days: params.get("days") ? Number(params.get("days")) : undefined,
+    date_from: params.get("date_from") || undefined,
+    date_to: params.get("date_to") || undefined,
     disposition: (params.get("disposition") as ReportsFilters["disposition"]) || undefined,
     spf_result: (params.get("spf_result") as ReportsFilters["spf_result"]) || undefined,
     dkim_result: (params.get("dkim_result") as ReportsFilters["dkim_result"]) || undefined,
@@ -73,12 +75,25 @@ export default function DomainReports() {
     source_ip: params.get("source_ip") || undefined,
   };
   const filterQS = reportsFilterQuery(filters);
+  const hasActiveFilters = Object.values(filters).some((v) => v !== undefined);
+
+  // Applies one or more param changes atomically against the CURRENT `params`
+  // snapshot. setFilter (single key) is a thin wrapper around this — the
+  // batched form exists for the quick-pick range buttons, which must set
+  // date_from and date_to together: two sequential setFilter calls would each
+  // rebuild from the same pre-navigation `params` snapshot, so the second
+  // call would silently clobber the first's change.
+  function setFilters(updates: Record<string, string>) {
+    const next = new URLSearchParams(params);
+    for (const [key, value] of Object.entries(updates)) {
+      if (value) next.set(key, value);
+      else next.delete(key);
+    }
+    setParams(next, { replace: true });
+  }
 
   function setFilter(key: string, value: string) {
-    const next = new URLSearchParams(params);
-    if (value) next.set(key, value);
-    else next.delete(key);
-    setParams(next, { replace: true });
+    setFilters({ [key]: value });
   }
 
   const summaryQuery = useDmarcReportsSummary(domainId, filterQS);
@@ -111,6 +126,9 @@ export default function DomainReports() {
   const groupedQuery = useGroupedDmarcReports(domainId, grouping, filterQS);
   const detailQuery = useDmarcRecordDetail(domainId, expandedId);
 
+  const loadedCount = useMemo(() => days.reduce((sum, d) => sum + d.rows.length, 0), [days]);
+  const total = daysQuery.data?.pages[0]?.total;
+
   return (
     <section>
       <div className="page-header">
@@ -119,14 +137,35 @@ export default function DomainReports() {
         </div>
       </div>
 
-      <FilterBar filters={filters} grouping={grouping} onFilterChange={setFilter} onGroupingChange={(g) => setFilter("group", g)} />
+      <LeftOutReportsNotice domainId={domainId} types={["DMARC", "Forensic"]} />
+
+      <FilterBar
+        filters={filters}
+        grouping={grouping}
+        onFilterChange={setFilter}
+        onFiltersChange={setFilters}
+        onDateRangeChange={(from, to) => setFilters({ date_from: from, date_to: to })}
+        onGroupingChange={(g) => setFilter("group", g)}
+      />
 
       <SummaryBar summary={summaryQuery.data} isLoading={summaryQuery.isLoading} />
 
       {grouping === "day" ? (
         <>
           {daysQuery.isLoading && <p className="muted">Loading…</p>}
-          {daysQuery.isSuccess && days.length === 0 && <p className="empty-state">No reports match these filters.</p>}
+          {daysQuery.isSuccess && days.length === 0 && (
+            <p className="empty-state">
+              {hasActiveFilters
+                ? "No reports match these filters."
+                : "No DMARC reports received yet for this domain — check DNS checks and the connected mailbox."}
+            </p>
+          )}
+
+          {total != null && (
+            <p className="muted" style={{ fontSize: "0.85rem" }}>
+              Showing {loadedCount.toLocaleString()} of {total.toLocaleString()}
+            </p>
+          )}
 
           {days.map((day) => (
             <div key={day.date} className="card" style={{ padding: 0, overflow: "hidden" }}>
@@ -162,7 +201,16 @@ export default function DomainReports() {
                     }}
                   >
                     <div
+                      role="button"
+                      tabIndex={0}
+                      aria-expanded={expandedId === row.record_id}
                       onClick={() => setExpandedId(expandedId === row.record_id ? null : row.record_id)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setExpandedId(expandedId === row.record_id ? null : row.record_id);
+                        }
+                      }}
                       style={{
                         display: "flex",
                         justifyContent: "space-between",
@@ -206,21 +254,32 @@ export default function DomainReports() {
           )}
         </>
       ) : (
-        <GroupedTable grouping={grouping} rows={groupedQuery.data} isLoading={groupedQuery.isLoading} />
+        <GroupedTable grouping={grouping} rows={groupedQuery.data} isLoading={groupedQuery.isLoading} hasActiveFilters={hasActiveFilters} />
       )}
     </section>
   );
+}
+
+function quickRangeDates(days: number): { from: string; to: string } {
+  const to = new Date();
+  const from = new Date();
+  from.setDate(from.getDate() - (days - 1));
+  return { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) };
 }
 
 function FilterBar({
   filters,
   grouping,
   onFilterChange,
+  onFiltersChange,
+  onDateRangeChange,
   onGroupingChange,
 }: {
   filters: ReportsFilters;
   grouping: Grouping;
   onFilterChange: (key: string, value: string) => void;
+  onFiltersChange: (updates: Record<string, string>) => void;
+  onDateRangeChange: (from: string, to: string) => void;
   onGroupingChange: (grouping: Grouping) => void;
 }) {
   const [reporter, setReporter] = useState(filters.reporter ?? "");
@@ -234,14 +293,24 @@ function FilterBar({
   return (
     <div className="card">
       <div className="field-row" style={{ marginBottom: "0.6rem" }}>
-        <select className="input" value={filters.days ?? ""} onChange={(e) => onFilterChange("days", e.target.value)}>
-          <option value="">All time</option>
-          {DATE_RANGE_PRESETS.map((d) => (
-            <option key={d} value={d}>
-              Last {d} days
-            </option>
-          ))}
-        </select>
+        <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.85rem" }}>
+          From
+          <input
+            type="date"
+            className="input"
+            value={filters.date_from ?? ""}
+            onChange={(e) => onFilterChange("date_from", e.target.value)}
+          />
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.85rem" }}>
+          To
+          <input
+            type="date"
+            className="input"
+            value={filters.date_to ?? ""}
+            onChange={(e) => onFilterChange("date_to", e.target.value)}
+          />
+        </label>
         <select className="input" value={filters.disposition ?? ""} onChange={(e) => onFilterChange("disposition", e.target.value)}>
           <option value="">Any disposition</option>
           <option value="none">Accepted</option>
@@ -259,27 +328,45 @@ function FilterBar({
           <option value="fail">DKIM fail</option>
         </select>
       </div>
+      <div className="chip-row" style={{ marginBottom: "0.6rem" }}>
+        <span className="muted" style={{ fontSize: "0.8rem" }}>
+          Quick range:
+        </span>
+        {DATE_RANGE_PRESETS.map((d) => (
+          <button
+            key={d}
+            type="button"
+            className="btn btn--ghost btn--sm"
+            onClick={() => {
+              const { from, to } = quickRangeDates(d);
+              onDateRangeChange(from, to);
+            }}
+          >
+            Last {d} days
+          </button>
+        ))}
+      </div>
       <form
         className="field-row"
         style={{ marginBottom: "0.6rem" }}
         onSubmit={(e) => {
           e.preventDefault();
-          onFilterChange("reporter", reporter);
-          onFilterChange("source_ip", sourceIp);
+          // Batched, not two onFilterChange calls: each one rebuilds the URL
+          // from the same pre-navigation params snapshot (see setFilters'
+          // own docstring above), so two sequential calls here would have
+          // the second silently clobber the first's change — exactly what
+          // made the reporter filter never reach the URL.
+          onFiltersChange({ reporter, source_ip: sourceIp });
         }}
       >
-        <input
-          className="input"
-          placeholder="Filter by reporter (e.g. google)"
-          value={reporter}
-          onChange={(e) => setReporter(e.target.value)}
-        />
-        <input
-          className="input"
-          placeholder="Filter by source IP"
-          value={sourceIp}
-          onChange={(e) => setSourceIp(e.target.value)}
-        />
+        <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.85rem" }}>
+          Reporter
+          <input className="input" placeholder="e.g. google" value={reporter} onChange={(e) => setReporter(e.target.value)} />
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.85rem" }}>
+          Source IP
+          <input className="input" placeholder="e.g. 203.0.113.10" value={sourceIp} onChange={(e) => setSourceIp(e.target.value)} />
+        </label>
         <button type="submit" className="btn btn--secondary btn--sm">
           Apply
         </button>
@@ -338,17 +425,25 @@ function GroupedTable({
   grouping,
   rows,
   isLoading,
+  hasActiveFilters,
 }: {
   grouping: Grouping;
   rows: DmarcReportsGroupedRow[] | undefined;
   isLoading: boolean;
+  hasActiveFilters: boolean;
 }) {
   const columnLabel = grouping === "source" ? "Source" : grouping === "reporter" ? "Reporter" : "Disposition";
 
   return (
     <div className="card">
       {isLoading && <p className="muted">Loading…</p>}
-      {!isLoading && (rows ?? []).length === 0 && <p className="empty-state">No reports match these filters.</p>}
+      {!isLoading && (rows ?? []).length === 0 && (
+        <p className="empty-state">
+          {hasActiveFilters
+            ? "No reports match these filters."
+            : "No DMARC reports received yet for this domain — check DNS checks and the connected mailbox."}
+        </p>
+      )}
       {!isLoading && (rows ?? []).length > 0 && (
         <div className="table-wrap">
           <table className="table">

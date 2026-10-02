@@ -73,6 +73,33 @@ def test_low_pass_rate_blocks_with_fail_count_in_reasoning():
     assert rec["blocked"] is True
     assert "20 of 100 messages" in rec["reasoning"]
     assert rec["policy"] == "none"
+    assert "before enforcing" in rec["reasoning"]
+
+
+def test_low_pass_rate_at_reject_does_not_say_before_enforcing():
+    """A domain already at p=reject IS already enforcing — 'before
+    enforcing' phrasing there is nonsensical (was previously shown
+    alongside 'Stay at p=reject' in the same sentence)."""
+    rec = build_policy_recommendation(
+        domain=_domain(), rating=_rating(pass_rate_pct=80.0), total=100, readiness=_readiness(latest_policy="reject"),
+        stability_days=0, blockers=[],
+    )
+    assert rec["blocked"] is True
+    assert rec["policy"] == "reject"
+    assert "Stay at p=reject" in rec["reasoning"]
+    assert "before enforcing" not in rec["reasoning"]
+    assert "does not fix" in rec["reasoning"]
+
+
+def test_low_pass_rate_at_quarantine_does_not_say_before_enforcing():
+    rec = build_policy_recommendation(
+        domain=_domain(), rating=_rating(pass_rate_pct=80.0), total=100, readiness=_readiness(latest_policy="quarantine"),
+        stability_days=0, blockers=[],
+    )
+    assert rec["blocked"] is True
+    assert rec["policy"] == "quarantine"
+    assert "Stay at p=quarantine" in rec["reasoning"]
+    assert "before enforcing" not in rec["reasoning"]
 
 
 def test_ready_domain_at_none_recommends_quarantine():

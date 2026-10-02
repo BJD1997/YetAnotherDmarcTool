@@ -29,7 +29,4 @@ dnspython==2.8.0
 # HTTP client (Graph API calls, MTA-STS policy fetch)
 httpx==0.28.1
 
-# Background jobs
-apscheduler==3.11.3
-
 python-multipart==0.0.32

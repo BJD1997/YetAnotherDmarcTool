@@ -14,10 +14,6 @@ function MtaStsCell({ status }: { status: InboundHostRow["mta_sts_status"] }) {
 }
 
 export default function InboundTable({ hosts }: { hosts: InboundHostRow[] }) {
-  if (hosts.length === 0) {
-    return <p className="empty-state">No MX hosts checked yet — run "Recheck now" below.</p>;
-  }
-
   return (
     <div className="table-wrap">
       <table className="table">

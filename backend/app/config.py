@@ -11,11 +11,46 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+asyncpg://dmarc:dmarc@db:5432/dmarc"
 
+    # SQLAlchemy's own defaults (pool_size=5, max_overflow=10 -> 15
+    # concurrent connections max) are too small for a real deployment: a
+    # single SPA page navigation routinely fires several parallel API
+    # calls, each needing its own connection for the duration of the
+    # request. Hit in production (2026-09-16) as a burst of
+    # "QueuePool limit of size 5 overflow 10 reached, connection timed
+    # out, timeout 30.00" errors during ordinary admin-console browsing —
+    # every request queuing behind an exhausted pool is what "the portal
+    # is very slow" looks like from the outside. Applies to both the
+    # primary engine and the optional read-replica engine (app/db/session.py).
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+
+    # FastAPI's interactive API docs (/docs, /redoc, /openapi.json). Off by
+    # default: on a public instance they're a free map of every endpoint and
+    # its parameters. Turn on for local development.
+    api_docs_enabled: bool = False
+
+    # "Run test update" on Azure (admin console → Updates): rehearses a full
+    # in-app update on the running version. Off by default; turn on to check
+    # the updater after a redeploy or a permission change.
+    update_rehearsal_enabled: bool = False
+
     # Sessions (Phase 1)
     session_cookie_name: str = "dmarc_session"
     platform_admin_session_cookie_name: str = "dmarc_admin_session"
     session_idle_timeout_hours: int = 12
     session_absolute_timeout_days: int = 7
+    # The break-glass platform-admin login gets its own, tighter limits: it
+    # can manage every organization, and it's meant for short, occasional
+    # use. (An operator org's admins reach the admin console through their
+    # normal session, which keeps the limits above.) Deliberately env-only,
+    # not editable in the admin console: whoever holds that console
+    # shouldn't be able to lengthen their own session.
+    platform_admin_session_idle_timeout_hours: int = 4
+    platform_admin_session_absolute_timeout_hours: int = 24
+    # Remembers which admin identity to use when the browser holds both a
+    # break-glass session and an operator org's session (see
+    # get_current_platform_admin).
+    platform_admin_choice_cookie_name: str = "dmarc_admin_choice"
 
     # Local email+password+TOTP login (for orgs with no entra_tenant_id set)
     mfa_pending_cookie_name: str = "dmarc_mfa_pending"
@@ -35,25 +70,24 @@ class Settings(BaseSettings):
     # until both are configured (see app/workers/scheduler.py).
     hosted_reports_tenant_id: str | None = None
     hosted_reports_mailbox_address: str | None = None
-    # The domain new addresses are generated under — MUST be the same domain
-    # as hosted_reports_mailbox_address (e.g. both "example.com"), not
-    # just a separately-configurable value: plus-addressing only resolves
-    # <local>+<tag>@domain to <local>@domain on that exact domain, there's no
-    # cross-domain routing. A domain-wide catch-all would relax this, but
-    # isn't available on every provider (e.g. Exchange Online has none) —
-    # see the comment in app/routers/domains.py's hosted-report-address
-    # generation for the full reasoning.
+    # Optional, and normally left unset: the domain new addresses are
+    # generated under defaults to the mailbox address's own domain — which it
+    # has to be anyway, since plus-addressing only delivers <local>+<tag>@domain
+    # to <local>@domain on that same domain. Use hosted_reports_domain, not
+    # this field directly.
     hosted_reports_address_domain: str | None = None
 
-    # Cloudflare API credentials for the zone hosting hosted_reports_address_domain
+    # Cloudflare API credentials for the zone hosting hosted_reports_domain
     # — used to auto-create the RFC 7489 §7.1 authorization record
-    # (<client-domain>._report._dmarc.<hosted_reports_address_domain>) each
+    # (<client-domain>._report._dmarc.<hosted_reports_domain>) each
     # client domain needs before receivers will honor rua= pointing at a
     # hosted address. See app/services/cloudflare/dns_provisioner.py.
     cloudflare_api_token: str | None = None
     cloudflare_zone_id: str | None = None
 
-    # Fernet key for the optional per-org custom-app-credential escape hatch (Phase 1+)
+    # Encrypts TOTP secrets at rest (app/services/auth/totp_secret.py). To
+    # rotate, list the new key first and keep the old one after it,
+    # comma-separated — new writes use the first, reads accept any.
     fernet_key: str | None = None
 
     # Entra App A — Mail Access (application permission, Graph client-credentials) (Phase 2)
@@ -125,10 +159,71 @@ class Settings(BaseSettings):
     # same "unconfigured optional feature is off" pattern as elsewhere.
     updater_url: str | None = None
     updater_shared_secret: str | None = None
+    # Where this instance runs, for the admin console's update instructions
+    # when there's no updater sidecar (Azure Container Apps has no Docker
+    # socket to give one). Set by the Azure template; unset = Docker Compose.
+    deployment_platform: str | None = None  # "azure-container-apps"
+    azure_resource_group: str | None = None
+    # In-app updates on Azure: the updater job to start (full resource id) and
+    # the client id of the api's managed identity allowed to start it — see
+    # updater/azure_update.py and deploy/azure/modules/updater.bicep.
+    azure_updater_job_id: str | None = None
+    azure_update_client_id: str | None = None
+
+    # Worker (app/workers/scheduler.py): the Postgres advisory-lock key the
+    # leader is elected on. leader_database_url is the connection the leader's
+    # advisory lock is held on — defaults to database_url, but if PgBouncer (or
+    # any transaction-mode pooler) sits in front of database_url, set this to a
+    # DIRECT (unpooled) Postgres connection string instead: pg_advisory_lock is
+    # session-scoped, and transaction pooling would silently return the
+    # connection to the pool between statements, breaking leadership.
+    leader_lock_key: int = 0x59414454
+    leader_database_url: str | None = None
+
+    # Worker (app/workers/scheduler.py): every replica runs this many concurrent
+    # queue-consumer loops; the queue is polled this often when idle. The leader
+    # reclaims jobs stuck "running" longer than worker_job_stale_seconds (a crashed
+    # worker) — must exceed the longest expected job runtime. worker_health_port
+    # serves the liveness endpoint (app/workers/health.py).
+    worker_concurrency: int = 4
+    worker_queue_poll_interval_seconds: float = 5.0
+    worker_job_stale_seconds: int = 1800
+    worker_health_port: int = 8080
+
+    # Auth rate-limiter backend: "memory" (per-process, correct for a single api
+    # container — the default) or "postgres" (shared across replicas). See
+    # app/services/auth/rate_limit.py. Switch to "postgres" when running >1 api replica.
+    rate_limit_backend: str = "memory"
+
+    # Optional read-replica connection for report/analytics queries (see
+    # app/db/session.py's get_read_db). Unset by default — every read goes to
+    # the primary, exactly as today. Set to a read-only Postgres connection
+    # string (e.g. a managed streaming replica) to offload latency-tolerant
+    # dashboard/report reads there. Never used for anything a user might
+    # expect to see their own just-made write reflected in.
+    database_read_url: str | None = None
 
     @property
     def entra_sso_redirect_uri(self) -> str:
         return f"{self.public_base_url}/api/auth/callback"
+
+    @property
+    def self_update_available(self) -> bool:
+        return bool(self.updater_url and self.updater_shared_secret) or self.azure_self_update_available
+
+    @property
+    def azure_self_update_available(self) -> bool:
+        return bool(self.azure_updater_job_id and self.azure_update_client_id)
+
+    @property
+    def hosted_reports_domain(self) -> str | None:
+        """Domain of the hosted reporting addresses: HOSTED_REPORTS_ADDRESS_DOMAIN
+        if set, otherwise the hosted mailbox's own domain."""
+        if self.hosted_reports_address_domain:
+            return self.hosted_reports_address_domain.strip().lower()
+        if self.hosted_reports_mailbox_address and "@" in self.hosted_reports_mailbox_address:
+            return self.hosted_reports_mailbox_address.rpartition("@")[2].strip().lower() or None
+        return None
 
 
 settings = Settings()

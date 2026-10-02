@@ -9,6 +9,22 @@ export class ApiError extends Error {
   }
 }
 
+// FastAPI sends `detail` as a string for errors the app raises itself, but
+// as a list of {loc, msg, ...} objects when request validation fails (a
+// malformed email, a too-short password) — flatten that to readable text
+// instead of letting it stringify to "[object Object]".
+function errorText(detail: unknown): string | undefined {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) => (item && typeof item === "object" && "msg" in item ? String(item.msg) : null))
+      .filter((msg): msg is string => !!msg)
+      .map((msg) => msg.replace(/^Value error, /, ""));
+    return messages.length ? messages.join("; ") : undefined;
+  }
+  return undefined;
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const method = (init.method ?? "GET").toUpperCase();
   const headers = new Headers(init.headers);
@@ -25,7 +41,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     let detail = res.statusText;
     try {
       const body = await res.json();
-      detail = body.detail ?? detail;
+      detail = errorText(body.detail) ?? detail;
     } catch {
       // ignore non-JSON error bodies
     }

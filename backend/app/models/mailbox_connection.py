@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, LargeBinary, String, Text
+from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -40,11 +40,3 @@ class MailboxConnection(UUIDPkMixin, TimestampMixin, Base):
         pg_enum(SyncStatus, "sync_status"), nullable=True
     )
     last_sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    # Escape hatch: an org can bring its own Entra app registration instead of
-    # using the operator's shared multi-tenant "Mail Access" app. Not exposed
-    # in the UI yet (documented in the plan as a future option), but the
-    # columns exist now so adding it later isn't a breaking migration.
-    uses_custom_app: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    custom_client_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    custom_client_secret_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)

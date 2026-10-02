@@ -73,6 +73,29 @@ jobs:
           build-args: |
             APP_VERSION=${{ github.ref_name }}
 
+      # Custom Unbound image used as the DNSSEC-resolver sidecar in the Azure
+      # Container Apps deployment (see deploy/azure/ and resolver/Dockerfile).
+      # Tagged identically to the app image so the Bicep can pin both to one
+      # version. Docker-compose self-hosters don't use this — they mount the
+      # config onto the stock mvance/unbound image instead.
+      - uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        id: meta_resolver
+        with:
+          images: ghcr.io/${{ github.repository }}-resolver
+          flavor: |
+            latest=false
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: resolver/Dockerfile
+          push: true
+          tags: ${{ steps.meta_resolver.outputs.tags }}
+          labels: ${{ steps.meta_resolver.outputs.labels }}
+
       # Powers the in-app "Update now" button (see docker-compose.yml's
       # updater service, updater/server.py) — docker-compose.yml has
       # referenced this as a pullable ghcr.io image since the feature was

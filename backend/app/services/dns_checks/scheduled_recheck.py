@@ -23,6 +23,7 @@ from app.repositories.dns_checks import list_domains_due_for_check
 from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.repositories.selectors import list_selectors_for_domain
 from app.services.dns_checks.registry import run_all
+from app.services.jobs.advisory_lock import try_advisory_lock
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +95,22 @@ async def _due_domain_ids(db: AsyncSession, cutoff: datetime) -> list[uuid.UUID]
     return list(await list_domains_due_for_check(db, cutoff))
 
 
+_DNS_CHECK_SWEEP_LOCK_KEY = 0x444E5343  # "DNSC"
+
+
 async def run_dns_check_sweep() -> None:
+    # The job queue's stale-job reclaim can't tell a crashed sweep from a
+    # slow one, so a long sweep can get re-queued while still running. This
+    # sweep opens real SMTP connections to customers' mail servers — a
+    # second concurrent copy would duplicate every one of those probes.
+    async with try_advisory_lock(_DNS_CHECK_SWEEP_LOCK_KEY) as acquired:
+        if not acquired:
+            logger.info("dns check sweep already running elsewhere — skipping this trigger")
+            return
+        await _sweep_due_domains()
+
+
+async def _sweep_due_domains() -> None:
     """Background counterpart to POST /domains/{id}/checks/recheck — runs
     the best-practice check suite for every verified, active domain across
     every org whose latest results are older than DNS_CHECK_STALE_AFTER (or

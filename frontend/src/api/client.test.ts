@@ -52,4 +52,34 @@ describe("API client", () => {
     expect(error).toBeInstanceOf(ApiError);
     expect(error).toMatchObject({ status: 409, message: "domain already exists" });
   });
+
+  it("turns a validation error list into readable text", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            detail: [
+              {
+                type: "value_error",
+                loc: ["body", "email"],
+                msg: "value is not a valid email address: The part after the @-sign is a special-use or reserved name that cannot be used with email.",
+              },
+              { type: "value_error", loc: ["body", "new_password"], msg: "Value error, password must be at least 12 characters" },
+            ],
+          }),
+          { status: 422, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+
+    const error = await api.post("/admin/organizations/o1/users", { email: "qa@x.invalid" }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).status).toBe(422);
+    expect((error as ApiError).message).toBe(
+      "value is not a valid email address: The part after the @-sign is a special-use or reserved name that cannot be used with email.; password must be at least 12 characters",
+    );
+  });
 });
+

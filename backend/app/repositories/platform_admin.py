@@ -14,12 +14,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.dmarc_aggregate import DmarcAggregateReport
 from app.models.domain import Domain
-from app.models.enums import JobStatus, JobType
+from app.models.enums import JobStatus, JobType, OrganizationStatus
 from app.models.job_run import JobRun
 from app.models.organization import Organization
 from app.models.platform_admin import PlatformAdmin
 from app.models.platform_admin_mfa_pending_challenge import PlatformAdminMfaPendingChallenge
 from app.models.platform_admin_recovery_code import PlatformAdminRecoveryCode
+from app.services.pagination import keyset_paginate
 
 JOB_ERROR_WINDOW_DAYS = 7
 
@@ -49,9 +50,37 @@ async def get_unused_admin_recovery_code(
     return result.scalar_one_or_none()
 
 
-async def list_all_organizations(db: AsyncSession) -> Sequence[Organization]:
-    result = await db.execute(select(Organization).order_by(Organization.created_at.desc()))
-    return result.scalars().all()
+async def list_all_organizations(
+    db: AsyncSession, *, limit: int, before_id: UUID | None, search: str | None
+) -> tuple[Sequence[Organization], bool]:
+    """Keyset-paginated ascending by (name, id) — alphabetical, matching
+    how an admin scans for a specific org by name, rather than
+    newest-first (which would bury most orgs behind whichever were most
+    recently created)."""
+    query = select(Organization)
+    if search:
+        query = query.where(Organization.name.ilike(f"%{search}%"))
+
+    anchor_query = None
+    if before_id is not None:
+        anchor_query = select(Organization.name, Organization.id).where(Organization.id == before_id)
+
+    return await keyset_paginate(
+        db, query, order_column=Organization.name, id_column=Organization.id,
+        anchor_query=anchor_query, limit=limit, descending=False,
+    )
+
+
+async def list_all_organization_names(db: AsyncSession) -> Sequence:
+    """Lightweight, deliberately unpaginated id+name listing for
+    picker/lookup UI (e.g. Admin Job Runs' organization filter and name
+    lookup) — unlike list_all_organizations, this always returns every
+    organization regardless of count, since a picker needs the complete
+    set to be useful, not one page of it. Real-world org counts are in
+    the hundreds, not large enough to justify pagination for a plain
+    id+name projection."""
+    result = await db.execute(select(Organization.id, Organization.name).order_by(Organization.name))
+    return result.all()
 
 
 async def org_aggregates(db: AsyncSession, org_ids: list[UUID]) -> dict[UUID, dict]:
@@ -109,16 +138,45 @@ async def org_aggregates(db: AsyncSession, org_ids: list[UUID]) -> dict[UUID, di
     }
 
 
+async def org_summary_stats(db: AsyncSession, *, search: str | None) -> dict:
+    """Total/active/suspended counts + how many orgs have a job error in
+    the last JOB_ERROR_WINDOW_DAYS days, for the Admin Organizations
+    glanceable summary bar — computed once over the whole filtered set,
+    not per page."""
+    name_filter = Organization.name.ilike(f"%{search}%") if search else None
+
+    status_query = select(Organization.status, func.count()).group_by(Organization.status)
+    if name_filter is not None:
+        status_query = status_query.where(name_filter)
+    status_counts = dict((await db.execute(status_query)).all())
+    total = sum(status_counts.values())
+    active = status_counts.get(OrganizationStatus.active, 0)
+    suspended = status_counts.get(OrganizationStatus.suspended, 0)
+
+    error_cutoff = datetime.now(timezone.utc) - timedelta(days=JOB_ERROR_WINDOW_DAYS)
+    orgs_with_errors_query = select(func.count(func.distinct(JobRun.organization_id))).where(
+        JobRun.status == JobStatus.failure, JobRun.started_at >= error_cutoff,
+    )
+    if name_filter is not None:
+        orgs_with_errors_query = orgs_with_errors_query.join(
+            Organization, Organization.id == JobRun.organization_id
+        ).where(name_filter)
+    orgs_with_errors = (await db.execute(orgs_with_errors_query)).scalar_one()
+
+    return {"total": total, "active": active, "suspended": suspended, "orgs_with_job_errors_7d": orgs_with_errors}
+
+
 async def list_job_runs(
     db: AsyncSession,
     *,
     limit: int,
+    before_id: UUID | None,
     organization_id: UUID | None,
     job_type: JobType | None,
     status_filter: JobStatus | None,
     since_days: int | None,
-) -> Sequence[JobRun]:
-    query = select(JobRun).order_by(JobRun.started_at.desc())
+) -> tuple[Sequence[JobRun], bool]:
+    query = select(JobRun)
     if organization_id is not None:
         query = query.where(JobRun.organization_id == organization_id)
     if job_type is not None:
@@ -127,9 +185,15 @@ async def list_job_runs(
         query = query.where(JobRun.status == status_filter)
     if since_days is not None:
         query = query.where(JobRun.started_at >= datetime.now(timezone.utc) - timedelta(days=since_days))
-    query = query.limit(limit)
-    result = await db.execute(query)
-    return result.scalars().all()
+
+    anchor_query = None
+    if before_id is not None:
+        anchor_query = select(JobRun.started_at, JobRun.id).where(JobRun.id == before_id)
+
+    return await keyset_paginate(
+        db, query, order_column=JobRun.started_at, id_column=JobRun.id,
+        anchor_query=anchor_query, limit=limit,
+    )
 
 
 async def count_platform_admins(db: AsyncSession) -> int:

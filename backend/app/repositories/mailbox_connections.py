@@ -29,7 +29,7 @@ async def list_mailbox_job_runs(db: AsyncSession, organization_id: UUID, *, limi
 async def list_orgs_with_granted_mailbox_connections(db: AsyncSession) -> Sequence:
     """(organization_id, entra_tenant_id) for every org with a granted
     mailbox connection — the worker's own job-registration list, cross-org
-    by design (see app/workers/scheduler.py's _list_pollable_orgs)."""
+    by design (see app/workers/scheduler.py's _enqueue_mailbox_polls)."""
     result = await db.execute(
         select(Organization.id, Organization.entra_tenant_id)
         .join(MailboxConnection, MailboxConnection.organization_id == Organization.id)

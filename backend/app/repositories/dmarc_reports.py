@@ -2,7 +2,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import case, func, or_, select, tuple_
+from sqlalchemy import case, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,16 +11,19 @@ from app.models.dismissed_detected_domain import DismissedDetectedDomain
 from app.models.dmarc_aggregate import DmarcAggregateRecord, DmarcAggregateReport
 from app.models.dmarc_forensic import DmarcForensicReport
 from app.models.domain import Domain
-from app.models.enums import AuthResult, Disposition, SenderReviewStatus
+from app.models.enums import AuthResult, Disposition, ReportSenderCheck, SenderReviewStatus
 from app.models.sender_review import SenderReview
 from app.models.source_ip_identity import SourceIpIdentity
 from app.models.tls_rpt import TlsRptReport
+from app.services.ingestion.sender_auth import decide_sql
+from app.services.pagination import keyset_paginate
 
 
 def _apply_report_filters(
     query,
     *,
     since: datetime | None,
+    until: datetime | None,
     disposition: Disposition | None,
     spf_result: AuthResult | None,
     dkim_result: AuthResult | None,
@@ -32,6 +35,8 @@ def _apply_report_filters(
     DmarcAggregateReport and DmarcAggregateRecord."""
     if since is not None:
         query = query.where(DmarcAggregateReport.date_range_begin >= since)
+    if until is not None:
+        query = query.where(DmarcAggregateReport.date_range_begin < until)
     if disposition is not None:
         query = query.where(DmarcAggregateRecord.disposition == disposition)
     if spf_result is not None:
@@ -52,6 +57,7 @@ async def list_report_records_by_day(
     limit: int,
     before_id: UUID | None,
     since: datetime | None,
+    until: datetime | None,
     disposition: Disposition | None,
     spf_result: AuthResult | None,
     dkim_result: AuthResult | None,
@@ -81,23 +87,56 @@ async def list_report_records_by_day(
         .where(DmarcAggregateRecord.domain_id == domain_id)
     )
     query = _apply_report_filters(
-        query, since=since, disposition=disposition, spf_result=spf_result, dkim_result=dkim_result,
+        query, since=since, until=until, disposition=disposition, spf_result=spf_result, dkim_result=dkim_result,
         reporter=reporter, source_ip=source_ip,
     )
 
+    anchor_query = None
     if before_id is not None:
-        anchor = (
-            await db.execute(
-                select(DmarcAggregateReport.date_range_begin, DmarcAggregateRecord.id)
-                .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
-                .where(DmarcAggregateRecord.id == before_id, DmarcAggregateRecord.domain_id == domain_id)
-            )
-        ).first()
-        if anchor is not None:
-            query = query.where(tuple_(DmarcAggregateReport.date_range_begin, DmarcAggregateRecord.id) < anchor)
+        anchor_query = (
+            select(DmarcAggregateReport.date_range_begin, DmarcAggregateRecord.id)
+            .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
+            .where(DmarcAggregateRecord.id == before_id, DmarcAggregateRecord.domain_id == domain_id)
+        )
 
-    query = query.order_by(DmarcAggregateReport.date_range_begin.desc(), DmarcAggregateRecord.id.desc()).limit(limit)
-    return (await db.execute(query)).all()
+    rows, _has_more = await keyset_paginate(
+        db, query, order_column=DmarcAggregateReport.date_range_begin, id_column=DmarcAggregateRecord.id,
+        anchor_query=anchor_query, limit=limit, scalar=False,
+    )
+    return rows
+
+
+async def count_report_records_by_day(
+    db: AsyncSession,
+    domain_id: UUID,
+    *,
+    since: datetime | None,
+    until: datetime | None,
+    disposition: Disposition | None,
+    spf_result: AuthResult | None,
+    dkim_result: AuthResult | None,
+    reporter: str | None,
+    source_ip: str | None,
+) -> int:
+    """Unpaginated COUNT(*) at the same row granularity as
+    list_report_records_by_day (one DmarcAggregateRecord per row) — the
+    "Showing X of Y" total for the /reports/by-day endpoint. Callers should
+    only invoke this on the first page (before_id is None): computing a
+    filtered COUNT(*) again on every "Load more" click is wasted work once
+    the total for this filter set is already known client-side, same
+    first-page-only guard as Admin Organizations' org_summary_stats (see
+    its call site in app/routers/platform_admin.py)."""
+    query = (
+        select(func.count())
+        .select_from(DmarcAggregateRecord)
+        .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
+        .where(DmarcAggregateRecord.domain_id == domain_id)
+    )
+    query = _apply_report_filters(
+        query, since=since, until=until, disposition=disposition, spf_result=spf_result, dkim_result=dkim_result,
+        reporter=reporter, source_ip=source_ip,
+    )
+    return (await db.execute(query)).scalar_one()
 
 
 async def get_record_detail(
@@ -142,18 +181,6 @@ async def last_report_received_at_for_org(db: AsyncSession, organization_id: UUI
         )
     )
     return result.scalar_one_or_none()
-
-
-async def failed_message_volume_for_domain(db: AsyncSession, domain_id: UUID) -> int:
-    dmarc_pass = (DmarcAggregateRecord.dkim_result == AuthResult.pass_) | (
-        DmarcAggregateRecord.spf_result == AuthResult.pass_
-    )
-    result = await db.execute(
-        select(func.coalesce(func.sum(case((~dmarc_pass, DmarcAggregateRecord.count), else_=0)), 0)).where(
-            DmarcAggregateRecord.domain_id == domain_id
-        )
-    )
-    return result.scalar_one()
 
 
 async def list_auth_results_for_domain(db: AsyncSession, domain_id: UUID) -> Sequence[tuple]:
@@ -271,6 +298,11 @@ async def list_sender_reviews_for_domain(db: AsyncSession, domain_id: UUID) -> S
     return result.scalars().all()
 
 
+async def list_sender_reviews_for_domains(db: AsyncSession, domain_ids: Sequence[UUID]) -> Sequence[SenderReview]:
+    result = await db.execute(select(SenderReview).where(SenderReview.domain_id.in_(domain_ids)))
+    return result.scalars().all()
+
+
 async def list_reviewed_service_labels_for_domain(db: AsyncSession, domain_id: UUID) -> set[str]:
     """service_labels with an explicit approved/ignored/blocked review row
     for this domain — a service is "unreviewed" if it's missing here
@@ -309,6 +341,33 @@ async def upsert_missing_sender_reviews(
                 "status": SenderReviewStatus.pending.value,
             }
             for label in service_labels
+        ]
+    )
+    stmt = stmt.on_conflict_do_nothing(index_elements=["domain_id", "service_label"])
+    await db.execute(stmt)
+    await db.flush()
+
+
+async def upsert_missing_sender_reviews_multi(
+    db: AsyncSession, organization_id: UUID, missing: list[tuple[UUID, str]]
+) -> None:
+    """Same lazy-create as upsert_missing_sender_reviews, batched across
+    domains: one INSERT for every (domain_id, service_label) pair across
+    all requested domains that doesn't already have a review row, still
+    ON CONFLICT DO NOTHING for the same cross-tab/cross-request race
+    tolerance."""
+    if not missing:
+        return
+    stmt = pg_insert(SenderReview).values(
+        [
+            {
+                "id": uuid4(),
+                "organization_id": organization_id,
+                "domain_id": domain_id,
+                "service_label": label,
+                "status": SenderReviewStatus.pending.value,
+            }
+            for domain_id, label in missing
         ]
     )
     stmt = stmt.on_conflict_do_nothing(index_elements=["domain_id", "service_label"])
@@ -365,27 +424,28 @@ async def dmarc_trend_by_day(
     return (await db.execute(query)).all()
 
 
-async def failed_message_volume_for_org_since(
+async def message_volume_for_org_since(
     db: AsyncSession, organization_id: UUID, since: datetime, *, domain_id: UUID | None = None
-) -> int:
-    """Distinct from failed_message_volume_for_domain above: that one is
-    domain-scoped/all-time (used by the Domains list card); this is
-    org-wide-or-domain-scoped AND date-windowed, for /dmarc/posture."""
+) -> tuple[int, int]:
+    """(total, failed) messages in the window, org-wide or for one domain —
+    for /dmarc/posture's compliance and failed-volume tiles, so both follow
+    the selected range and describe the same messages. (The Domains list's
+    grade is a different, fixed-window score: see compute_domain_rating.)"""
     dmarc_pass = (DmarcAggregateRecord.dkim_result == AuthResult.pass_) | (
         DmarcAggregateRecord.spf_result == AuthResult.pass_
     )
-    query = select(func.coalesce(func.sum(case((~dmarc_pass, DmarcAggregateRecord.count), else_=0)), 0)).where(
-        DmarcAggregateRecord.organization_id == organization_id
+    query = (
+        select(
+            func.coalesce(func.sum(DmarcAggregateRecord.count), 0),
+            func.coalesce(func.sum(case((~dmarc_pass, DmarcAggregateRecord.count), else_=0)), 0),
+        )
+        .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
+        .where(DmarcAggregateRecord.organization_id == organization_id, DmarcAggregateReport.date_range_begin >= since)
     )
     if domain_id is not None:
-        query = query.join(
-            DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id
-        ).where(DmarcAggregateRecord.domain_id == domain_id, DmarcAggregateReport.date_range_begin >= since)
-    else:
-        query = query.join(
-            DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id
-        ).where(DmarcAggregateReport.date_range_begin >= since)
-    return (await db.execute(query)).scalar_one()
+        query = query.where(DmarcAggregateRecord.domain_id == domain_id)
+    total, failed = (await db.execute(query)).one()
+    return int(total), int(failed)
 
 
 async def count_new_pending_senders_since(
@@ -406,6 +466,7 @@ async def report_totals(
     domain_id: UUID,
     *,
     since: datetime | None,
+    until: datetime | None,
     disposition: Disposition | None,
     spf_result: AuthResult | None,
     dkim_result: AuthResult | None,
@@ -441,7 +502,7 @@ async def report_totals(
         .where(DmarcAggregateRecord.domain_id == domain_id)
     )
     query = _apply_report_filters(
-        query, since=since, disposition=disposition, spf_result=spf_result, dkim_result=dkim_result,
+        query, since=since, until=until, disposition=disposition, spf_result=spf_result, dkim_result=dkim_result,
         reporter=reporter, source_ip=source_ip,
     )
     return (await db.execute(query)).one()
@@ -452,6 +513,7 @@ async def top_failing_source_row(
     domain_id: UUID,
     *,
     since: datetime | None,
+    until: datetime | None,
     disposition: Disposition | None,
     spf_result: AuthResult | None,
     dkim_result: AuthResult | None,
@@ -473,7 +535,7 @@ async def top_failing_source_row(
         .limit(1)
     )
     query = _apply_report_filters(
-        query, since=since, disposition=disposition, spf_result=spf_result, dkim_result=dkim_result,
+        query, since=since, until=until, disposition=disposition, spf_result=spf_result, dkim_result=dkim_result,
         reporter=reporter, source_ip=source_ip,
     )
     return (await db.execute(query)).first()
@@ -492,6 +554,7 @@ async def report_records_grouped(
     by: str,
     *,
     since: datetime | None,
+    until: datetime | None,
     disposition: Disposition | None,
     spf_result: AuthResult | None,
     dkim_result: AuthResult | None,
@@ -522,7 +585,7 @@ async def report_records_grouped(
         .group_by(group_col)
     )
     query = _apply_report_filters(
-        query, since=since, disposition=disposition, spf_result=spf_result, dkim_result=dkim_result,
+        query, since=since, until=until, disposition=disposition, spf_result=spf_result, dkim_result=dkim_result,
         reporter=reporter, source_ip=source_ip,
     )
     return (await db.execute(query)).all()
@@ -679,6 +742,46 @@ async def per_source_ip_volume_breakdown(
     return (await db.execute(query)).all()
 
 
+async def per_source_ip_volume_breakdown_multi(
+    db: AsyncSession, domain_ids: Sequence[UUID], *, since: datetime | None = None
+) -> Sequence:
+    """Same aggregation as per_source_ip_volume_breakdown, across several
+    domains in one query grouped by (domain_id, source_ip) instead of one
+    query per domain — the batched sibling that lets the Overview page's
+    sender-inventory fan-out hold a single DB connection instead of one per
+    domain for the duration of dmarc_analytics.service_breakdown_multi's
+    identify_many call (see that function's docstring for why this matters:
+    identify_many can burn several seconds of DNS-bound work per call while
+    the connection stays checked out)."""
+    dmarc_pass = (DmarcAggregateRecord.dkim_result == AuthResult.pass_) | (
+        DmarcAggregateRecord.spf_result == AuthResult.pass_
+    )
+
+    def _sum_where(condition):
+        return func.sum(case((condition, DmarcAggregateRecord.count), else_=0))
+
+    query = (
+        select(
+            DmarcAggregateRecord.domain_id,
+            DmarcAggregateRecord.source_ip,
+            func.sum(DmarcAggregateRecord.count),
+            _sum_where(DmarcAggregateRecord.spf_result == AuthResult.pass_),
+            _sum_where(DmarcAggregateRecord.dkim_result == AuthResult.pass_),
+            _sum_where(dmarc_pass),
+            _sum_where(DmarcAggregateRecord.disposition == Disposition.none),
+            _sum_where(DmarcAggregateRecord.disposition == Disposition.quarantine),
+            _sum_where(DmarcAggregateRecord.disposition == Disposition.reject),
+        )
+        .where(DmarcAggregateRecord.domain_id.in_(domain_ids))
+        .group_by(DmarcAggregateRecord.domain_id, DmarcAggregateRecord.source_ip)
+    )
+    if since is not None:
+        query = query.join(
+            DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id
+        ).where(DmarcAggregateReport.date_range_begin >= since)
+    return (await db.execute(query)).all()
+
+
 async def dismiss_detected_domain_name(db: AsyncSession, *, organization_id: UUID, name: str, dismissed_by: UUID) -> None:
     """ON CONFLICT DO NOTHING rather than add()-then-catch: dismissing an
     already-dismissed name (e.g. a retried click) is a no-op, not an
@@ -720,6 +823,76 @@ async def insert_aggregate_report_if_new(db: AsyncSession, report: DmarcAggregat
     `report` object (including its DmarcAggregateRecord children, added via
     db.add_all separately) — this function only owns the idempotent insert."""
     return await _insert_if_new(db, report)
+
+
+async def list_left_out_reports(db: AsyncSession, domain_id: UUID) -> list:
+    """The domain's reports that the sender check leaves out, newest first —
+    for review. Opts out of the global filter that otherwise hides them
+    (app/db/report_trust.py)."""
+    left_out = []
+    for model, received in (
+        (DmarcAggregateReport, DmarcAggregateReport.received_at),
+        (TlsRptReport, TlsRptReport.received_at),
+        (DmarcForensicReport, DmarcForensicReport.created_at),
+    ):
+        rows = await db.execute(
+            select(model)
+            .where(model.domain_id == domain_id, model.sender_verified.is_(False))
+            .order_by(received.desc())
+            .limit(200)
+            .execution_options(include_unverified_reports=True)
+        )
+        left_out.extend(rows.scalars().all())
+    return left_out
+
+
+async def apply_report_sender_check(db: AsyncSession, organization_id: UUID, mode: ReportSenderCheck) -> None:
+    """Re-evaluates every stored report of the organization under `mode`,
+    from the facts recorded at ingestion (sender_auth.decide_sql)."""
+    for model in (DmarcAggregateReport, DmarcForensicReport, TlsRptReport):
+        await db.execute(
+            update(model)
+            .where(model.organization_id == organization_id)
+            .values(sender_verified=decide_sql(mode, model))
+        )
+    await db.execute(
+        update(DmarcAggregateRecord)
+        .where(DmarcAggregateRecord.organization_id == organization_id)
+        .values(
+            sender_verified=select(DmarcAggregateReport.sender_verified)
+            .where(DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
+            .scalar_subquery()
+        )
+    )
+
+
+async def delete_unverified_aggregate_duplicate(db: AsyncSession, report: DmarcAggregateReport) -> None:
+    """Clears the way for a sender-verified report: an earlier copy with the
+    same natural key whose sender failed authentication was most likely
+    forged to squat that key (its records go with it via ON DELETE CASCADE)."""
+    await db.execute(
+        delete(DmarcAggregateReport).where(
+            DmarcAggregateReport.organization_id == report.organization_id,
+            DmarcAggregateReport.org_name == report.org_name,
+            DmarcAggregateReport.report_id == report.report_id,
+            DmarcAggregateReport.policy_published_domain == report.policy_published_domain,
+            DmarcAggregateReport.sender_verified.is_(False),
+        )
+    )
+
+
+async def delete_unverified_tls_rpt_duplicate(db: AsyncSession, report: TlsRptReport) -> None:
+    """Same as delete_unverified_aggregate_duplicate, for TLS-RPT's key."""
+    await db.execute(
+        delete(TlsRptReport).where(
+            TlsRptReport.organization_id == report.organization_id,
+            TlsRptReport.policy_domain == report.policy_domain,
+            TlsRptReport.org_name == report.org_name,
+            TlsRptReport.date_range_begin == report.date_range_begin,
+            TlsRptReport.date_range_end == report.date_range_end,
+            TlsRptReport.sender_verified.is_(False),
+        )
+    )
 
 
 async def insert_forensic_report_if_new(db: AsyncSession, report: DmarcForensicReport) -> bool:

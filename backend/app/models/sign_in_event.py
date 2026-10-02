@@ -37,6 +37,9 @@ class SignInEvent(UUIDPkMixin, Base):
     auth_method: Mapped[AuthMethod] = mapped_column(pg_enum(AuthMethod, "auth_method"), nullable=False)
     result: Mapped[SignInResult] = mapped_column(pg_enum(SignInResult, "sign_in_result"), nullable=False)
     failure_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # For account_change rows: who made the change, when it wasn't the user
+    # themselves (an org admin or platform admin).
+    actor_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
     user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)

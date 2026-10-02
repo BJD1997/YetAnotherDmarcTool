@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { Building2, Download, ListChecks, LogOut, Menu, X, ArrowLeft } from "lucide-react";
+import { Building2, Download, KeyRound, ListChecks, LogOut, Menu, X, ArrowLeft } from "lucide-react";
 import { api } from "../api/client";
 import { useAdminAuth } from "../auth/AdminAuthContext";
 import ThemeToggle from "./ThemeToggle";
@@ -34,6 +34,16 @@ export default function AdminShell({ children }: { children: ReactNode }) {
       queryClient.clear();
       window.location.href = "/admin/login";
     }
+  }
+
+  async function handleSwitch() {
+    // Forget the choice, then reload: /admin/me answers 409 and
+    // RequireAdminAuth shows the "which sign-in?" screen. A hard reload (as
+    // in handleLogout) rather than clearing the query cache and refetching —
+    // clearing removes the very query a refetch would re-run, so nothing
+    // happened.
+    await api.post("/admin/session-choice", { choice: null });
+    window.location.href = "/admin";
   }
 
   const isActive = (path: string) => (path === "/admin" ? location.pathname === "/admin" : location.pathname.startsWith(path));
@@ -72,6 +82,10 @@ export default function AdminShell({ children }: { children: ReactNode }) {
             <ListChecks />
             Job runs
           </Link>
+          <Link to="/admin/sign-ins" onClick={closeMobile} className={`nav-link ${isActive("/admin/sign-ins") ? "active" : ""}`}>
+            <KeyRound />
+            Sign-ins
+          </Link>
           <Link to="/admin/updates" onClick={closeMobile} className={`nav-link ${isActive("/admin/updates") ? "active" : ""}`}>
             <Download />
             Updates
@@ -91,9 +105,26 @@ export default function AdminShell({ children }: { children: ReactNode }) {
 
         <div className="sidebar-footer">
           <div className="sidebar-user">
-            <span className="sidebar-user-email" title={admin?.email}>
-              {admin?.email}
-            </span>
+            <div className="sidebar-user-identity">
+              <span className="sidebar-user-email" title={admin?.email}>
+                {admin?.email}
+              </span>
+              {admin && (
+                // The break-glass login and an operator org's own sign-in
+                // can use the same email, so always say which one this is.
+                <span className="sidebar-user-method">
+                  {admin.auth_type === "local" ? "Break-glass admin login" : "Your organization's sign-in"}
+                  {admin.can_switch && (
+                    <>
+                      {" · "}
+                      <button type="button" className="link-button" onClick={handleSwitch}>
+                        Switch
+                      </button>
+                    </>
+                  )}
+                </span>
+              )}
+            </div>
             <div style={{ display: "flex", gap: "0.25rem", flexShrink: 0 }}>
               <ThemeToggle />
               {admin?.auth_type === "local" && (

@@ -5,6 +5,7 @@ from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user, require_org_admin
 from app.models.organization import Organization
 from app.models.user import User
+from app.repositories.dmarc_reports import apply_report_sender_check
 from app.repositories.organizations import get_organization
 from app.schemas.organizations import OrganizationUpdateRequest
 from app.services.auth.entra_links import entra_consent_urls
@@ -21,6 +22,8 @@ def _org_out(org: Organization) -> dict:
         "is_operator": org.is_operator,
         "spf_all_qualifier_mode": org.spf_all_qualifier_mode.value,
         "hosted_mailbox_opt_in": org.hosted_mailbox_opt_in,
+        "report_sender_check": org.report_sender_check.value,
+        "is_demo_read_only": org.is_demo_read_only,
         # Self-service reference: e.g. if the SSO consent link is needed
         # later, or the Mail Access consent needs redoing after a lapse.
         "entra_consent_urls": entra_consent_urls(org),
@@ -47,6 +50,10 @@ async def update_current_organization(
         org.spf_all_qualifier_mode = body.spf_all_qualifier_mode
     if body.hosted_mailbox_opt_in is not None:
         org.hosted_mailbox_opt_in = body.hosted_mailbox_opt_in
+    if body.report_sender_check is not None and body.report_sender_check != org.report_sender_check:
+        org.report_sender_check = body.report_sender_check
+        # Applies to reports already received, not just new ones.
+        await apply_report_sender_check(db, org.id, body.report_sender_check)
     await db.commit()
     await db.refresh(org)
     return _org_out(org)

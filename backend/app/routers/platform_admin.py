@@ -11,17 +11,18 @@ from app.config import settings
 from app.db.session import get_db
 from app.middleware.tenant_context import (
     AdminPrincipal,
+    admin_sign_in_candidates,
     get_current_platform_admin,
     get_current_platform_admin_local,
 )
-from app.models.enums import AuthMethod, ConsentStatus, JobStatus, JobType, OrganizationStatus
+from app.models.enums import AuthMethod, ConsentStatus, JobStatus, JobType, OrganizationStatus, SignInResult
 from app.models.mailbox_connection import MailboxConnection
 from app.models.organization import Organization
-from app.models.password_setup_token import PasswordSetupToken
 from app.models.platform_admin import PlatformAdmin
 from app.models.platform_admin_mfa_pending_challenge import PlatformAdminMfaPendingChallenge
 from app.models.platform_admin_recovery_code import PlatformAdminRecoveryCode
 from app.models.user import User
+from app.repositories.domains import list_hosted_domain_names_for_org
 from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.repositories.organizations import get_organization
 from app.repositories.platform_admin import (
@@ -29,13 +30,18 @@ from app.repositories.platform_admin import (
     get_platform_admin_by_email,
     get_unused_admin_recovery_code,
     job_runs_summary_stats,
+    list_all_organization_names,
     list_all_organizations,
     list_job_runs,
     org_aggregates,
+    org_summary_stats,
 )
+from app.repositories.sign_in_events import list_platform_admin_sign_in_events
+from app.repositories.users import get_user_in_org, list_users_for_org
 from app.schemas.platform_admin import (
     AdminEnrollOtpConfirmRequest,
     AdminLoginRequest,
+    AdminSessionChoiceRequest,
     AdminVerifyOtpRequest,
     ChangePasswordRequest,
     LocalUserCreateRequest,
@@ -43,12 +49,15 @@ from app.schemas.platform_admin import (
     OrganizationCreateRequest,
     OrganizationUpdateRequest,
 )
-from app.services.auth import session_manager, totp
-from app.services.auth.rate_limit import login_limiter, otp_limiter, rate_limiter
+from app.services.auth import account_reset, session_manager, totp
+from app.services.auth.rate_limit import login_limiter, otp_account_limiter, otp_limiter, rate_limiter
 from app.services.auth.entra_links import entra_consent_urls
 from app.services.auth.password import dummy_verify, hash_password, verify_password
 from app.services.auth.session_manager import cookie_kwargs
+from app.services.auth.sign_in_log import client_network_info, record_sign_in_event
+from app.routers.sign_in_events import sign_in_event_out
 from app.services.auth.tokens import hash_token, new_opaque_token
+from app.services.cloudflare.dns_provisioner import release_authorization_records
 
 router = APIRouter(prefix="/admin", tags=["platform-admin"])
 
@@ -158,6 +167,37 @@ async def _set_admin_mfa_pending(db: AsyncSession, response: Response, platform_
     response.set_cookie(_ADMIN_MFA_PENDING_COOKIE, raw_token, **short_lived)
 
 
+async def _log_admin_sign_in(
+    db: AsyncSession, request: Request, result: SignInResult, email: str | None, reason: str | None = None
+) -> None:
+    """Break-glass sign-ins and account changes go in the sign-in log with no
+    organization attached — visible in the admin console, never to an org."""
+    ip_address, user_agent = client_network_info(request)
+    await record_sign_in_event(
+        db, result=result, auth_method=AuthMethod.platform_admin, attempted_email=email,
+        failure_reason=reason, ip_address=ip_address, user_agent=user_agent,
+    )
+
+
+def _forget_admin_choice(response: Response) -> None:
+    # Same attributes it was set with (cookie_kwargs), so every browser
+    # treats this as the same cookie and drops it.
+    kwargs = cookie_kwargs()
+    response.delete_cookie(
+        settings.platform_admin_choice_cookie_name,
+        path=kwargs["path"], secure=kwargs["secure"], httponly=kwargs["httponly"], samesite=kwargs["samesite"],
+    )
+
+
+def _set_admin_session_cookies(response: Response, raw_token: str) -> None:
+    """Signing in to the break-glass account is an explicit choice to use it,
+    so record that too — no "which sign-in?" prompt straight after logging in
+    when the browser also holds an operator org session."""
+    max_age = session_manager.admin_cookie_max_age()
+    response.set_cookie(settings.platform_admin_session_cookie_name, raw_token, max_age=max_age, **cookie_kwargs())
+    response.set_cookie(settings.platform_admin_choice_cookie_name, "local", max_age=max_age, **cookie_kwargs())
+
+
 async def _get_pending_admin(request: Request, db: AsyncSession) -> tuple[PlatformAdmin, PlatformAdminMfaPendingChallenge]:
     raw_token = request.cookies.get(_ADMIN_MFA_PENDING_COOKIE)
     if not raw_token:
@@ -184,6 +224,8 @@ async def admin_login(body: AdminLoginRequest, request: Request, db: AsyncSessio
         # reject than an existing one (user enumeration).
         dummy_verify()
     if not password_ok or not admin.is_active:
+        await _log_admin_sign_in(db, request, SignInResult.failure, body.email, "invalid_credentials")
+        await db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
 
     response = JSONResponse({"needs_enrollment": admin.otp_enrolled_at is None})
@@ -199,11 +241,29 @@ async def admin_verify_otp(body: AdminVerifyOtpRequest, request: Request, db: As
     if admin.otp_enrolled_at is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "TOTP not enrolled yet")
 
+    allowed, retry_after = await otp_account_limiter.check(f"admin:{admin.id}")
+    if not allowed:
+        # Too many code guesses on this account, from however many IPs:
+        # end the pending login so the password has to be proven again.
+        await db.delete(challenge)
+        await _log_admin_sign_in(db, request, SignInResult.failure, admin.email, "too_many_code_attempts")
+        await db.commit()
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "too many attempts — please wait and sign in again",
+            headers={"Retry-After": str(retry_after)},
+        )
+
     code = body.code.strip()
-    if not totp.verify_code(admin.otp_secret, code):
+    step = totp.accept_code(admin.otp_secret, code, admin.otp_last_used_step)
+    if step is not None:
+        admin.otp_last_used_step = step
+    else:
         code_hash = totp.hash_recovery_code_for_lookup(code)
         recovery = await get_unused_admin_recovery_code(db, admin.id, code_hash)
         if recovery is None:
+            await _log_admin_sign_in(db, request, SignInResult.failure, admin.email, "invalid_totp_or_recovery_code")
+            await db.commit()
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid code")
         recovery.used_at = datetime.now(timezone.utc)
 
@@ -214,22 +274,23 @@ async def admin_verify_otp(body: AdminVerifyOtpRequest, request: Request, db: As
         user_agent=request.headers.get("user-agent"),
     )
     await db.delete(challenge)
+    await _log_admin_sign_in(db, request, SignInResult.success, admin.email)
     await db.commit()
 
     response = Response(status_code=204)
     response.delete_cookie(_ADMIN_MFA_PENDING_COOKIE, path="/")
-    response.set_cookie(
-        settings.platform_admin_session_cookie_name,
-        raw_token,
-        max_age=settings.session_idle_timeout_hours * 3600,
-        **cookie_kwargs(),
-    )
+    _set_admin_session_cookies(response, raw_token)
     return response
+
+
+_ALREADY_ENROLLED = "two-factor authentication is already set up — sign in with your authenticator code"
 
 
 @router.post("/enroll-otp")
 async def admin_enroll_otp(request: Request, db: AsyncSession = Depends(get_db)) -> dict:
     admin, _challenge = await _get_pending_admin(request, db)
+    if admin.otp_enrolled_at is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, _ALREADY_ENROLLED)
     secret = totp.generate_secret()
     uri = totp.provisioning_uri(secret, admin.email)
     return {"secret": secret, "qr_code_data_uri": totp.qr_code_data_uri(uri)}
@@ -241,12 +302,20 @@ async def admin_enroll_otp_confirm(
 ) -> JSONResponse:
     admin, challenge = await _get_pending_admin(request, db)
 
+    # Same trust-on-first-use guard as the user flow in auth.py — without it
+    # a password alone could replace this cross-tenant account's second factor.
+    if admin.otp_enrolled_at is not None:
+        await _log_admin_sign_in(db, request, SignInResult.failure, admin.email, "totp_already_enrolled")
+        await db.commit()
+        raise HTTPException(status.HTTP_409_CONFLICT, _ALREADY_ENROLLED)
+
     if not totp.verify_code(body.secret, body.code):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "code didn't match — check your authenticator app and try again")
 
     now = datetime.now(timezone.utc)
     admin.otp_secret = body.secret
     admin.otp_enrolled_at = now
+    admin.otp_last_used_step = totp.current_step(body.secret)
 
     codes = totp.generate_recovery_codes()
     for plaintext, code_hash in codes:
@@ -259,16 +328,12 @@ async def admin_enroll_otp_confirm(
         user_agent=request.headers.get("user-agent"),
     )
     await db.delete(challenge)
+    await _log_admin_sign_in(db, request, SignInResult.success, admin.email)
     await db.commit()
 
     response = JSONResponse({"recovery_codes": [plaintext for plaintext, _hash in codes]})
     response.delete_cookie(_ADMIN_MFA_PENDING_COOKIE, path="/")
-    response.set_cookie(
-        settings.platform_admin_session_cookie_name,
-        raw_token,
-        max_age=settings.session_idle_timeout_hours * 3600,
-        **cookie_kwargs(),
-    )
+    _set_admin_session_cookies(response, raw_token)
     return response
 
 
@@ -282,33 +347,118 @@ async def admin_logout(request: Request, db: AsyncSession = Depends(get_db)) -> 
             await db.commit()
     response = Response(status_code=204)
     response.delete_cookie(settings.platform_admin_session_cookie_name, path="/")
+    _forget_admin_choice(response)
     return response
 
 
 @router.get("/me")
 async def admin_me(admin: AdminPrincipal = Depends(get_current_platform_admin)) -> dict:
-    return {"id": str(admin.id), "email": admin.email, "auth_type": admin.auth_type}
+    return {
+        "id": str(admin.id),
+        "email": admin.email,
+        "auth_type": admin.auth_type,
+        "organization_name": admin.organization_name,
+        "can_switch": admin.can_switch,
+    }
+
+
+@router.get("/session-options")
+async def admin_session_options(request: Request, db: AsyncSession = Depends(get_db)) -> dict:
+    """Which admin sign-ins this browser holds — for the "which sign-in?"
+    screen /admin/me's 409 leads to. Only describes the caller's own
+    sessions, so it needs no admin authorization of its own."""
+    candidates = await admin_sign_in_candidates(request, db)
+    await db.commit()  # keep the sessions' last-seen refresh
+    return {
+        auth_type: (
+            {"email": principal.email, "organization_name": principal.organization_name}
+            if (principal := candidates.get(auth_type))
+            else None
+        )
+        for auth_type in ("local", "operator_org")
+    }
+
+
+@router.post("/session-choice", status_code=status.HTTP_204_NO_CONTENT)
+async def admin_session_choice(
+    body: AdminSessionChoiceRequest, request: Request, db: AsyncSession = Depends(get_db)
+) -> Response:
+    """Picks which of the browser's admin sign-ins the console uses, or
+    (choice null) forgets the pick so the console asks again."""
+    response = Response(status_code=status.HTTP_204_NO_CONTENT)
+    if body.choice is None:
+        _forget_admin_choice(response)
+        return response
+    if body.choice not in await admin_sign_in_candidates(request, db):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "that sign-in isn't available in this browser")
+    await db.commit()
+    # A fixed string, not the request's own text: the schema already allows
+    # only these two, but this keeps request input out of the cookie
+    # entirely (CodeQL: cookie constructed from user input).
+    choice_value = "local" if body.choice == "local" else "operator_org"
+    response.set_cookie(
+        settings.platform_admin_choice_cookie_name,
+        choice_value,
+        max_age=settings.session_absolute_timeout_days * 86400,
+        **cookie_kwargs(),
+    )
+    return response
 
 
 @router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
 async def change_password(
     body: ChangePasswordRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     admin: PlatformAdmin = Depends(get_current_platform_admin_local),
 ) -> None:
     if not verify_password(body.current_password, admin.password_hash):
+        await _log_admin_sign_in(db, request, SignInResult.failure, admin.email, "invalid_current_password")
+        await db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "current password is incorrect")
     admin.password_hash = hash_password(body.new_password)
+    # Sign out every other break-glass session — the point of changing a
+    # password is usually that someone else might have it.
+    await session_manager.revoke_platform_admin_sessions(
+        db, admin.id, keep_raw_token=request.cookies.get(settings.platform_admin_session_cookie_name)
+    )
+    await _log_admin_sign_in(db, request, SignInResult.account_change, admin.email, "password_changed")
     await db.commit()
 
 
 @router.get("/organizations")
 async def list_organizations(
+    limit: int = Query(50, ge=1, le=200),
+    before_id: uuid.UUID | None = Query(None),
+    search: str | None = Query(None),
     db: AsyncSession = Depends(get_db), _admin: AdminPrincipal = Depends(get_current_platform_admin)
-) -> list[dict]:
-    orgs = await list_all_organizations(db)
+) -> dict:
+    """`summary` is only populated on the first page (`before_id is None`)
+    — it's `None` on every subsequent page, since the frontend only ever
+    reads the first page's copy (see AdminOrganizations.tsx) and computing
+    it again per "Load more" click would be wasted work."""
+    orgs, has_more = await list_all_organizations(db, limit=limit, before_id=before_id, search=search)
     aggregates = await org_aggregates(db, [org.id for org in orgs])
-    return [await _org_out(db, org, aggregates=aggregates.get(org.id)) for org in orgs]
+    # The summary bar is computed once over the whole filtered set, which is
+    # only actually shown for the first page (AdminOrganizations.tsx reads
+    # only pages[0]?.summary) — skip the aggregate queries on every
+    # subsequent "Load more" click, since their result would just be
+    # discarded by the caller.
+    summary = await org_summary_stats(db, search=search) if before_id is None else None
+    return {
+        "organizations": [await _org_out(db, org, aggregates=aggregates.get(org.id)) for org in orgs],
+        "has_more": has_more,
+        "summary": summary,
+    }
+
+
+async def _commit_org(db: AsyncSession) -> None:
+    try:
+        await db.commit()
+    except IntegrityError:
+        # entra_tenant_id is unique — one org per Microsoft tenant.
+        await db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, "that Microsoft tenant ID is already used by another organization")
 
 
 @router.post("/organizations", status_code=status.HTTP_201_CREATED)
@@ -319,9 +469,20 @@ async def create_organization(
 ) -> dict:
     org = Organization(name=body.name, entra_tenant_id=body.entra_tenant_id, status=OrganizationStatus.active)
     db.add(org)
-    await db.commit()
+    await _commit_org(db)
     await db.refresh(org)
     return await _org_out(db, org)
+
+
+@router.get("/organizations/names")
+async def list_organization_names(
+    db: AsyncSession = Depends(get_db), _admin: AdminPrincipal = Depends(get_current_platform_admin)
+) -> list[dict]:
+    """Unpaginated id+name pairs for picker/lookup UI — see
+    list_all_organization_names. Registered before /organizations/{org_id}
+    so "names" is never mistaken for an org_id path segment."""
+    rows = await list_all_organization_names(db)
+    return [{"id": str(row.id), "name": row.name} for row in rows]
 
 
 @router.get("/organizations/{org_id}")
@@ -336,23 +497,39 @@ async def get_organization_route(
     return await _org_out(db, org)
 
 
+async def _is_callers_org(db: AsyncSession, admin: AdminPrincipal, org: Organization) -> bool:
+    caller = await db.get(User, admin.id)
+    return caller is not None and caller.organization_id == org.id
+
+
 @router.patch("/organizations/{org_id}")
 async def update_organization(
     org_id: uuid.UUID,
     body: OrganizationUpdateRequest,
     db: AsyncSession = Depends(get_db),
-    _admin: AdminPrincipal = Depends(get_current_platform_admin),
+    admin: AdminPrincipal = Depends(get_current_platform_admin),
 ) -> dict:
     org = await get_organization(db, org_id)
     if org is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "organization not found")
+    if body.is_operator is not None:
+        # An operator-org admin revoking their own org's access would lock
+        # themselves out mid-session; the break-glass login can still do it.
+        if not body.is_operator and admin.auth_type == "operator_org" and await _is_callers_org(db, admin, org):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "you can't remove admin console access from your own organization — ask another operator or use the break-glass login",
+            )
+        org.is_operator = body.is_operator
     if body.name is not None:
         org.name = body.name
-    if body.entra_tenant_id is not None:
+    # Sent as null means "clear it" (the org goes back to local sign-in);
+    # left out means "leave it alone".
+    if "entra_tenant_id" in body.model_fields_set:
         org.entra_tenant_id = body.entra_tenant_id
     if body.status is not None:
         org.status = body.status
-    await db.commit()
+    await _commit_org(db)
     await db.refresh(org)
     return await _org_out(db, org)
 
@@ -369,8 +546,8 @@ async def delete_organization(
     if org.is_operator:
         # The operator org is what lets its own org_admins reach /admin/*
         # without the local break-glass login — deleting it out from under
-        # them isn't something to allow by accident. Unset is_operator on
-        # another org first if the operator designation needs to move.
+        # them isn't something to allow by accident. Remove its operator
+        # access first if it really needs deleting.
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "cannot delete the operator organization")
 
     # No ORM-level cascade is configured (Organization has no relationship()s
@@ -386,8 +563,10 @@ async def delete_organization(
     # bypass that would need repeating here.
     # Irreversible by design — the frontend requires typing the org's name
     # to confirm before this endpoint is ever called.
+    hosted_domain_names = await list_hosted_domain_names_for_org(db, org.id)
     await db.delete(org)
     await db.commit()
+    await release_authorization_records(hosted_domain_names)
 
 
 def _local_user_out(user: User) -> dict:
@@ -398,6 +577,73 @@ def _local_user_out(user: User) -> dict:
         "role": user.role.value,
         "auth_method": user.auth_method.value,
     }
+
+
+@router.get("/organizations/{org_id}/users")
+async def list_org_users(
+    org_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _admin: AdminPrincipal = Depends(get_current_platform_admin),
+) -> list[dict]:
+    if await get_organization(db, org_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "organization not found")
+    return [
+        {
+            **_local_user_out(user),
+            "status": user.status.value,
+            "mfa_enrolled": user.otp_enrolled_at is not None,
+            "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
+        }
+        for user in await list_users_for_org(db, org_id)
+    ]
+
+
+async def _resettable_user(db: AsyncSession, admin: AdminPrincipal, org_id: uuid.UUID, user_id: uuid.UUID) -> User:
+    """A local-auth user of `org_id` — the platform admin's way to help a
+    local org whose only admin is locked out. Not yourself: an operator-org
+    admin changes their own sign-in via Settings → Account, which re-checks
+    the current password."""
+    target = await get_user_in_org(db, user_id, org_id)
+    if target is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
+    if target.auth_method != AuthMethod.local:
+        raise HTTPException(status.HTTP_409_CONFLICT, "this user signs in with Microsoft — reset it in Entra instead")
+    if admin.auth_type == "operator_org" and target.id == admin.id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "use Settings → Account to change your own sign-in")
+    return target
+
+
+@router.post("/organizations/{org_id}/users/{user_id}/reset-password")
+async def admin_reset_user_password(
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin: AdminPrincipal = Depends(get_current_platform_admin),
+) -> dict:
+    target = await _resettable_user(db, admin, org_id, user_id)
+    target.password_hash = None
+    setup_link = await account_reset.issue_password_setup_link(db, target)
+    await account_reset.cancel_pending_logins(db, target)
+    await session_manager.revoke_user_sessions(db, target.id)
+    await account_reset.log_account_change(db, request, target, "password_reset_by_platform_admin", actor_email=admin.email)
+    await db.commit()
+    return {"setup_link": setup_link}
+
+
+@router.post("/organizations/{org_id}/users/{user_id}/reset-mfa", status_code=status.HTTP_204_NO_CONTENT)
+async def admin_reset_user_mfa(
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin: AdminPrincipal = Depends(get_current_platform_admin),
+) -> None:
+    target = await _resettable_user(db, admin, org_id, user_id)
+    await account_reset.clear_mfa(db, target)
+    await session_manager.revoke_user_sessions(db, target.id)
+    await account_reset.log_account_change(db, request, target, "mfa_reset_by_platform_admin", actor_email=admin.email)
+    await db.commit()
 
 
 @router.post("/organizations/{org_id}/users", status_code=status.HTTP_201_CREATED)
@@ -435,16 +681,7 @@ async def create_local_user(
         await db.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, "a user with this email already exists")
 
-    raw_token, token_hash = new_opaque_token()
-    now = datetime.now(timezone.utc)
-    db.add(
-        PasswordSetupToken(
-            user_id=user.id,
-            token_hash=token_hash,
-            created_at=now,
-            expires_at=now + timedelta(hours=settings.password_setup_token_timeout_hours),
-        )
-    )
+    setup_link = await account_reset.issue_password_setup_link(db, user)
     # refresh() must run before commit() — users is RLS-protected, and
     # commit ends the SET LOCAL app.is_platform_admin context this
     # transaction needs for the refresh's SELECT to see the row at all
@@ -453,7 +690,7 @@ async def create_local_user(
     await db.refresh(user)
     await db.commit()
 
-    return {**_local_user_out(user), "setup_link": f"{settings.public_base_url}/set-password?token={raw_token}"}
+    return {**_local_user_out(user), "setup_link": setup_link}
 
 
 @router.post("/organizations/{org_id}/mailbox-connection", status_code=status.HTTP_201_CREATED)
@@ -491,39 +728,56 @@ async def upsert_mailbox_connection(
     }
 
 
+@router.get("/sign-in-events")
+async def list_admin_sign_in_events(
+    limit: int = Query(50, ge=1, le=200),
+    before_id: uuid.UUID | None = Query(None),
+    result: SignInResult | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    _admin: AdminPrincipal = Depends(get_current_platform_admin),
+) -> dict:
+    """Break-glass admin sign-ins, same shape as an org's /sign-in-events."""
+    events = await list_platform_admin_sign_in_events(db, limit=limit, before_id=before_id, result=result)
+    return {"events": [sign_in_event_out(e) for e in events], "has_more": len(events) == limit}
+
+
 @router.get("/job-runs")
 async def list_job_runs_route(
-    limit: int = 50,
+    limit: int = Query(50, ge=1, le=200),
+    before_id: uuid.UUID | None = Query(None),
     organization_id: uuid.UUID | None = Query(None),
     job_type: JobType | None = Query(None),
     status_filter: JobStatus | None = Query(None, alias="status"),
     since_days: int | None = Query(None, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
     _admin: AdminPrincipal = Depends(get_current_platform_admin),
-) -> list[dict]:
-    limit = max(1, min(limit, 200))
-    runs = await list_job_runs(
+) -> dict:
+    runs, has_more = await list_job_runs(
         db,
         limit=limit,
+        before_id=before_id,
         organization_id=organization_id,
         job_type=job_type,
         status_filter=status_filter,
         since_days=since_days,
     )
-    return [
-        {
-            "id": str(run.id),
-            "job_type": run.job_type.value,
-            "organization_id": str(run.organization_id) if run.organization_id else None,
-            "domain_id": str(run.domain_id) if run.domain_id else None,
-            "status": run.status.value,
-            "started_at": run.started_at.isoformat(),
-            "finished_at": run.finished_at.isoformat() if run.finished_at else None,
-            "error_message": run.error_message,
-            "stats": run.stats,
-        }
-        for run in runs
-    ]
+    return {
+        "job_runs": [
+            {
+                "id": str(run.id),
+                "job_type": run.job_type.value,
+                "organization_id": str(run.organization_id) if run.organization_id else None,
+                "domain_id": str(run.domain_id) if run.domain_id else None,
+                "status": run.status.value,
+                "started_at": run.started_at.isoformat(),
+                "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+                "error_message": run.error_message,
+                "stats": run.stats,
+            }
+            for run in runs
+        ],
+        "has_more": has_more,
+    }
 
 
 @router.get("/job-runs/summary")

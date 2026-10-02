@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy import BigInteger, DateTime, ForeignKey, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -45,6 +45,10 @@ class User(UUIDPkMixin, TimestampMixin, Base):
     # varchar(255) in migration 0020.
     otp_secret: Mapped[str | None] = mapped_column(EncryptedSecret(255), nullable=True)
     otp_enrolled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # 30-second TOTP time step of the last code accepted at sign-in; codes
+    # from that step or earlier are refused (totp.accept_code), so each code
+    # works once.
+    otp_last_used_step: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
     role: Mapped[UserRole] = mapped_column(
         pg_enum(UserRole, "user_role"), nullable=False, default=UserRole.member

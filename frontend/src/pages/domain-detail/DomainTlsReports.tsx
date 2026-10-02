@@ -6,7 +6,9 @@ import type { TlsRptFilters, TlsRptReportRow, TlsRptSenderSummary, TlsRptSummary
 import { TLS_RPT_RESULT_TYPES, tlsRptFilterQuery } from "../../api/dmarc";
 import { DATE_RANGE_PRESETS } from "../../api/overview";
 import { Stat } from "../../components/domain/shared";
+import { LoadMoreButton } from "../../components/shared/LoadMoreButton";
 import { useTlsReportRows, useTlsReportSummary, useTlsReportsBySender } from "../../hooks/useTlsReports";
+import LeftOutReportsNotice from "../../components/domain/LeftOutReportsNotice";
 
 const GROUPINGS = [
   { key: "day", label: "Day" },
@@ -22,25 +24,45 @@ export default function DomainTlsReports() {
 
   const grouping: Grouping = (params.get("group") as Grouping) || "day";
   const filters: TlsRptFilters = {
-    days: params.get("days") ? Number(params.get("days")) : undefined,
+    date_from: params.get("date_from") || undefined,
+    date_to: params.get("date_to") || undefined,
     org_name: params.get("org_name") || undefined,
     result_type: params.get("result_type") || undefined,
     failures_only: params.get("failures_only") === "1",
   };
   const filterQS = tlsRptFilterQuery(filters);
+  const hasActiveFilters =
+    filters.date_from !== undefined ||
+    filters.date_to !== undefined ||
+    filters.org_name !== undefined ||
+    filters.result_type !== undefined ||
+    filters.failures_only === true;
+
+  // Applies one or more param changes atomically against the CURRENT `params`
+  // snapshot. setFilter (single key) is a thin wrapper around this — the
+  // batched form exists for the quick-pick range buttons, which must set
+  // date_from and date_to together: two sequential setFilter calls would each
+  // rebuild from the same pre-navigation `params` snapshot, so the second
+  // call would silently clobber the first's change.
+  function setFilters(updates: Record<string, string>) {
+    const next = new URLSearchParams(params);
+    for (const [key, value] of Object.entries(updates)) {
+      if (value) next.set(key, value);
+      else next.delete(key);
+    }
+    setParams(next, { replace: true });
+  }
 
   function setFilter(key: string, value: string) {
-    const next = new URLSearchParams(params);
-    if (value) next.set(key, value);
-    else next.delete(key);
-    setParams(next, { replace: true });
+    setFilters({ [key]: value });
   }
 
   const summaryQuery = useTlsReportSummary(domainId, filterQS);
   const reportsQuery = useTlsReportRows(domainId, filterQS, grouping === "day");
   const bySenderQuery = useTlsReportsBySender(domainId, filterQS, grouping === "sender");
 
-  const days = groupByDay(reportsQuery.data ?? []);
+  const allRows = reportsQuery.data?.pages.flatMap((p) => p.reports) ?? [];
+  const days = groupByDay(allRows);
 
   return (
     <section>
@@ -50,14 +72,34 @@ export default function DomainTlsReports() {
         </div>
       </div>
 
-      <FilterBar filters={filters} grouping={grouping} onFilterChange={setFilter} onGroupingChange={(g) => setFilter("group", g)} />
+      <LeftOutReportsNotice domainId={domainId} types={["TLS-RPT"]} />
+
+      <FilterBar
+        filters={filters}
+        grouping={grouping}
+        onFilterChange={setFilter}
+        onDateRangeChange={(from, to) => setFilters({ date_from: from, date_to: to })}
+        onGroupingChange={(g) => setFilter("group", g)}
+      />
 
       <SummaryBar summary={summaryQuery.data} isLoading={summaryQuery.isLoading} />
 
       {grouping === "day" ? (
         <>
           {reportsQuery.isLoading && <p className="muted">Loading…</p>}
-          {reportsQuery.isSuccess && days.length === 0 && <p className="empty-state">No TLS-RPT reports match these filters.</p>}
+          {reportsQuery.isSuccess && days.length === 0 && (
+            <p className="empty-state">
+              {hasActiveFilters
+                ? "No TLS-RPT reports match these filters."
+                : "No TLS-RPT reports received yet for this domain."}
+            </p>
+          )}
+
+          {summaryQuery.data && reportsQuery.data && (
+            <p className="muted" style={{ fontSize: "0.85rem" }}>
+              Showing {allRows.length.toLocaleString()} of {summaryQuery.data.total_reports.toLocaleString()}
+            </p>
+          )}
 
           {days.map((day) => (
             <div key={day.date} className="card" style={{ padding: 0, overflow: "hidden" }}>
@@ -83,7 +125,16 @@ export default function DomainTlsReports() {
               {day.rows.map((row) => (
                 <div key={row.id} style={{ borderBottom: "1px solid var(--border)" }}>
                   <div
+                    role="button"
+                    tabIndex={0}
+                    aria-expanded={expandedId === row.id}
                     onClick={() => setExpandedId(expandedId === row.id ? null : row.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setExpandedId(expandedId === row.id ? null : row.id);
+                      }
+                    }}
                     style={{
                       display: "flex",
                       justifyContent: "space-between",
@@ -119,9 +170,15 @@ export default function DomainTlsReports() {
               ))}
             </div>
           ))}
+
+          <LoadMoreButton
+            hasNextPage={reportsQuery.hasNextPage}
+            isFetchingNextPage={reportsQuery.isFetchingNextPage}
+            onClick={() => reportsQuery.fetchNextPage()}
+          />
         </>
       ) : (
-        <BySenderTable rows={bySenderQuery.data} isLoading={bySenderQuery.isLoading} />
+        <BySenderTable rows={bySenderQuery.data} isLoading={bySenderQuery.isLoading} hasActiveFilters={hasActiveFilters} />
       )}
     </section>
   );
@@ -176,15 +233,24 @@ function FailureDetails({ details }: { details: TlsRptReportRow["failure_details
   );
 }
 
+function quickRangeDates(days: number): { from: string; to: string } {
+  const to = new Date();
+  const from = new Date();
+  from.setDate(from.getDate() - (days - 1));
+  return { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) };
+}
+
 function FilterBar({
   filters,
   grouping,
   onFilterChange,
+  onDateRangeChange,
   onGroupingChange,
 }: {
   filters: TlsRptFilters;
   grouping: Grouping;
   onFilterChange: (key: string, value: string) => void;
+  onDateRangeChange: (from: string, to: string) => void;
   onGroupingChange: (grouping: Grouping) => void;
 }) {
   const [orgName, setOrgName] = useState(filters.org_name ?? "");
@@ -196,14 +262,24 @@ function FilterBar({
   return (
     <div className="card">
       <div className="field-row" style={{ marginBottom: "0.6rem" }}>
-        <select className="input" value={filters.days ?? ""} onChange={(e) => onFilterChange("days", e.target.value)}>
-          <option value="">All time</option>
-          {DATE_RANGE_PRESETS.map((d) => (
-            <option key={d} value={d}>
-              Last {d} days
-            </option>
-          ))}
-        </select>
+        <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.85rem" }}>
+          From
+          <input
+            type="date"
+            className="input"
+            value={filters.date_from ?? ""}
+            onChange={(e) => onFilterChange("date_from", e.target.value)}
+          />
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.85rem" }}>
+          To
+          <input
+            type="date"
+            className="input"
+            value={filters.date_to ?? ""}
+            onChange={(e) => onFilterChange("date_to", e.target.value)}
+          />
+        </label>
         <select className="input" value={filters.result_type ?? ""} onChange={(e) => onFilterChange("result_type", e.target.value)}>
           <option value="">Any result type</option>
           {TLS_RPT_RESULT_TYPES.map((rt) => (
@@ -221,6 +297,24 @@ function FilterBar({
           Failures only
         </label>
       </div>
+      <div className="chip-row" style={{ marginBottom: "0.6rem" }}>
+        <span className="muted" style={{ fontSize: "0.8rem" }}>
+          Quick range:
+        </span>
+        {DATE_RANGE_PRESETS.map((d) => (
+          <button
+            key={d}
+            type="button"
+            className="btn btn--ghost btn--sm"
+            onClick={() => {
+              const { from, to } = quickRangeDates(d);
+              onDateRangeChange(from, to);
+            }}
+          >
+            Last {d} days
+          </button>
+        ))}
+      </div>
       <form
         className="field-row"
         style={{ marginBottom: "0.6rem" }}
@@ -229,12 +323,10 @@ function FilterBar({
           onFilterChange("org_name", orgName);
         }}
       >
-        <input
-          className="input"
-          placeholder="Filter by reporting org (e.g. google)"
-          value={orgName}
-          onChange={(e) => setOrgName(e.target.value)}
-        />
+        <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.85rem" }}>
+          Reporting org
+          <input className="input" placeholder="e.g. google" value={orgName} onChange={(e) => setOrgName(e.target.value)} />
+        </label>
         <button type="submit" className="btn btn--secondary btn--sm">
           Apply
         </button>
@@ -287,11 +379,23 @@ function SummaryBar({ summary, isLoading }: { summary: TlsRptSummary | undefined
   );
 }
 
-function BySenderTable({ rows, isLoading }: { rows: TlsRptSenderSummary[] | undefined; isLoading: boolean }) {
+function BySenderTable({
+  rows,
+  isLoading,
+  hasActiveFilters,
+}: {
+  rows: TlsRptSenderSummary[] | undefined;
+  isLoading: boolean;
+  hasActiveFilters: boolean;
+}) {
   return (
     <div className="card">
       {isLoading && <p className="muted">Loading…</p>}
-      {!isLoading && (rows ?? []).length === 0 && <p className="empty-state">No TLS-RPT reports match these filters.</p>}
+      {!isLoading && (rows ?? []).length === 0 && (
+        <p className="empty-state">
+          {hasActiveFilters ? "No TLS-RPT reports match these filters." : "No TLS-RPT reports received yet for this domain."}
+        </p>
+      )}
       {!isLoading && (rows ?? []).length > 0 && (
         <div className="table-wrap">
           <table className="table">

@@ -41,6 +41,14 @@ Open `https://<your-domain>/admin`, log in with your bootstrap credentials, crea
 
 → **[Getting Started](https://github.com/BJD1997/YetAnotherDmarcTool/wiki/Getting-Started)** (Portainer, Azure, full config reference) · **[Onboarding](https://github.com/BJD1997/YetAnotherDmarcTool/wiki/Onboarding-Your-First-Organization)**
 
+## ☁️ Deploy on Azure
+
+A managed, autoscaling deployment (private Postgres + Key Vault, KEDA-scaled Container Apps, a Test/Small/Medium/Large sizing picker) — this branch's own addition, not yet on `main`.
+
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FBJD1997%2FYetAnotherDmarcTool%2Fmain%2Fdeploy%2Fazure%2Fazuredeploy.json/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2FBJD1997%2FYetAnotherDmarcTool%2Fmain%2Fdeploy%2Fazure%2FcreateUiDefinition.json)
+
+Compiled and cross-checked (`bicep build` clean, 0 errors/warnings) but not yet tested against a live subscription — the manual `az deployment group create` path is the fallback if anything doesn't resolve as expected. Full parameters, prerequisites, and that manual path → **[`deploy/azure/README.md`](deploy/azure/README.md)** · narrative overview → **[Deploying on Azure Container Apps](https://github.com/BJD1997/YetAnotherDmarcTool/wiki/Deploying-on-Azure-Container-Apps)**.
+
 ## 🏗️ Architecture
 
 ```
@@ -58,9 +66,9 @@ Open `https://<your-domain>/admin`, log in with your bootstrap credentials, crea
                  └──────────▲─┘   │ validating)│    through this, not the
                             │     └────────────┘    host's own resolver
                  ┌──────────┴─┐
-                 │   worker   │  N replicas, off a Postgres work queue — no
-                 │            │  message broker
-                 └────────────┘
+                 │   worker   │  N replicas, off a Postgres work queue: mailbox
+                 │            │  polling, DNS check sweep, domain verification
+                 └────────────┘  sweep, retention purge — no message broker
 ```
 
 `api`/`worker` are the same image, different commands; `migrate` runs

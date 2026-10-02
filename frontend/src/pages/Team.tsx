@@ -2,9 +2,10 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowLeft, Check, Copy, UserPlus } from "lucide-react";
 import { ApiError } from "../api/client";
+import type { TeamMember } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { useCurrentOrganization } from "../hooks/useOrganization";
-import { useCreateUser, useUpdateUser, useUsers } from "../hooks/useUsers";
+import { useCreateUser, useResetUserMfa, useResetUserPassword, useUpdateUser, useUsers } from "../hooks/useUsers";
 import { useClipboardFeedback } from "../hooks/useClipboardFeedback";
 
 function ShareSignInLink() {
@@ -107,6 +108,33 @@ function AddLocalTeammate() {
   );
 }
 
+function ResetLinkNotice({ email, link, onDismiss }: { email: string; link: string; onDismiss: () => void }) {
+  const { copied, copy } = useClipboardFeedback();
+  return (
+    <div className="card">
+      <div className="stat-tile-label" style={{ marginBottom: "0.4rem" }}>
+        Password reset for {email}
+      </div>
+      <p className="section-hint">
+        Their old password no longer works and they've been signed out everywhere. Share this one-time link with them
+        yourself — they'll choose a new password and sign in with their existing authenticator.
+      </p>
+      <div className="field-row">
+        <code className="input" style={{ display: "inline-block" }}>
+          {link}
+        </code>
+        <button className="btn btn--secondary btn--sm" onClick={() => void copy(link)}>
+          {copied ? <Check /> : <Copy />}
+          {copied ? "Copied" : "Copy link"}
+        </button>
+        <button className="btn btn--ghost btn--sm" onClick={onDismiss}>
+          Done
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function Team() {
   const { user } = useAuth();
   const { data: org } = useCurrentOrganization();
@@ -115,10 +143,29 @@ export default function Team() {
 
   const canManage = user?.role === "org_admin";
 
-  const updateMember = useUpdateUser(
-    () => setError(null),
-    (err) => setError(err instanceof ApiError ? err.message : "failed to update user"),
-  );
+  const [notice, setNotice] = useState<string | null>(null);
+  const [resetLink, setResetLink] = useState<{ email: string; link: string } | null>(null);
+
+  const onError = (fallback: string) => (err: Error) => setError(err instanceof ApiError ? err.message : fallback);
+  const updateMember = useUpdateUser(() => setError(null), onError("failed to update user"));
+  const resetPassword = useResetUserPassword(undefined, onError("failed to reset password"));
+  const resetMfa = useResetUserMfa(undefined, onError("failed to reset two-factor authentication"));
+
+  function handleResetPassword(member: TeamMember) {
+    if (!window.confirm(`Reset ${member.email}'s password? Their current password stops working immediately and they're signed out everywhere.`)) return;
+    setError(null);
+    setNotice(null);
+    resetPassword.mutate(member.id, { onSuccess: (result) => setResetLink({ email: member.email, link: result.setup_link }) });
+  }
+
+  function handleResetMfa(member: TeamMember) {
+    if (!window.confirm(`Reset ${member.email}'s two-factor authentication? They're signed out and must set up a new authenticator at their next sign-in.`)) return;
+    setError(null);
+    setResetLink(null);
+    resetMfa.mutate(member.id, {
+      onSuccess: () => setNotice(`${member.email} will set up a new authenticator the next time they sign in.`),
+    });
+  }
 
   return (
     <section>
@@ -139,6 +186,8 @@ export default function Team() {
 
       {org && (org.entra_tenant_id ? <ShareSignInLink /> : canManage ? <AddLocalTeammate /> : null)}
 
+      {resetLink && <ResetLinkNotice {...resetLink} onDismiss={() => setResetLink(null)} />}
+      {notice && <div className="alert alert--good">{notice}</div>}
       {error && <div className="alert alert--critical">{error}</div>}
       {isLoading && <p className="muted">Loading…</p>}
 
@@ -170,6 +219,11 @@ export default function Team() {
                       {member.auth_method === "local" && (
                         <span className="badge badge--neutral" style={{ marginLeft: "0.3rem" }}>
                           local
+                        </span>
+                      )}
+                      {member.auth_method === "local" && !member.mfa_enrolled && (
+                        <span className="badge badge--warning" style={{ marginLeft: "0.3rem" }}>
+                          no MFA yet
                         </span>
                       )}
                     </td>
@@ -205,6 +259,26 @@ export default function Team() {
                             >
                               {member.status === "active" ? "Disable" : "Re-enable"}
                             </button>
+                            {member.auth_method === "local" && (
+                              <>
+                                <button
+                                  className="btn btn--ghost btn--sm"
+                                  onClick={() => handleResetPassword(member)}
+                                  disabled={resetPassword.isPending}
+                                >
+                                  Reset password
+                                </button>
+                                {member.mfa_enrolled && (
+                                  <button
+                                    className="btn btn--ghost btn--sm"
+                                    onClick={() => handleResetMfa(member)}
+                                    disabled={resetMfa.isPending}
+                                  >
+                                    Reset MFA
+                                  </button>
+                                )}
+                              </>
+                            )}
                           </div>
                         )}
                       </td>

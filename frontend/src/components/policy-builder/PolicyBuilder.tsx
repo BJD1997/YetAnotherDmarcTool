@@ -5,6 +5,7 @@ import type { DmarcPolicy } from "../../api/policyBuilder";
 import { useCurrentOrganization } from "../../hooks/useOrganization";
 import { useClipboardFeedback } from "../../hooks/useClipboardFeedback";
 import { useDmarcPolicyBuilder, useRequestHostedReportAddress } from "../../hooks/usePolicyBuilders";
+import { asPolicy, findRelaxations } from "./dmarcInheritance";
 
 const RUA_STATUS_TEXT: Record<string, { text: string; role: "good" | "warning" | "critical" | "neutral" }> = {
   correct: { text: "Reports are reaching your connected mailbox", role: "good" },
@@ -14,6 +15,16 @@ const RUA_STATUS_TEXT: Record<string, { text: string; role: "good" | "warning" |
   lookup_error: { text: "Couldn't check right now — DNS lookup failed", role: "neutral" },
   no_mailbox: { text: "No mailbox connected yet — connect one in Settings first", role: "critical" },
 };
+
+function asPolicyOrBlank(value: string | undefined): DmarcPolicy | "" {
+  return asPolicy(value) ?? "";
+}
+
+// RFC 7489: adkim=/aspf= default to relaxed ("r") when the tag is absent —
+// so a record that omits it is correctly relaxed, not "unset."
+function asAlignment(value: string | undefined): "r" | "s" {
+  return value === "s" ? "s" : "r";
+}
 
 // Deliberately no pct= anywhere in this builder — RFC 9989 (DMARCbis)
 // Appendix A.6 removes it entirely, and dmarc_record.py's own checker
@@ -78,11 +89,23 @@ export default function PolicyBuilder({ domainId, domainName, onClose }: { domai
     (err) => setHostedAddressError(err instanceof ApiError ? err.message : "couldn't generate a hosted address"),
   );
 
-  // Seed the form from the recommendation exactly once, when it first loads.
+  // Seed the form from the domain's CURRENTLY PUBLISHED record where one
+  // exists, falling back to the recommendation only for fields it doesn't
+  // have (a brand new domain with no record yet, or a tag the record
+  // doesn't set). Applying the recommendation is a deliberate action (the
+  // "Use recommendation" button below) — the starting state must not
+  // silently discard an existing, valid, already-published tag this
+  // builder doesn't independently generate a recommendation for (sp=,
+  // adkim=, aspf=) or only conditionally does (np=), which is exactly what
+  // happened when this used to seed from data.recommendation instead.
   useEffect(() => {
     if (data) {
-      setPolicy(data.recommendation.policy);
-      setNp(data.recommendation.np ?? "");
+      const tags = data.current_record?.tags;
+      setPolicy(asPolicy(tags?.p) ?? data.recommendation.policy);
+      setSp(asPolicyOrBlank(tags?.sp));
+      setNp(asPolicyOrBlank(tags?.np) || (data.recommendation.np ?? ""));
+      setAdkim(asAlignment(tags?.adkim));
+      setAspf(asAlignment(tags?.aspf));
       const org = data.org_mailbox_address;
       const others = data.rua_destination.current_targets.filter((t) => !org || t.toLowerCase() !== org.toLowerCase());
       setSelectedRua(org ? [org, ...others] : others);
@@ -106,6 +129,7 @@ export default function PolicyBuilder({ domainId, domainName, onClose }: { domai
   const generated = data ? buildRecord({ policy, sp, np, adkim, aspf, rua: selectedRua }) : "";
   const ruaInfo = data ? RUA_STATUS_TEXT[data.rua_destination.status] : null;
   const currentHasPct = !!data?.current_record?.tags.pct;
+  const relaxations = data ? findRelaxations(data.current_record?.tags, policy, sp, np) : [];
   const orgMailbox = data?.org_mailbox_address ?? null;
   const otherTargets = data
     ? data.rua_destination.current_targets.filter((t) => !orgMailbox || t.toLowerCase() !== orgMailbox.toLowerCase())
@@ -207,6 +231,19 @@ export default function PolicyBuilder({ domainId, domainName, onClose }: { domai
               </div>
             )}
 
+            {relaxations.length > 0 && (
+              <div className="alert alert--warning">
+                <div style={{ fontWeight: 600 }}>This weakens your current policy</div>
+                <ul style={{ margin: "0.25rem 0 0", paddingLeft: "1.2rem" }}>
+                  {relaxations.map((r) => (
+                    <li key={r}>
+                      <code>{r}</code>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             <div className={`alert alert--${data.recommendation.blocked ? "warning" : "good"}`}>
               <div style={{ fontWeight: 600 }}>
                 Recommendation: p={data.recommendation.policy}
@@ -299,6 +336,7 @@ export default function PolicyBuilder({ domainId, domainName, onClose }: { domai
                 Generated record
               </div>
               <div
+                data-testid="generated-record"
                 style={{
                   fontFamily: "monospace",
                   fontSize: "0.82rem",

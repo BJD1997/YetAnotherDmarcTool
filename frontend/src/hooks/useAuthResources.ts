@@ -17,13 +17,19 @@ export function useCurrentUser() {
   return { ...query, refreshUser: () => queryClient.invalidateQueries({ queryKey: queryKeys.currentUser }) };
 }
 
+// "choose": the browser holds both a break-glass session and an operator
+// org's session, and no choice between them has been made yet (409).
 export function useCurrentAdmin() {
   const queryClient = useQueryClient();
   const query = useQuery({
     queryKey: queryKeys.admin.currentUser,
-    queryFn: async () => {
+    queryFn: async (): Promise<AdminMe | "choose" | null> => {
       try { return await api.get<AdminMe>("/admin/me"); }
-      catch (error) { if (error instanceof ApiError && error.status === 401) return null; throw error; }
+      catch (error) {
+        if (error instanceof ApiError && error.status === 401) return null;
+        if (error instanceof ApiError && error.status === 409) return "choose";
+        throw error;
+      }
     },
     retry: false,
   });

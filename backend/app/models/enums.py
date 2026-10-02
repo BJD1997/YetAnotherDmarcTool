@@ -35,6 +35,15 @@ class ConsentStatus(str, enum.Enum):
 # DMARC is already the enforcement mechanism at that point, so -all only
 # adds a deliverability risk (SMTP-level bounce on relayed mail before
 # DKIM/DMARC evaluation) with no security benefit. See spf.py's check().
+class ReportSenderCheck(str, enum.Enum):
+    """How strictly an organization's incoming reports are checked for
+    forgery — see app/services/ingestion/sender_auth.py's decide()."""
+
+    standard = "standard"
+    strict = "strict"
+    off = "off"
+
+
 class SpfAllQualifierMode(str, enum.Enum):
     strict = "strict"
     conditional = "conditional"
@@ -89,11 +98,17 @@ class UserRole(str, enum.Enum):
 class AuthMethod(str, enum.Enum):
     entra = "entra"
     local = "local"
+    # Only on sign_in_events: the break-glass platform admin login (never a
+    # users.auth_method value).
+    platform_admin = "platform_admin"
 
 
 class SignInResult(str, enum.Enum):
     success = "success"
     failure = "failure"
+    # Not a sign-in: a password/MFA change or an admin reset, logged in the
+    # same activity feed (failure_reason holds the action, actor_email who).
+    account_change = "account_change"
 
 
 class UserStatus(str, enum.Enum):
@@ -127,3 +142,13 @@ class SenderReviewStatus(str, enum.Enum):
     # decommissioned host or an ESP you've stopped using) — kept for history
     # but hidden from the active inventory view. See the sender-inventory UI.
     archived = "archived"
+
+
+class BackgroundJobStatus(str, enum.Enum):
+    """Lifecycle of a row in the worker work-queue (background_jobs). See
+    app/services/jobs/queue.py."""
+
+    pending = "pending"
+    running = "running"
+    done = "done"
+    failed = "failed"

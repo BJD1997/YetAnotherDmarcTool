@@ -22,6 +22,10 @@ from app.services.crypto.secrets import decrypt_secret, encrypt_secret
 
 logger = logging.getLogger(__name__)
 
+# Every Fernet token starts with the version byte 0x80, which base64url-
+# encodes to "gAAAAA". A legacy TOTP secret is uppercase base32 and never can.
+_FERNET_TOKEN_PREFIX = "gAAAAA"
+
 
 class EncryptedSecret(TypeDecorator):
     impl = String
@@ -38,6 +42,15 @@ class EncryptedSecret(TypeDecorator):
         try:
             return decrypt_secret(value.encode("ascii"))
         except (InvalidToken, ValueError):
+            if value.startswith(_FERNET_TOKEN_PREFIX):
+                # Real ciphertext that no configured key opens — returning it
+                # as a "secret" would make pyotp raise mid-verify, before the
+                # recovery-code fallback gets a chance to run.
+                logger.error(
+                    "TOTP secret can't be decrypted with any configured FERNET_KEY — if the key was rotated, "
+                    "keep the previous key listed after the new one (FERNET_KEY=<new>,<old>)"
+                )
+                return None
             # Legacy plaintext secret not yet migrated to ciphertext — return
             # as-is so TOTP still verifies. The 0020 migration backfills these.
             logger.warning("TOTP secret read as legacy plaintext (not yet encrypted at rest)")

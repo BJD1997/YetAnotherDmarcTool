@@ -4,7 +4,15 @@ import { useClipboardFeedback } from "../../hooks/useClipboardFeedback";
 
 // Shown exactly once, right after TOTP enrollment completes — these codes
 // can't be retrieved again afterward (only their hashes are stored).
-export default function RecoveryCodesStep({ codes, onContinue }: { codes: string[]; onContinue: () => void }) {
+export default function RecoveryCodesStep({
+  codes,
+  onContinue,
+  continueLabel = "Continue to dashboard",
+}: {
+  codes: string[];
+  onContinue: () => void;
+  continueLabel?: string;
+}) {
   const { copied, copy } = useClipboardFeedback();
   const [acknowledged, setAcknowledged] = useState(false);
 
@@ -45,7 +53,7 @@ export default function RecoveryCodesStep({ codes, onContinue }: { codes: string
         I've saved these codes
       </label>
       <button className="btn btn--primary" disabled={!acknowledged} onClick={onContinue} style={{ width: "100%", padding: "0.65rem" }}>
-        Continue to dashboard
+        {continueLabel}
       </button>
     </div>
   );

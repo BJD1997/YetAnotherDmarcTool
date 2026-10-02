@@ -1,21 +1,26 @@
 import itertools
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import get_db
+from app.db.rls import set_org_context
+from app.db.session import get_db, get_read_db
 from app.middleware.tenant_context import get_current_user, require_org_admin
+from app.models.dmarc_aggregate import DmarcAggregateReport
 from app.models.enums import AuthResult, Disposition, DomainVerificationStatus
 from app.models.sender_review import SenderReview
+from app.models.tls_rpt import TlsRptReport
 from app.models.user import User
 from app.repositories import dmarc_reports as dmarc_reports_repo
 from app.repositories.domains import get_owned_domain, list_domains_for_org
 from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.schemas.dmarc_reports import SenderReviewUpdateRequest
 from app.services.action_queue.rules import reviewed_service_labels, unreviewed_high_volume_senders
-from app.services.dmarc_analytics import service_breakdown
+from app.services.dmarc_analytics import service_breakdown, service_breakdown_multi
+from app.services.ingestion.sender_auth import SenderAuth, left_out_reason
 from app.services.dmarc_narrative import dkim_narratives, spf_narratives
 from app.services.dns_checks.dmarc_record import DmarcRecordInfo, check_rua_destination, fetch_current_dmarc_record
 from app.services.dns_checks.resolver import DnsLookupError
@@ -25,6 +30,35 @@ from app.services.rating.score import DomainRating
 from app.services.source_identification.service_identifier import identify_many
 
 router = APIRouter(tags=["dmarc-reports"])
+
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _parse_date_range(date_from: str | None, date_to: str | None) -> tuple[datetime | None, datetime | None]:
+    """Parses the Reports page's `date_from`/`date_to` (YYYY-MM-DD) query
+    params into UTC datetime boundaries: `since` is date_from at 00:00:00
+    UTC; `until` is the day AFTER date_to at 00:00:00 UTC, so the whole of
+    date_to is included as an exclusive upper bound (matching
+    _apply_report_filters' `< until`). A malformed or missing string is
+    treated as absent rather than raising — same lenient-query-param
+    convention every other filter on this router already follows (e.g.
+    `disposition`/`spf_result` simply no-op when absent)."""
+    since = None
+    if date_from is not None and _DATE_RE.match(date_from):
+        try:
+            since = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            since = None
+
+    until = None
+    if date_to is not None and _DATE_RE.match(date_to):
+        try:
+            day = datetime.strptime(date_to, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            until = day + timedelta(days=1)
+        except ValueError:
+            until = None
+
+    return since, until
 
 
 @router.get("/domains/{domain_id}/dmarc/summary")
@@ -48,6 +82,38 @@ async def dmarc_summary(
     }
 
 
+@router.get("/domains/{domain_id}/left-out-reports")
+async def left_out_reports(
+    domain_id: uuid.UUID, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
+) -> list[dict]:
+    """Reports the organization's sender check leaves out of every view, with
+    why — so they can be reviewed instead of silently disappearing."""
+    await get_owned_domain(db, domain_id, user.organization_id)
+    out = []
+    for report in await dmarc_reports_repo.list_left_out_reports(db, domain_id):
+        sender = SenderAuth(
+            origin=report.sender_origin, dmarc=report.sender_dmarc, domain=report.sender_domain,
+            matches_reporter=report.sender_matches_reporter,
+        )
+        if isinstance(report, DmarcAggregateReport):
+            kind, reporter, received, period = "DMARC", report.org_name, report.received_at, report.date_range_begin
+        elif isinstance(report, TlsRptReport):
+            kind, reporter, received, period = "TLS-RPT", report.org_name, report.received_at, report.date_range_begin
+        else:
+            kind, reporter, received, period = "Forensic", None, report.created_at, report.arrival_date
+        out.append({
+            "id": str(report.id),
+            "type": kind,
+            "reporter": reporter,
+            "period_start": period.isoformat(),
+            "received_at": received.isoformat(),
+            "sender_domain": report.sender_domain,
+            "reason": left_out_reason(sender),
+        })
+    out.sort(key=lambda r: r["received_at"], reverse=True)
+    return out
+
+
 @router.get("/domains/{domain_id}/rating")
 async def domain_rating(
     domain_id: uuid.UUID, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
@@ -57,7 +123,7 @@ async def domain_rating(
     if domain.verification_status != DomainVerificationStatus.verified:
         return {"not_verified": True, "insufficient_data": True, "score": None, "grade": None, "factors": []}
 
-    rating, _total = await compute_domain_rating(db, domain)
+    rating, _total, _failed = await compute_domain_rating(db, domain)
     return {
         "not_verified": False,
         "insufficient_data": rating.insufficient_data,
@@ -127,6 +193,57 @@ async def sender_inventory(
     return [{**s, **_sender_review_out(reviews_by_label[s["service_label"]])} for s in services]
 
 
+@router.get("/dmarc/sender-inventory")
+async def sender_inventory_multi(
+    domain_ids: list[uuid.UUID] = Query(...),
+    days: int | None = Query(None, ge=1, le=365),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, list[dict]]:
+    """Batched sibling of GET /domains/{domain_id}/dmarc/sender-inventory for
+    the Overview page, which needs every domain's inventory on one page load.
+    Firing that as N per-domain requests meant N concurrent DB connections
+    each held for the duration of service_breakdown's DNS-bound identify_many
+    call — see service_breakdown_multi's docstring for why that's the shape
+    of bug db_pool_size/db_max_overflow in config.py was raised for. This
+    computes every requested domain's breakdown behind one connection and one
+    identify_many call instead.
+
+    Silently drops any domain_id not owned by the caller's org rather than
+    404ing, since this is an aggregate endpoint over a caller-supplied list —
+    one bad id shouldn't fail every other domain's data."""
+    owned_ids = {d.id for d in await list_domains_for_org(db, user.organization_id)}
+    valid_ids = [d for d in dict.fromkeys(domain_ids) if d in owned_ids]
+    if not valid_ids:
+        return {}
+
+    since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
+    breakdowns = await service_breakdown_multi(db, valid_ids, since=since)
+
+    review_rows = await dmarc_reports_repo.list_sender_reviews_for_domains(db, valid_ids)
+    reviews_by_domain_label = {(r.domain_id, r.service_label): r for r in review_rows}
+
+    missing = [
+        (domain_id, s["service_label"])
+        for domain_id in valid_ids
+        for s in breakdowns.get(domain_id, [])
+        if (domain_id, s["service_label"]) not in reviews_by_domain_label
+    ]
+    if missing:
+        await dmarc_reports_repo.upsert_missing_sender_reviews_multi(db, user.organization_id, missing)
+        review_rows = await dmarc_reports_repo.list_sender_reviews_for_domains(db, valid_ids)
+        reviews_by_domain_label = {(r.domain_id, r.service_label): r for r in review_rows}
+    await db.commit()
+
+    return {
+        str(domain_id): [
+            {**s, **_sender_review_out(reviews_by_domain_label[(domain_id, s["service_label"])])}
+            for s in breakdowns.get(domain_id, [])
+        ]
+        for domain_id in valid_ids
+    }
+
+
 @router.patch("/domains/{domain_id}/dmarc/sender-inventory/{service_label}")
 async def update_sender_review(
     domain_id: uuid.UUID,
@@ -165,9 +282,15 @@ async def update_sender_review(
 async def dmarc_trend(
     domain_id: uuid.UUID | None = Query(None),
     days: int = Query(30, ge=1, le=90),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
     user: User = Depends(get_current_user),
 ) -> list[dict]:
+    # get_current_user's Depends(get_db) sets RLS org context on ITS OWN session —
+    # this endpoint's Depends(get_read_db) session is a separate connection that
+    # never saw that SET LOCAL, so it must be set here too (same pattern used
+    # wherever a second, independently-injected session needs RLS scoping, e.g.
+    # app/workers/jobs/mailbox_poll_job.py).
+    await set_org_context(db, user.organization_id)
     if domain_id is not None:
         await get_owned_domain(db, domain_id, user.organization_id)
 
@@ -190,12 +313,15 @@ async def dmarc_trend(
 async def dmarc_posture(
     domain_id: uuid.UUID | None = Query(None),
     days: int = Query(30, ge=1, le=90),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
     user: User = Depends(get_current_user),
 ) -> dict:
     """Bundled compliance/policy/failed-volume/freshness/new-senders/
     ready-to-enforce, rather than six tiny endpoints — matches the
     "don't over-fragment" instinct already applied in dmarc_summary."""
+    # See dmarc_trend's comment above: this endpoint's Depends(get_read_db)
+    # session is separate from the one get_current_user set RLS context on.
+    await set_org_context(db, user.organization_id)
     if domain_id is not None:
         domains = [await get_owned_domain(db, domain_id, user.organization_id)]
     else:
@@ -203,7 +329,6 @@ async def dmarc_posture(
 
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
-    scored: list[tuple[float, int]] = []
     policy_counts: dict[str, int] = {}
     single_domain_policy: str | None = None
     ready_to_enforce_count = 0
@@ -212,9 +337,7 @@ async def dmarc_posture(
         rating: DomainRating | None = None
         total: int = 0
         if domain.verification_status == DomainVerificationStatus.verified:
-            rating, total = await compute_domain_rating(db, domain)
-            if not rating.insufficient_data and rating.score is not None:
-                scored.append((rating.score, total))
+            rating, total, _failed = await compute_domain_rating(db, domain)
 
         readiness = await domain_policy_readiness(db, domain, rating=rating, total_volume=total)
         if domain_id is not None:
@@ -224,18 +347,13 @@ async def dmarc_posture(
         if readiness.ready:
             ready_to_enforce_count += 1
 
-    compliance_pct: float | None = None
-    if scored:
-        # Weight by volume, but a domain with zero volume in-window still
-        # gets a small nonzero weight (1) rather than being dropped from the
-        # average entirely.
-        weighted_sum = sum(score * max(total, 1) for score, total in scored)
-        weight_total = sum(max(total, 1) for _, total in scored)
-        compliance_pct = round(weighted_sum / weight_total, 1)
-
-    failed_volume = await dmarc_reports_repo.failed_message_volume_for_org_since(
+    # The DMARC pass rate of the messages in the selected range — not the
+    # domains' grade, which also weighs DNS checks over a fixed 90 days and
+    # so never moved with the range.
+    total_volume, failed_volume = await dmarc_reports_repo.message_volume_for_org_since(
         db, user.organization_id, since, domain_id=domain_id
     )
+    compliance_pct = round(100 * (total_volume - failed_volume) / total_volume, 1) if total_volume else None
     if domain_id is not None:
         last_received_at = await dmarc_reports_repo.last_report_received_at_for_domain(db, domain_id)
     else:
@@ -254,7 +372,7 @@ async def dmarc_posture(
         "compliance_pct": compliance_pct,
         "current_policy": single_domain_policy,
         "policy_distribution": policy_counts if domain_id is None else None,
-        "failed_volume": int(failed_volume),
+        "failed_volume": failed_volume,
         "report_freshness_hours": report_freshness_hours,
         "new_sender_count": int(new_sender_count),
         "ready_to_enforce_count": ready_to_enforce_count,
@@ -264,28 +382,45 @@ async def dmarc_posture(
 @router.get("/domains/{domain_id}/dmarc/reports/by-day")
 async def dmarc_reports_by_day(
     domain_id: uuid.UUID,
-    limit: int = Query(300, ge=1, le=1000),
+    limit: int = Query(50, ge=1, le=200),
     before_id: uuid.UUID | None = Query(None),
-    days: int | None = Query(None, ge=1, le=365),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
     disposition: Disposition | None = Query(None),
     spf_result: AuthResult | None = Query(None),
     dkim_result: AuthResult | None = Query(None),
     reporter: str | None = Query(None),
     source_ip: str | None = Query(None),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
     user: User = Depends(get_current_user),
 ) -> dict:
     """Row granularity is one DmarcAggregateRecord (one sending host within
     one report), not one whole report — a report with several source IPs
     shows as several rows on its day. Keyset-paginated on
     (date_range_begin, record id)."""
+    # See dmarc_trend's comment above: this endpoint's Depends(get_read_db)
+    # session is separate from the one get_current_user set RLS context on.
+    await set_org_context(db, user.organization_id)
     await get_owned_domain(db, domain_id, user.organization_id)
-    since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
+    since, until = _parse_date_range(date_from, date_to)
 
     rows = await dmarc_reports_repo.list_report_records_by_day(
-        db, domain_id, limit=limit, before_id=before_id, since=since, disposition=disposition,
+        db, domain_id, limit=limit, before_id=before_id, since=since, until=until, disposition=disposition,
         spf_result=spf_result, dkim_result=dkim_result, reporter=reporter, source_ip=source_ip,
     )
+
+    # "Showing X of Y" on the Reports page needs a total — but only for the
+    # first page. A filtered COUNT(*) recomputed on every "Load more" click
+    # would be wasted work once the total for this filter set is already
+    # known client-side; same before_id is None guard as Admin
+    # Organizations' summary stats (see org_summary_stats' call site in
+    # app/routers/platform_admin.py).
+    total: int | None = None
+    if before_id is None:
+        total = await dmarc_reports_repo.count_report_records_by_day(
+            db, domain_id, since=since, until=until, disposition=disposition,
+            spf_result=spf_result, dkim_result=dkim_result, reporter=reporter, source_ip=source_ip,
+        )
 
     # Resolve every distinct source_ip on this page to its identified
     # sending service (same cache-first lookup service_breakdown uses), so
@@ -322,28 +457,32 @@ async def dmarc_reports_by_day(
             }
         )
 
-    return {"days": days_out, "has_more": len(rows) == limit}
+    return {"days": days_out, "has_more": len(rows) == limit, "total": total}
 
 
 @router.get("/domains/{domain_id}/dmarc/reports/summary")
 async def dmarc_reports_summary(
     domain_id: uuid.UUID,
-    days: int | None = Query(None, ge=1, le=365),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
     disposition: Disposition | None = Query(None),
     spf_result: AuthResult | None = Query(None),
     dkim_result: AuthResult | None = Query(None),
     reporter: str | None = Query(None),
     source_ip: str | None = Query(None),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
     user: User = Depends(get_current_user),
 ) -> dict:
     """Summary bar for the Reports page — same filter vocabulary as
     by-day/grouped, so switching a filter updates the totals and the rows
     together."""
+    # See dmarc_trend's comment above: this endpoint's Depends(get_read_db)
+    # session is separate from the one get_current_user set RLS context on.
+    await set_org_context(db, user.organization_id)
     await get_owned_domain(db, domain_id, user.organization_id)
-    since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
+    since, until = _parse_date_range(date_from, date_to)
     filter_kwargs = dict(
-        since=since, disposition=disposition, spf_result=spf_result, dkim_result=dkim_result,
+        since=since, until=until, disposition=disposition, spf_result=spf_result, dkim_result=dkim_result,
         reporter=reporter, source_ip=source_ip,
     )
 
@@ -379,22 +518,26 @@ async def dmarc_reports_summary(
 async def dmarc_reports_grouped(
     domain_id: uuid.UUID,
     by: str = Query(..., pattern="^(source|reporter|disposition)$"),
-    days: int | None = Query(None, ge=1, le=365),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
     disposition: Disposition | None = Query(None),
     spf_result: AuthResult | None = Query(None),
     dkim_result: AuthResult | None = Query(None),
     reporter: str | None = Query(None),
     source_ip: str | None = Query(None),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
     user: User = Depends(get_current_user),
 ) -> list[dict]:
     """The Reports page's Source/Reporter/Disposition grouping views — small
     cardinality per domain, so one GROUP BY query with no pagination."""
+    # See dmarc_trend's comment above: this endpoint's Depends(get_read_db)
+    # session is separate from the one get_current_user set RLS context on.
+    await set_org_context(db, user.organization_id)
     await get_owned_domain(db, domain_id, user.organization_id)
-    since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
+    since, until = _parse_date_range(date_from, date_to)
 
     rows = await dmarc_reports_repo.report_records_grouped(
-        db, domain_id, by, since=since, disposition=disposition, spf_result=spf_result,
+        db, domain_id, by, since=since, until=until, disposition=disposition, spf_result=spf_result,
         dkim_result=dkim_result, reporter=reporter, source_ip=source_ip,
     )
 
@@ -643,7 +786,7 @@ async def dmarc_policy_builder(
     else:
         rua_destination = {"status": "no_mailbox", "current_targets": []}
 
-    rating, total = await compute_domain_rating(db, domain)
+    rating, total, _failed = await compute_domain_rating(db, domain)
     readiness = await domain_policy_readiness(db, domain, rating=rating, total_volume=total)
     stability_days = await policy_stability_days(db, domain.id)
 

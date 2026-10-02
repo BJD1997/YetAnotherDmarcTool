@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient, type UseQueryOptions } from "@ta
 
 import { api } from "../api/client";
 import { queryKeys } from "./queryKeys";
+import { useCursorPage } from "./useCursorPage";
 
 export interface AdminOrganization {
   id: string;
@@ -28,6 +29,23 @@ export interface AdminOrganization {
   last_report_at: string | null;
 }
 
+export interface AdminOrgUser {
+  id: string;
+  email: string;
+  display_name: string | null;
+  role: "org_admin" | "member";
+  auth_method: "entra" | "local";
+  status: "active" | "disabled";
+  mfa_enrolled: boolean;
+  last_login_at: string | null;
+}
+
+export interface AdminOrganizationsPage {
+  organizations: AdminOrganization[];
+  has_more: boolean;
+  summary: { total: number; active: number; suspended: number; orgs_with_job_errors_7d: number };
+}
+
 export interface UpdateStatus {
   running_version: string;
   latest_version: string | null;
@@ -39,6 +57,12 @@ export interface UpdateStatus {
   include_prereleases: boolean;
   update_available: boolean;
   is_dev_build: boolean;
+  // No updater sidecar (Azure, Portainer): show how to update instead.
+  self_update_available: boolean;
+  // Azure: run the whole update on the running version as a test.
+  rehearsal_available: boolean;
+  deployment_platform: string | null;
+  azure_resource_group: string | null;
 }
 
 export interface AdminJobRun {
@@ -60,10 +84,29 @@ export interface AdminJobRunsSummary {
   reports_processed_today: number;
 }
 
-export function useAdminOrganizations() {
+export function useAdminOrganizations(search: string) {
+  return useCursorPage<AdminOrganizationsPage>(
+    queryKeys.admin.organizations(search),
+    (cursor) => {
+      const qs = new URLSearchParams();
+      if (search) qs.set("search", search);
+      if (cursor) qs.set("before_id", cursor);
+      return api.get<AdminOrganizationsPage>(`/admin/organizations${qs.toString() ? `?${qs.toString()}` : ""}`);
+    },
+    (lastPage) => {
+      if (!lastPage.has_more) return undefined;
+      const orgs = lastPage.organizations;
+      return orgs[orgs.length - 1]?.id;
+    },
+  );
+}
+
+export interface AdminOrganizationName { id: string; name: string }
+
+export function useAdminOrganizationNames() {
   return useQuery({
-    queryKey: queryKeys.admin.organizations,
-    queryFn: () => api.get<AdminOrganization[]>("/admin/organizations"),
+    queryKey: queryKeys.admin.organizationNames,
+    queryFn: () => api.get<AdminOrganizationName[]>("/admin/organizations/names"),
   });
 }
 
@@ -81,13 +124,26 @@ export function useAdminJobRunsSummary() {
   return useQuery({ queryKey: queryKeys.admin.jobRunsSummary, queryFn: () => api.get<AdminJobRunsSummary>("/admin/job-runs/summary") });
 }
 
+export interface AdminJobRunsPage {
+  job_runs: AdminJobRun[];
+  has_more: boolean;
+}
+
 export function useAdminJobRuns(filters: string) {
-  return useQuery({ queryKey: queryKeys.admin.jobRuns(filters), queryFn: () => api.get<AdminJobRun[]>(`/admin/job-runs?${filters}`) });
+  return useCursorPage<AdminJobRunsPage>(
+    queryKeys.admin.jobRuns(filters),
+    (cursor) => {
+      const qs = new URLSearchParams(filters);
+      if (cursor) qs.set("before_id", cursor);
+      return api.get<AdminJobRunsPage>(`/admin/job-runs?${qs.toString()}`);
+    },
+    (lastPage) => (lastPage.has_more ? lastPage.job_runs[lastPage.job_runs.length - 1]?.id : undefined),
+  );
 }
 
 function useInvalidateAdminOrganizations() {
   const queryClient = useQueryClient();
-  return () => queryClient.invalidateQueries({ queryKey: queryKeys.admin.organizations });
+  return () => queryClient.invalidateQueries({ queryKey: queryKeys.admin.organizationsAll });
 }
 
 export function useCreateAdminOrganization(onSuccess?: () => void, onError?: (error: Error) => void) {
@@ -102,7 +158,7 @@ export function useCreateAdminOrganization(onSuccess?: () => void, onError?: (er
 export function useUpdateAdminOrganization(orgId: string) {
   const invalidate = useInvalidateAdminOrganizations();
   return useMutation({
-    mutationFn: (body: Partial<Pick<AdminOrganization, "entra_tenant_id" | "status">>) => api.patch<AdminOrganization>(`/admin/organizations/${orgId}`, body),
+    mutationFn: (body: Partial<Pick<AdminOrganization, "entra_tenant_id" | "status" | "is_operator">>) => api.patch<AdminOrganization>(`/admin/organizations/${orgId}`, body),
     onSuccess: invalidate,
   });
 }
@@ -121,6 +177,28 @@ export function useCreateAdminUser(orgId: string, onSuccess?: (result: { setup_l
     onSuccess,
     onError,
   });
+}
+
+export function useAdminOrgUsers(orgId: string) {
+  return useQuery({
+    queryKey: queryKeys.admin.organizationUsers(orgId),
+    queryFn: () => api.get<AdminOrgUser[]>(`/admin/organizations/${orgId}/users`),
+  });
+}
+
+export function useAdminResetUser(orgId: string) {
+  const queryClient = useQueryClient();
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.admin.organizationUsers(orgId) });
+  const resetPassword = useMutation({
+    mutationFn: (userId: string) =>
+      api.post<{ setup_link: string }>(`/admin/organizations/${orgId}/users/${userId}/reset-password`),
+    onSuccess: invalidate,
+  });
+  const resetMfa = useMutation({
+    mutationFn: (userId: string) => api.post<void>(`/admin/organizations/${orgId}/users/${userId}/reset-mfa`),
+    onSuccess: invalidate,
+  });
+  return { resetPassword, resetMfa };
 }
 
 export function useDeleteAdminOrganization(orgId: string) {
@@ -147,5 +225,6 @@ export function useAdminUpdateActions() {
     setPrereleases,
     checkNow: async () => { await api.post("/admin/updates/check-now"); await invalidate(); },
     triggerUpdate: () => api.post("/admin/updates/trigger"),
+    rehearse: () => api.post("/admin/updates/rehearse"),
   };
 }

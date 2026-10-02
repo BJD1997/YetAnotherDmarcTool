@@ -1,18 +1,19 @@
 from functools import lru_cache
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, MultiFernet
 
 from app.config import settings
 
 
 @lru_cache(maxsize=1)
-def _fernet() -> Fernet:
-    if not settings.fernet_key:
-        raise RuntimeError(
-            "FERNET_KEY is not set — required before encrypting/decrypting any "
-            "custom mailbox-connection credentials (the bring-your-own-app escape hatch)."
-        )
-    return Fernet(settings.fernet_key)
+def _fernet() -> MultiFernet:
+    # Comma-separated, newest first: encrypts with the first key, decrypts
+    # with any of them — so a key can be rotated without orphaning every
+    # secret written under the previous one.
+    keys = [key.strip() for key in (settings.fernet_key or "").split(",") if key.strip()]
+    if not keys:
+        raise RuntimeError("FERNET_KEY is not set — required to encrypt/decrypt TOTP secrets at rest.")
+    return MultiFernet([Fernet(key) for key in keys])
 
 
 def encrypt_secret(plaintext: str) -> bytes:

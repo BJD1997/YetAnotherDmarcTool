@@ -1,3 +1,5 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -6,6 +8,7 @@ from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
+from app.db.session import assert_rls_enforced
 from app.middleware.csrf import enforce_csrf_header
 from app.middleware.demo_read_only import enforce_demo_read_only
 from app.middleware.mta_sts_routing import restrict_mta_sts_hostname
@@ -29,7 +32,19 @@ from app.routers import (
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
-app = FastAPI(title="YetAnotherDmarcTool API")
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    await assert_rls_enforced()
+    yield
+
+
+app = FastAPI(
+    title="YetAnotherDmarcTool API",
+    lifespan=lifespan,
+    docs_url="/docs" if settings.api_docs_enabled else None,
+    redoc_url="/redoc" if settings.api_docs_enabled else None,
+    openapi_url="/openapi.json" if settings.api_docs_enabled else None,
+)
 
 app.middleware("http")(add_security_headers)
 app.middleware("http")(enforce_csrf_header)
@@ -57,6 +72,7 @@ api_router.include_router(action_queue.router)
 api_router.include_router(onboarding.router)
 api_router.include_router(sign_in_events.router)
 api_router.include_router(admin_updates.router)
+api_router.include_router(admin_updates.public_router)
 
 app.include_router(api_router)
 

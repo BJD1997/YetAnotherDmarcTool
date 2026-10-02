@@ -15,6 +15,9 @@ from app.services.dns_checks.ssrf_guard import BlockedAddressError, assert_publi
 
 _TXT_RE = re.compile(r"(?i)^v=STSv1;\s*id=([A-Za-z0-9]+);?\s*$")
 POLICY_FETCH_TIMEOUT = 10.0
+# RFC 8461 policies are a handful of short lines; 64 KB is far beyond any
+# real one.
+MAX_POLICY_BYTES = 64 * 1024
 
 
 @dataclasses.dataclass
@@ -43,15 +46,24 @@ async def fetch_policy_file(domain: str) -> PolicyFetchResult:
         # host can't sidestep the guard above — a redirect is treated as a
         # non-200 fetch failure instead.
         async with httpx.AsyncClient(timeout=POLICY_FETCH_TIMEOUT, follow_redirects=False) as client:
-            response = await client.get(policy_url)
+            async with client.stream("GET", policy_url) as response:
+                if response.status_code != 200:
+                    return PolicyFetchResult(body=None, error=f"MTA-STS policy fetch returned HTTP {response.status_code}")
+                # Read no more than the cap: the host is customer-controlled
+                # and could otherwise stream an endless body into memory.
+                body = b""
+                async for chunk in response.aiter_bytes():
+                    body += chunk
+                    if len(body) > MAX_POLICY_BYTES:
+                        return PolicyFetchResult(
+                            body=None, error=f"MTA-STS policy at {policy_url} is larger than {MAX_POLICY_BYTES // 1024} KB"
+                        )
     except httpx.RequestError as exc:
         # httpx's own exceptions (ConnectTimeout, ConnectError, ...) often
         # have an empty str() — the type name carries the actual meaning.
         error_detail = str(exc) or type(exc).__name__
         return PolicyFetchResult(body=None, error=f"Could not fetch MTA-STS policy from {policy_url}: {error_detail}")
-    if response.status_code != 200:
-        return PolicyFetchResult(body=None, error=f"MTA-STS policy fetch returned HTTP {response.status_code}")
-    return PolicyFetchResult(body=response.text, error=None)
+    return PolicyFetchResult(body=body.decode("utf-8", errors="replace"), error=None)
 
 
 def _parse_policy(body: str) -> dict[str, str | list[str]]:

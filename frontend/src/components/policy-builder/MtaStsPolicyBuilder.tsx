@@ -52,7 +52,7 @@ export default function MtaStsPolicyBuilder({
   domainName: string;
   onClose: () => void;
 }) {
-  const { data, isLoading } = useMtaStsPolicyBuilder(domainId);
+  const { data, isLoading, error } = useMtaStsPolicyBuilder(domainId);
 
   const [mode, setMode] = useState<MtaStsMode>("testing");
   const [mxPatternsText, setMxPatternsText] = useState("");
@@ -102,6 +102,7 @@ export default function MtaStsPolicyBuilder({
         </div>
 
         {isLoading && <p className="muted">Loading…</p>}
+        {error && <div className="alert alert--critical">{error.message}</div>}
 
         {data && (
           <>

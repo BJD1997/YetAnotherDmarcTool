@@ -13,7 +13,7 @@ from app.repositories.sign_in_events import list_sign_in_events
 router = APIRouter(prefix="/sign-in-events", tags=["sign-in-events"])
 
 
-def _event_out(event: SignInEvent) -> dict:
+def sign_in_event_out(event: SignInEvent) -> dict:
     return {
         "id": str(event.id),
         "created_at": event.created_at.isoformat(),
@@ -21,6 +21,7 @@ def _event_out(event: SignInEvent) -> dict:
         "auth_method": event.auth_method.value,
         "email": event.attempted_email,
         "failure_reason": event.failure_reason,
+        "actor_email": event.actor_email,
         "ip_address": event.ip_address,
         "user_agent": event.user_agent,
     }
@@ -41,4 +42,4 @@ async def list_sign_in_events_route(
     events = await list_sign_in_events(
         db, user.organization_id, limit=limit, before_id=before_id, result=result, auth_method=auth_method
     )
-    return {"events": [_event_out(e) for e in events], "has_more": len(events) == limit}
+    return {"events": [sign_in_event_out(e) for e in events], "has_more": len(events) == limit}

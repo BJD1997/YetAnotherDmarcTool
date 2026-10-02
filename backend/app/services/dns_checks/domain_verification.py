@@ -9,6 +9,7 @@ from app.models.domain import Domain
 from app.models.enums import DomainVerificationStatus
 from app.repositories.domains import list_pending_domains, mark_pending_subdomains_verified
 from app.services.dns_checks.resolver import resolve_txt
+from app.services.jobs.advisory_lock import try_advisory_lock
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,20 @@ async def apply_domain_verification(db: AsyncSession, domain: Domain) -> bool:
     return True
 
 
+_VERIFICATION_SWEEP_LOCK_KEY = 0x56455249  # "VERI"
+
+
 async def run_domain_verification_sweep() -> None:
+    # Same guard as run_dns_check_sweep: a stale-job reclaim must not start
+    # a second copy of a sweep that's still running.
+    async with try_advisory_lock(_VERIFICATION_SWEEP_LOCK_KEY) as acquired:
+        if not acquired:
+            logger.info("domain verification sweep already running elsewhere — skipping this trigger")
+            return
+        await _verify_pending_domains()
+
+
+async def _verify_pending_domains() -> None:
     """Background counterpart to POST /domains/{id}/verify — DNS TXT
     propagation is often minutes to an hour, so most domains end up
     verified here rather than by the user clicking "Check now" at exactly

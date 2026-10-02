@@ -22,6 +22,7 @@ from app.repositories.mailbox_connections import get_or_create_hosted_reports_po
 from app.services.graph.mailbox_poller import fetch_message_raw_mime, fetch_new_message_ids
 from app.services.ingestion import report_writer
 from app.services.ingestion.parsedmarc_adapter import UnparseableReportError, parse_report_email
+from app.services.ingestion.sender_auth import authenticate_report_sender
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,7 @@ async def _do_poll() -> None:
     started_at = datetime.now(timezone.utc)
     messages_seen = 0
     unmatched = 0
+    unverified = 0
     errors = 0
 
     try:
@@ -101,14 +103,24 @@ async def _do_poll() -> None:
                 except UnparseableReportError:
                     errors += 1
                     continue
+                except Exception:
+                    logger.exception("failed to parse hosted-reports message %s", message_id)
+                    errors += 1
+                    continue
 
+                # This mailbox is shared by every org with a hosted address,
+                # so one bad report failing the run would stall ingestion for
+                # all of them — see mailbox_poll_job's matching savepoint.
                 await set_org_context(db, matched_org_id)
-                if parsed["report_type"] == "aggregate":
-                    await report_writer.write_aggregate_report(db, matched_org_id, parsed["report"], message_id)
-                elif parsed["report_type"] == "forensic":
-                    await report_writer.write_forensic_report(db, matched_org_id, parsed["report"], message_id)
-                elif parsed["report_type"] == "smtp_tls":
-                    await report_writer.write_smtp_tls_report(db, matched_org_id, parsed["report"], message_id)
+                try:
+                    async with db.begin_nested():
+                        written = await report_writer.write_report(
+                            db, matched_org_id, parsed, message_id, authenticate_report_sender(raw_mime)
+                        )
+                    unverified += written.get("unverified_senders", 0)
+                except Exception:
+                    logger.exception("failed to store hosted-reports message %s (org %s)", message_id, matched_org_id)
+                    errors += 1
                 # Back to the platform-admin bypass for the next message's
                 # address_map-independent work (already in memory) and the
                 # final state update below, which isn't org-scoped data.
@@ -120,7 +132,8 @@ async def _do_poll() -> None:
             state.last_sync_error = None
             await db.commit()
             logger.info(
-                "hosted reports poll: %d message(s) seen, %d unmatched, %d error(s)", messages_seen, unmatched, errors
+                "hosted reports poll: %d message(s) seen, %d unmatched, %d unverified sender(s), %d error(s)",
+                messages_seen, unmatched, unverified, errors,
             )
 
     except Exception as exc:

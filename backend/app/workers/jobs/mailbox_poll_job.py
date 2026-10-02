@@ -44,6 +44,7 @@ from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.services.graph.mailbox_poller import fetch_message_raw_mime, fetch_new_message_ids
 from app.services.ingestion import report_writer
 from app.services.ingestion.parsedmarc_adapter import UnparseableReportError, parse_report_email
+from app.services.ingestion.sender_auth import authenticate_report_sender
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,7 @@ def _empty_stats() -> dict:
         "aggregate_reports": 0,
         "forensic_reports": 0,
         "tls_rpt_policies": 0,
+        "unverified_senders": 0,
         "errors": 0,
     }
 
@@ -121,18 +123,23 @@ async def _do_poll(organization_id: uuid.UUID, tenant_id: str) -> None:
                     stats["errors"] += 1
                     continue
 
-                report_type = parsed["report_type"]
-                report = parsed["report"]
-                if report_type == "aggregate":
-                    if await report_writer.write_aggregate_report(db, organization_id, report, message_id):
-                        stats["aggregate_reports"] += 1
-                elif report_type == "forensic":
-                    if await report_writer.write_forensic_report(db, organization_id, report, message_id):
-                        stats["forensic_reports"] += 1
-                elif report_type == "smtp_tls":
-                    stats["tls_rpt_policies"] += await report_writer.write_smtp_tls_report(
-                        db, organization_id, report, message_id
-                    )
+                # The report mailbox is public (it's the rua= address in DNS),
+                # so the parsed content is attacker-controlled. A bad value
+                # can fail here as a Postgres error that aborts the whole
+                # transaction — the savepoint confines that to this message.
+                # Without it the run fails, delta_link never advances, and
+                # every future run re-fetches this message and fails again.
+                try:
+                    async with db.begin_nested():
+                        written = await report_writer.write_report(
+                            db, organization_id, parsed, message_id, authenticate_report_sender(raw_mime)
+                        )
+                except Exception:
+                    logger.exception("failed to store report from message %s (org %s)", message_id, organization_id)
+                    stats["errors"] += 1
+                    continue
+                for key, value in written.items():
+                    stats[key] += value
 
                 if i % COMMIT_BATCH_SIZE == 0:
                     await db.commit()

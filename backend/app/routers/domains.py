@@ -13,16 +13,12 @@ from app.models.domain import Domain
 from app.models.enums import CheckType, DomainMailProfile, DomainVerificationStatus
 from app.models.organization import Organization
 from app.models.user import User
-from app.repositories.dmarc_reports import (
-    count_reports_for_domain,
-    failed_message_volume_for_domain,
-    last_report_received_at_for_domain,
-)
+from app.repositories.dmarc_reports import count_reports_for_domain, last_report_received_at_for_domain
 from app.repositories.domains import count_subdomains, get_owned_domain, list_domains_for_org
 from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.repositories.organizations import get_organization
 from app.schemas.domains import DomainCreateRequest, DomainUpdateRequest
-from app.services.cloudflare.dns_provisioner import ensure_authorization_record
+from app.services.cloudflare.dns_provisioner import ensure_authorization_record, release_authorization_records
 from app.services.dns_checks.dmarc_record import check_rua_destination
 from app.services.dns_checks.domain_verification import apply_domain_verification, verification_record_name
 from app.services.ingestion.report_writer import resweep_domain_records, resweep_unmatched_reports
@@ -151,6 +147,7 @@ async def ranked_domains(db: AsyncSession = Depends(get_db), user: User = Depend
         grade: str | None = None
         insufficient_data = True
         message_volume = 0
+        failed_volume = 0
         check_status_counts = {"pass": 0, "warn": 0, "fail": 0, "error": 0}
         ready_to_enforce = False
         current_policy: str | None = None
@@ -167,7 +164,7 @@ async def ranked_domains(db: AsyncSession = Depends(get_db), user: User = Depend
         if not not_verified:
             findings_by_type = await latest_findings_by_type(db, domain.id)
             check_status_counts = tally_worst_status(findings_by_type)
-            rating, message_volume = await compute_domain_rating(db, domain, findings_by_type=findings_by_type)
+            rating, message_volume, failed_volume = await compute_domain_rating(db, domain, findings_by_type=findings_by_type)
             score = rating.score
             grade = rating.grade
             insufficient_data = rating.insufficient_data
@@ -191,7 +188,12 @@ async def ranked_domains(db: AsyncSession = Depends(get_db), user: User = Depend
                     rua_status = rua_result.status
 
         last_report_at = await last_report_received_at_for_domain(db, domain.id)
-        failed_volume = await failed_message_volume_for_domain(db, domain.id)
+        # failed_volume comes from compute_domain_rating above, NOT a
+        # separate all-time query — it used to be failed_message_volume_
+        # for_domain(db, domain.id), which is unwindowed and doesn't
+        # exclude blocked-sender traffic like message_volume does. Two
+        # different populations shown in the same row is how "491 messages,
+        # 9,102 failed" (failed > total) could happen at all.
 
         items.append(
             {
@@ -283,8 +285,11 @@ async def delete_domain(
             status.HTTP_409_CONFLICT, "domain has report history — archive it instead (PATCH is_active=false)"
         )
 
+    had_hosted_address = domain.hosted_report_address is not None
     await db.delete(domain)
     await db.commit()
+    if had_hosted_address:
+        await release_authorization_records({domain.name})
 
 
 def _hosted_mailbox_available(org: Organization) -> bool:
@@ -305,12 +310,16 @@ async def get_or_create_hosted_report_address(
     own to dedicate — see app/workers/jobs/hosted_reports_poll_job.py for
     how mail sent to it gets attributed back to this domain."""
     domain = await get_owned_domain(db, domain_id, user.organization_id)
+    # The address comes with a DNS record in the operator's own zone, so
+    # only for domains this org has proven it controls.
+    if domain.verification_status != DomainVerificationStatus.verified:
+        raise HTTPException(status.HTTP_409_CONFLICT, "verify this domain before setting up a hosted reporting address")
 
     org = await get_organization(db, user.organization_id)
     if not _hosted_mailbox_available(org):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "hosted mailbox isn't enabled for your organization — see Settings")
 
-    if not settings.hosted_reports_address_domain or not settings.hosted_reports_mailbox_address:
+    if not settings.hosted_reports_domain or not settings.hosted_reports_mailbox_address:
         raise HTTPException(status.HTTP_409_CONFLICT, "hosted reporting addresses aren't configured on this instance yet")
 
     if domain.hosted_report_address is None:
@@ -321,11 +330,10 @@ async def get_or_create_hosted_report_address(
         # never resolves anywhere without a domain-wide catch-all, which
         # isn't always available (see hosted_reports_poll_job.py, which
         # only ever reads hosted_reports_mailbox_address's own inbox). So
-        # the local part before "+" must be that mailbox's own name —
-        # hosted_reports_address_domain therefore has to be the same domain
-        # as hosted_reports_mailbox_address for this to actually deliver.
+        # the local part before "+" must be that mailbox's own name, on the
+        # mailbox's own domain (settings.hosted_reports_domain).
         mailbox_local_part = settings.hosted_reports_mailbox_address.split("@", 1)[0]
-        domain.hosted_report_address = f"{mailbox_local_part}+{secrets.token_hex(6)}@{settings.hosted_reports_address_domain}"
+        domain.hosted_report_address = f"{mailbox_local_part}+{secrets.token_hex(6)}@{settings.hosted_reports_domain}"
         await db.flush()
         await db.refresh(domain)
         await db.commit()

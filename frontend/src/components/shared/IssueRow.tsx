@@ -9,6 +9,11 @@ export function IssueRow({ item, linkTo }: { item: ActionItem; linkTo?: string }
       <div className="issue-row-body">
         <div className="issue-title">{item.title}</div>
         <div className="issue-hint">{item.action_hint}</div>
+        {item.evidence && (
+          <div className="issue-hint" style={{ fontStyle: "italic", opacity: 0.85 }}>
+            {item.evidence}
+          </div>
+        )}
       </div>
       {linkTo && <ChevronRight size={14} style={{ flexShrink: 0, color: "var(--ink-muted)" }} />}
     </>

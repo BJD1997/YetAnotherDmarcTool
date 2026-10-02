@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, ApiError } from "../../api/client";
-import { useAdminUpdateActions, useAdminUpdates } from "../../hooks/useAdmin";
+import { useAdminUpdateActions, useAdminUpdates, type UpdateStatus } from "../../hooks/useAdmin";
 
 type UpdatePhase = "idle" | "checking" | "updating" | "success" | "error";
 
@@ -111,6 +111,8 @@ export default function AdminUpdates() {
         </label>
       </div>
 
+      {status.rehearsal_available && <TestUpdateSection resourceGroup={status.azure_resource_group} />}
+
       {status.update_available && (
         <div className="card" style={{ marginTop: "1rem" }}>
           <h3 className="section-title">
@@ -141,6 +143,8 @@ export default function AdminUpdates() {
             <div className="alert alert--neutral" style={{ marginTop: "0.75rem" }}>
               Update in progress — the app will restart shortly. This page will update automatically once it's back.
             </div>
+          ) : !status.self_update_available ? (
+            <ManualUpdateSteps status={status} />
           ) : (
             <>
               <label className="section-hint" style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.75rem" }}>
@@ -163,3 +167,95 @@ export default function AdminUpdates() {
     </section>
   );
 }
+
+
+// Shown instead of "Update now" where there's no updater sidecar to do it:
+// Azure Container Apps (no Docker socket) and Portainer stacks.
+function ManualUpdateSteps({ status }: { status: UpdateStatus }) {
+  const version = status.latest_version ?? "";
+  const azure = status.deployment_platform === "azure-container-apps";
+  const command = azure
+    ? [
+        `az deployment group create -g ${status.azure_resource_group ?? "<resource group>"} \\`,
+        `  --template-uri https://raw.githubusercontent.com/BJD1997/YetAnotherDmarcTool/${version}/deploy/azure/azuredeploy.json \\`,
+        `  -p @<your parameters file> -p imageTag=${version}`,
+      ].join("\n")
+    : [
+        `sed -i 's/^IMAGE_TAG=.*/IMAGE_TAG=${version}/' .env`,
+        "docker compose pull",
+        "docker compose run --rm migrate",
+        "docker compose up -d",
+      ].join("\n");
+
+  return (
+    <div style={{ marginTop: "0.75rem" }}>
+      <p className="section-hint" style={{ marginBottom: "0.5rem" }}>
+        {azure
+          ? "This deployment updates by redeploying the Azure template with the new version, using the same parameters as your first deployment. That runs the database migrations and restarts the app:"
+          : "This instance has no updater, so updates are done on the server. In the folder with your docker-compose.yml:"}
+      </p>
+      <pre
+        style={{
+          background: "var(--plane)",
+          border: "1px solid var(--border)",
+          padding: "0.75rem",
+          borderRadius: "0.5rem",
+          overflowX: "auto",
+          fontSize: "0.8rem",
+          margin: 0,
+        }}
+      >
+        {command}
+      </pre>
+      {!azure && (
+        <p className="section-hint" style={{ marginTop: "0.5rem", marginBottom: 0 }}>
+          On Portainer: change IMAGE_TAG to {version} in the stack's environment variables and redeploy the stack.
+        </p>
+      )}
+    </div>
+  );
+}
+
+
+// Azure: runs every update step on the version already running, so the
+// updater's Azure permissions can be checked before a real update exists.
+function TestUpdateSection({ resourceGroup }: { resourceGroup: string | null }) {
+  const { rehearse } = useAdminUpdateActions();
+  const [state, setState] = useState<"idle" | "starting" | "started">("idle");
+  const [error, setError] = useState<string | null>(null);
+
+  async function start() {
+    setState("starting");
+    setError(null);
+    try {
+      await rehearse();
+      setState("started");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "couldn't start the test update");
+      setState("idle");
+    }
+  }
+
+  return (
+    <div className="card" style={{ marginTop: "1rem" }}>
+      <h3 className="section-title">Test the updater</h3>
+      <p className="section-hint">
+        Runs a complete update on the version you're already running: database migrations, worker, api and the
+        updater itself. Nothing changes, but every step and Azure permission a real update needs is used. The app
+        restarts briefly.
+      </p>
+      {state === "started" ? (
+        <div className="alert alert--good" style={{ margin: 0 }}>
+          Test update started. It takes a few minutes. The result is in the Azure portal: {resourceGroup ?? "your resource group"} →
+          the updater job → Execution history.
+        </div>
+      ) : (
+        <button className="btn btn--secondary btn--sm" onClick={start} disabled={state === "starting"}>
+          {state === "starting" ? "Starting…" : "Run test update"}
+        </button>
+      )}
+      {error && <div className="alert alert--critical" style={{ marginTop: "0.5rem", marginBottom: 0 }}>{error}</div>}
+    </div>
+  );
+}
+
