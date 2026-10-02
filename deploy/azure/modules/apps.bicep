@@ -55,6 +55,15 @@ param triggerIdentityId string
 param triggerClientId string
 @description('Show "Run test update" in the admin console.')
 param enableTestUpdate bool = false
+@description('Run the STARTTLS check (needs outbound port 25).')
+param enableStarttlsCheck bool = false
+
+var starttlsEnv = [
+  {
+    name: 'STARTTLS_CHECK_ENABLED'
+    value: enableStarttlsCheck ? 'true' : 'false'
+  }
+]
 
 var hostedReportsEnv = empty(hostedReportsMailboxAddress) ? [] : [
   {
@@ -179,7 +188,17 @@ var apiEnv = concat(
       value: entraSsoAuthority
     }
   ] : [],
+  // The api only needs the mail app's client ID (for the admin-consent
+  // links in onboarding); the secret stays with the worker, which does the
+  // mailbox syncs.
+  deployEntraMailSecret ? [
+    {
+      name: 'ENTRA_MAIL_CLIENT_ID'
+      value: entraMailClientId
+    }
+  ] : [],
   hostedReportsEnv,
+  starttlsEnv,
   deployCloudflareSecret ? [
     {
       name: 'CLOUDFLARE_API_TOKEN'
@@ -321,7 +340,8 @@ var workerEnv = concat(
       secretRef: 'entra-mail-client-secret'
     }
   ] : [],
-  hostedReportsEnv
+  hostedReportsEnv,
+  starttlsEnv
 )
 
 resource workerApp 'Microsoft.App/containerApps@2024-03-01' = {

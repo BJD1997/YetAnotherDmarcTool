@@ -82,6 +82,10 @@ param cloudflareZoneId string = ''
 @description('Show "Run test update" under admin console → Updates. Off by default; turn on to check the updater after a redeploy or a permission change.')
 param enableTestUpdate bool = false
 
+// --- STARTTLS check (connects to each MX on port 25) ---
+@description('Run the STARTTLS check. Azure blocks outbound port 25 for most subscription types (all but Enterprise Agreement), so it is off by default; turn it on only if your subscription allows port 25 out.')
+param enableStarttlsCheck bool = false
+
 // --- optional custom domain (bind the managed cert post-deploy; see README) ---
 param publicBaseUrlOverride string = ''
 
@@ -365,6 +369,7 @@ module apps 'modules/apps.bicep' = {
     cloudflareZoneId: deployCloudflareSecret ? cloudflareZoneId : ''
     deployCloudflareSecret: deployCloudflareSecret
     enableTestUpdate: enableTestUpdate
+    enableStarttlsCheck: enableStarttlsCheck
   }
   // Apps must not start until the schema + dmarc_app role exist.
   dependsOn: [

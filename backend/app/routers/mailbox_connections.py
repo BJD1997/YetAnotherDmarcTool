@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
@@ -12,7 +12,7 @@ from app.repositories.dmarc_reports import last_report_received_at_for_org
 from app.repositories.mailbox_connections import get_org_mailbox_connection, list_mailbox_job_runs
 from app.repositories.organizations import get_organization
 from app.schemas.mailbox_connections import MailboxConnectionSetRequest
-from app.workers.jobs.mailbox_poll_job import poll_org_mailbox
+from app.services.jobs import queue
 
 router = APIRouter(prefix="/mailbox-connection", tags=["mailbox-connection"])
 
@@ -81,10 +81,22 @@ async def mailbox_job_runs(
     ]
 
 
+async def _queue_sync(db: AsyncSession, organization_id, tenant_id) -> None:
+    """Queues a sync for the worker rather than running it here: the worker
+    holds the Graph app's secret, and on Azure the api doesn't (the sync
+    failed there with AADSTS7000216). Same job and dedupe key the worker's
+    10-minute schedule uses, so a sync already waiting isn't doubled."""
+    await queue.enqueue(
+        db,
+        "mailbox_poll",
+        {"org_id": str(organization_id), "tenant_id": str(tenant_id)},
+        dedupe_key=f"mailbox_poll:{organization_id}",
+    )
+
+
 @router.put("", status_code=status.HTTP_200_OK)
 async def set_mailbox_connection(
     body: MailboxConnectionSetRequest,
-    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_org_admin),
 ) -> dict:
@@ -97,7 +109,8 @@ async def set_mailbox_connection(
     and a resync is kicked off right away. If the Entra/Exchange side
     genuinely isn't done yet, that resync will simply fail with a clear
     error surfaced via last_sync_status/last_sync_error, rather than
-    silently pretending to have succeeded."""
+    silently pretending to have succeeded. The sync itself runs on the
+    worker (see _queue_sync)."""
     org = await get_organization(db, user.organization_id)
     if org.entra_tenant_id is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "organization has no Entra tenant ID set yet — contact your platform administrator")
@@ -122,14 +135,13 @@ async def set_mailbox_connection(
     await db.refresh(connection)
     await db.commit()
 
-    background_tasks.add_task(poll_org_mailbox, organization_id=org.id, tenant_id=str(org.entra_tenant_id))
+    await _queue_sync(db, org.id, org.entra_tenant_id)
 
     return _connection_out(connection)
 
 
 @router.post("/resync", status_code=status.HTTP_202_ACCEPTED)
 async def resync_mailbox_connection(
-    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_org_admin),
 ) -> dict:
@@ -141,5 +153,5 @@ async def resync_mailbox_connection(
     if org.entra_tenant_id is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "organization has no Entra tenant ID set")
 
-    background_tasks.add_task(poll_org_mailbox, organization_id=org.id, tenant_id=str(org.entra_tenant_id))
+    await _queue_sync(db, org.id, org.entra_tenant_id)
     return {"status": "resync started"}

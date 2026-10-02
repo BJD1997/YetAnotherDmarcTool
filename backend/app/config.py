@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     # the updater after a redeploy or a permission change.
     update_rehearsal_enabled: bool = False
 
+    # The STARTTLS check connects to each MX on port 25. Turn it off where
+    # outbound port 25 is blocked (Azure blocks it for most subscription
+    # types): every probe would fail and lower each domain's grade.
+    starttls_check_enabled: bool = True
+
     # Sessions (Phase 1)
     session_cookie_name: str = "dmarc_session"
     platform_admin_session_cookie_name: str = "dmarc_admin_session"
