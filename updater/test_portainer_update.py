@@ -35,8 +35,10 @@ def fake_portainer():
 
         def do_GET(self):
             seen.append(("GET", self.path, None))
+            if self.headers.get("X-API-Key") == "ptr_other_user":
+                return self._reply(403, {"message": "Access denied to resource"})
             if self.headers.get("X-API-Key") != "ptr_token":
-                return self._reply(401, {"message": "Invalid API key"})
+                return self._reply(401, {"message": "Invalid JWT token"})
             if self.path == "/api/stacks/7":
                 return self._reply(200, STACK)
             if self.path == "/api/stacks/7/file":
@@ -86,6 +88,8 @@ def test_errors_say_what_portainer_said(fake_portainer):
     url, _seen = fake_portainer
     with pytest.raises(PortainerError, match="check PORTAINER_API_KEY"):
         Portainer(url, "wrong", "7").redeploy("v0.2.0")
+    with pytest.raises(PortainerError, match="Access control"):
+        Portainer(url, "ptr_other_user", "7").redeploy("v0.2.0")
     with pytest.raises(PortainerError, match="stack 8"):
         Portainer(url, "ptr_token", "8").redeploy("v0.2.0")
 

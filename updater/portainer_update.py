@@ -85,8 +85,15 @@ class Portainer:
                 message = exc.reason
             if exc.code == 404 and path.startswith(f"/api/stacks/{self.stack_id}"):
                 message = f"Portainer has no stack {self.stack_id} (check PORTAINER_STACK_ID): {message}"
-            elif exc.code in (401, 403):
-                message = f"Portainer refused the access token (check PORTAINER_API_KEY): {message}"
+            elif exc.code == 401:
+                message = f"Portainer doesn't accept the access token (check PORTAINER_API_KEY): {message}"
+            elif exc.code == 403:
+                message = (
+                    f"the access token's Portainer user has no access to stack {self.stack_id}: share the stack "
+                    f"with that user or their team (the stack's Access control in Portainer): {message}"
+                )
+            elif exc.code == 409:
+                message = f"Portainer is still busy with this stack; try again in a minute: {message}"
             raise PortainerError(f"{method} {path.split('?')[0]} → {exc.code}: {message}") from exc
         except (urllib.error.URLError, OSError) as exc:
             hint = ""
