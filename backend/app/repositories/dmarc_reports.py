@@ -2,7 +2,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import case, column, delete, func, or_, select, true, update
+from sqlalchemy import case, column, delete, exists, func, or_, select, true, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
@@ -239,6 +239,16 @@ async def recent_dkim_selectors_for_org(db: AsyncSession, organization_id: UUID,
             DmarcAggregateRecord.organization_id == organization_id,
             DmarcAggregateRecord.domain_id.is_not(None),
             DmarcAggregateReport.date_range_begin >= since,
+            # Mail from senders blocked for that domain doesn't suggest selectors.
+            ~exists(
+                select(SourceIpIdentity.source_ip)
+                .join(SenderReview, SenderReview.service_label == SourceIpIdentity.service_label)
+                .where(
+                    SourceIpIdentity.source_ip == DmarcAggregateRecord.source_ip,
+                    SenderReview.domain_id == DmarcAggregateRecord.domain_id,
+                    SenderReview.status == SenderReviewStatus.blocked,
+                )
+            ),
         )
         .group_by(DmarcAggregateRecord.domain_id, selector, dkim_domain, DmarcAggregateRecord.source_ip)
     )

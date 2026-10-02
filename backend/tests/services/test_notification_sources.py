@@ -66,3 +66,28 @@ async def test_new_selectors_are_aligned_unmonitored_and_recent(api):
         await db.rollback()
 
     assert [(f.selector, f.message_volume, f.sender_label) for f in findings] == [("new1", 7, "203.0.113.20")]
+
+
+async def test_selectors_only_blocked_senders_use_are_left_out(api):
+    from app.models.enums import SenderReviewStatus, SourceMatchMethod
+    from app.models.sender_review import SenderReview
+    from app.models.source_ip_identity import SourceIpIdentity
+
+    _client, owner_factory = api
+    org, _user = await seed_org_and_user(owner_factory)
+    now = datetime.now(timezone.utc)
+    async with owner_factory() as db:
+        domain = Domain(organization_id=org.id, name="example.com", verification_status=DomainVerificationStatus.verified)
+        db.add(domain)
+        await db.flush()
+        await db.merge(SourceIpIdentity(source_ip="203.0.113.50", service_label="spoofer.example", match_method=SourceMatchMethod.ptr_domain, resolved_at=now))
+        db.add(SenderReview(organization_id=org.id, domain_id=domain.id, service_label="spoofer.example", status=SenderReviewStatus.blocked))
+        await _record(db, org, domain, 2, "203.0.113.50", [{"selector": "spoofsel", "domain": "example.com", "result": "pass"}])
+        await db.commit()
+
+    async with owner_factory() as db:
+        await set_org_context(db, org.id)
+        findings = await new_selectors(db, org.id)
+        await db.rollback()
+
+    assert findings == []
