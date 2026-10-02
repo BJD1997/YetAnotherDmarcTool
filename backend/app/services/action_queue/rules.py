@@ -160,12 +160,14 @@ def unknown_sender_above_threshold(domain: Domain, services: list[dict], reviewe
 
     items = []
     for s in unreviewed_high_volume_senders(services, reviewed_labels):
+        if s.get("likely_spoofed"):
+            continue  # likely_spoofed_sender already asks for the same review
         items.append(
             ActionItem(
                 severity="warning",
                 category=CATEGORY_UNKNOWN_SENDER,
                 title=f'{domain.name}: unreviewed sender "{s["service_label"]}" ({s["volume"]:,} msgs)',
-                action_hint="Review in Sender Inventory",
+                action_hint="Not reviewed yet: approve or block it",
                 domain_id=str(domain.id),
                 link_path=_sender_link(domain.id, s["service_label"]),
             )
@@ -194,7 +196,7 @@ def likely_spoofed_sender(domain: Domain, services: list[dict], reviewed_labels:
                 severity="serious",
                 category=CATEGORY_LIKELY_SPOOFED,
                 title=f'{domain.name}: likely spoofed sender "{s["service_label"]}" ({s["volume"]:,} msgs)',
-                action_hint="Review in Sender Inventory — approve if legitimate, or block to confirm",
+                action_hint="Likely spoofed: approve if legitimate, or block to confirm",
                 domain_id=str(domain.id),
                 link_path=_sender_link(domain.id, s["service_label"]),
             )
@@ -305,11 +307,13 @@ async def low_compliance_domain(db: AsyncSession, domain: Domain) -> list[Action
     ]
 
 
-async def high_volume_failure(db: AsyncSession, domain: Domain) -> list[ActionItem]:
+async def high_volume_failure(db: AsyncSession, domain: Domain, services: list[dict] | None = None) -> list[ActionItem]:
     """Shares compute_domain_rating's own windowed pass-rate computation
     (90-day rolling window, blocked-sender traffic excluded) via
     _windowed_totals, so this item's failing-message count never disagrees
-    with what the rating itself is scoring."""
+    with what the rating itself is scoring. Names the sender behind most of
+    the failures (from `services`, the same 90-day window) and links to it,
+    so merge_sender_items folds it together with that sender's own items."""
     total, passed = await _windowed_totals(db, domain.id)
     failed = total - passed
     if total == 0 or failed < HIGH_VOLUME_FAILURE_MIN_COUNT:
@@ -320,16 +324,55 @@ async def high_volume_failure(db: AsyncSession, domain: Domain) -> list[ActionIt
         return []
 
     severity = "critical" if failed_pct >= HIGH_VOLUME_FAILURE_CRITICAL_PCT else "serious"
+    title = f"{domain.name}: {failed:,} failing messages ({round(failed_pct, 1)}%)"
+    worst = max(
+        (s for s in services or [] if s["dmarc_pass_pct"] is not None and s["dmarc_pass_pct"] < 100),
+        key=lambda s: s["volume"] * (1 - s["dmarc_pass_pct"] / 100),
+        default=None,
+    )
+    if worst is None:
+        return [
+            ActionItem(
+                severity=severity,
+                category=CATEGORY_HIGH_VOLUME_FAILURE,
+                title=title,
+                action_hint="Review Senders for the worst sender",
+                domain_id=str(domain.id),
+                link_path=f"/domains/{domain.id}/senders",
+            )
+        ]
     return [
         ActionItem(
             severity=severity,
             category=CATEGORY_HIGH_VOLUME_FAILURE,
-            title=f"{domain.name}: {failed:,} failing messages ({round(failed_pct, 1)}%)",
-            action_hint="Review Senders for the worst sender",
+            title=f'{title}, most from "{worst["service_label"]}"',
+            action_hint=f'"{worst["service_label"]}" passes DMARC on {worst["dmarc_pass_pct"]}% of its mail',
             domain_id=str(domain.id),
-            link_path=f"/domains/{domain.id}/senders",
+            link_path=_sender_link(domain.id, worst["service_label"]),
         )
     ]
+
+
+def merge_sender_items(items: list[ActionItem]) -> list[ActionItem]:
+    """One item per sender: everything the rules found about the same sender
+    (failing messages, alignment, unreviewed, likely spoofed) becomes a
+    single item, titled by the most urgent one, its hints joined. Before
+    this, one misaligned sender could show up as two to four items with
+    different numbers. Items not about a sender pass through unchanged."""
+    order = {"critical": 0, "serious": 1, "warning": 2, "good": 3, "neutral": 4}
+    by_sender: dict[str, list[ActionItem]] = {}
+    merged: list[ActionItem] = []
+    for item in items:
+        if item.link_path and "/senders?highlight=" in item.link_path:
+            by_sender.setdefault(item.link_path, []).append(item)
+        else:
+            merged.append(item)
+    for group in by_sender.values():
+        group.sort(key=lambda i: (order.get(i.severity, 5), i.category))
+        lead = group[0]
+        hints = list(dict.fromkeys(i.action_hint for i in group if i.action_hint))
+        merged.append(dataclasses.replace(lead, action_hint=" · ".join(hints)))
+    return merged
 
 
 def sender_alignment_issue(domain: Domain, services: list[dict]) -> list[ActionItem]:
@@ -351,7 +394,7 @@ def sender_alignment_issue(domain: Domain, services: list[dict]) -> list[ActionI
                 severity="warning",
                 category=CATEGORY_HIGH_VOLUME_FAILURE,
                 title=f'{domain.name} sender "{s["service_label"]}": {spf_pct}% SPF / {dkim_pct}% DKIM',
-                action_hint="Fix SPF/DKIM alignment",
+                action_hint=f"{spf_pct}% SPF / {dkim_pct}% DKIM aligned: fix its SPF/DKIM alignment",
                 domain_id=str(domain.id),
                 link_path=_sender_link(domain.id, s["service_label"]),
             )

@@ -86,13 +86,14 @@ export default function SenderInventory({ domainId, domains }: { domainId: strin
   const [searchParams] = useSearchParams();
   // Action-queue items about a specific sender link straight here with
   // ?highlight={service_label} — that sender must be visible regardless of
-  // whatever filter/window happens to be active, or the link would land the
-  // user on a page that looks like it dropped the very thing they clicked
-  // through for.
+  // whatever filter is active, or the link would land the user on a page
+  // that looks like it dropped the very thing they clicked through for. The
+  // window stays on its default (the same 90 days the Action queue counts);
+  // only if the sender isn't in it does it widen to all time (see below).
   const highlightLabel = searchParams.get("highlight");
   const [filter, setFilter] = useState<FilterKey>("all");
   const [showBlockedGroup, setShowBlockedGroup] = useState(false);
-  const [windowDays, setWindowDays] = useState<number | null>(highlightLabel ? null : DEFAULT_WINDOW_DAYS);
+  const [windowDays, setWindowDays] = useState<number | null>(DEFAULT_WINDOW_DAYS);
   const { ref: cardRef, inView } = useInView<HTMLDivElement>();
   const highlightedRowRef = useRef<HTMLTableRowElement | null>(null);
 
@@ -124,6 +125,17 @@ export default function SenderInventory({ domainId, domains }: { domainId: strin
   const filterCounts = Object.fromEntries(
     FILTERS.map((f) => [f.key, allRows.filter((r) => matchesFilter(r, f.key) && (f.key === "archived" || r.status !== "archived")).length]),
   ) as Record<FilterKey, number>;
+
+  // A highlighted sender with no mail in the current window: widen to all
+  // time once, so the link still lands on it.
+  const widenedForHighlight = useRef(false);
+  useEffect(() => {
+    if (!highlightLabel || isPending || windowDays === null || widenedForHighlight.current) return;
+    if (!allRows.some(isHighlighted)) {
+      widenedForHighlight.current = true;
+      setWindowDays(null);
+    }
+  });
 
   useEffect(() => {
     if (highlightLabel && highlightedRowRef.current) {
