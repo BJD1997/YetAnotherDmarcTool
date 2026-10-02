@@ -89,6 +89,9 @@ class ActionItem:
     # everything there is (most rules), or when the item isn't traceable to
     # one specific finding.
     evidence: str | None = None
+    # What Ask AI should ask about this item, e.g. {"kind": "sender",
+    # "subject": label}; see app/services/ask_ai/prompts.py. None = no button.
+    ask_ai: dict | None = None
 
 
 def _sender_link(domain_id: uuid.UUID, service_label: str) -> str:
@@ -108,6 +111,17 @@ _FACTOR_TO_CHECK_TYPE: dict[str, CheckType] = {
     "tls_rpt": CheckType.tls_rpt,
     "dmarc_policy": CheckType.dmarc,
 }
+
+
+def _low_compliance_ask_ai(factor: str | None) -> dict:
+    """Ask about the check that dragged the score down the most; the pass
+    rate itself (or nothing to go on) is a compliance question."""
+    if factor == "dmarc_policy":
+        return {"kind": "dns_check", "subject": CheckType.dmarc.value}
+    check_type = _FACTOR_TO_CHECK_TYPE.get(factor or "")
+    if check_type is not None:
+        return {"kind": "dns_check", "subject": check_type.value}
+    return {"kind": "compliance", "subject": None}
 
 
 def _worst_finding_summary(findings_by_type: dict[CheckType, list], factor: str) -> str | None:
@@ -171,6 +185,7 @@ def unknown_sender_above_threshold(domain: Domain, services: list[dict], reviewe
                 action_hint="Not reviewed yet: approve or block it",
                 domain_id=str(domain.id),
                 link_path=_sender_link(domain.id, s["service_label"]),
+                ask_ai={"kind": "sender", "subject": s["service_label"]},
             )
         )
     return items
@@ -200,6 +215,7 @@ def likely_spoofed_sender(domain: Domain, services: list[dict], reviewed_labels:
                 action_hint="Likely spoofed: approve if legitimate, or block to confirm",
                 domain_id=str(domain.id),
                 link_path=_sender_link(domain.id, s["service_label"]),
+                ask_ai={"kind": "sender", "subject": s["service_label"]},
             )
         )
     return items
@@ -255,6 +271,7 @@ async def domain_ready_for_stricter_policy(db: AsyncSession, domain: Domain) -> 
                 action_hint=f"{r.pass_rate_pct}% pass rate over {r.total_volume:,} msgs — open Policy Builder",
                 domain_id=str(domain.id),
                 link_path=link_path,
+                ask_ai={"kind": "compliance", "subject": None},
             )
         ]
     if r.pass_rate_pct is None:
@@ -270,6 +287,7 @@ async def domain_ready_for_stricter_policy(db: AsyncSession, domain: Domain) -> 
             action_hint=f"{blocker} — open Policy Builder",
             domain_id=str(domain.id),
             link_path=link_path,
+            ask_ai={"kind": "compliance", "subject": None},
         )
     ]
 
@@ -302,6 +320,7 @@ async def low_compliance_domain(db: AsyncSession, domain: Domain) -> list[Action
             domain_id=str(domain.id),
             link_path=f"/domains/{domain.id}/dns",
             evidence=evidence,
+            ask_ai=_low_compliance_ask_ai(worst_factor.factor if worst_factor is not None else None),
         )
     ]
 
@@ -338,6 +357,7 @@ async def high_volume_failure(db: AsyncSession, domain: Domain, services: list[d
                 action_hint="Review Senders for the worst sender",
                 domain_id=str(domain.id),
                 link_path=f"/domains/{domain.id}/senders",
+                ask_ai={"kind": "compliance", "subject": None},
             )
         ]
     return [
@@ -348,6 +368,7 @@ async def high_volume_failure(db: AsyncSession, domain: Domain, services: list[d
             action_hint=f'"{worst["service_label"]}" passes DMARC on {worst["dmarc_pass_pct"]}% of its mail',
             domain_id=str(domain.id),
             link_path=_sender_link(domain.id, worst["service_label"]),
+            ask_ai={"kind": "sender", "subject": worst["service_label"]},
         )
     ]
 
@@ -366,6 +387,7 @@ async def trending_down(db: AsyncSession, domain: Domain) -> list[ActionItem]:
             action_hint="Check which senders started failing",
             domain_id=str(domain.id),
             link_path=f"/domains/{domain.id}/senders",
+            ask_ai={"kind": "compliance", "subject": None},
         )
     ]
 
@@ -414,6 +436,7 @@ def sender_alignment_issue(domain: Domain, services: list[dict]) -> list[ActionI
                 action_hint=f"{spf_pct}% SPF / {dkim_pct}% DKIM aligned: fix its SPF/DKIM alignment",
                 domain_id=str(domain.id),
                 link_path=_sender_link(domain.id, s["service_label"]),
+                ask_ai={"kind": "sender", "subject": s["service_label"]},
             )
         )
     return items
@@ -440,6 +463,7 @@ async def spf_lookup_limit_risk(db: AsyncSession, domain: Domain) -> list[Action
                 action_hint="Simplify SPF includes",
                 domain_id=str(domain.id),
                 link_path=f"/domains/{domain.id}/dns",
+                ask_ai={"kind": "dns_check", "subject": "spf"},
             )
         )
     return items
@@ -471,6 +495,7 @@ async def rua_destination_broken(db: AsyncSession, domain: Domain, mailbox_addre
             action_hint="Open Policy Builder to fix rua=",
             domain_id=str(domain.id),
             link_path=f"/domains/{domain.id}/dns?open=policy-builder",
+            ask_ai={"kind": "dns_check", "subject": "dmarc"},
         )
     ]
 
@@ -500,5 +525,6 @@ async def parked_domain_not_locked_down(domain: Domain) -> list[ActionItem]:
             action_hint="Open Policy Builder to lock down now — no legitimate senders to protect",
             domain_id=str(domain.id),
             link_path=f"/domains/{domain.id}/dns?open=policy-builder",
+            ask_ai={"kind": "dns_check", "subject": "dmarc"},
         )
     ]
