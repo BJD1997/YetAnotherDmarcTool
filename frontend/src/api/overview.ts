@@ -64,6 +64,12 @@ export interface Posture {
 
 export type ActionItemSeverity = "good" | "warning" | "serious" | "critical" | "neutral";
 
+// What Ask AI should ask about an issue; see backend app/services/ask_ai.
+export interface AskAiHint {
+  kind: "dns_check" | "sender" | "compliance";
+  subject: string | null;
+}
+
 export interface ActionItem {
   severity: ActionItemSeverity;
   category: number;
@@ -78,6 +84,7 @@ export interface ActionItem {
   // The concrete underlying finding, e.g. a DNS check's own summary text —
   // not every item traces back to one specific finding, so this is often null.
   evidence: string | null;
+  ask_ai?: AskAiHint | null;
 }
 
 export type SenderReviewStatus = "pending" | "approved" | "ignored" | "blocked" | "archived";

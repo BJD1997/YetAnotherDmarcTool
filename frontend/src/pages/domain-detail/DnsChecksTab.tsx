@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useOutletContext, useSearchParams } from "react-router-dom";
+import AskAiButton from "../../components/shared/AskAiButton";
 import { RefreshCw, Trash2, Plus, Wand2, ChevronDown, ChevronRight, Copy, Check } from "lucide-react";
 import { ApiError } from "../../api/client";
 import type { Domain } from "../../api/types";
@@ -339,6 +340,9 @@ function CheckRow({
             </div>
           )}
         </div>
+        {(status === "warn" || status === "fail" || status === "error") && (
+          <AskAiButton domainId={domainId} hint={{ kind: "dns_check", subject: checkType }} />
+        )}
         {hasMoreEvidence && (
           <span style={{ flexShrink: 0, color: "var(--ink-muted)" }}>{expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span>
         )}

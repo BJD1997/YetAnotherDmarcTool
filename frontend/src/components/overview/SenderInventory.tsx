@@ -8,6 +8,7 @@ import { useInView } from "../../hooks/useInView";
 import { useCurrentOrganization } from "../../hooks/useOrganization";
 import { useSenderInventory, useUpdateSenderReview } from "../../hooks/useOverviewResources";
 import { ServiceBadge, riskScore, passRateStyle } from "../domain/shared";
+import AskAiButton from "../shared/AskAiButton";
 
 interface MergedRow extends SenderInventoryRow {
   domain_id: string;
@@ -352,6 +353,11 @@ function SenderInventoryRowView({
               <span className="muted" style={{ fontSize: "0.8rem" }}>
                 {" "}
                 ({row.source_ip_count} IPs)
+              </span>
+            )}
+            {row.dmarc_pass_pct !== null && row.dmarc_pass_pct < 90 && (
+              <span style={{ marginLeft: "0.4rem" }}>
+                <AskAiButton domainId={row.domain_id} hint={{ kind: "sender", subject: row.service_label }} />
               </span>
             )}
             {row.likely_spoofed && row.status === "pending" && (

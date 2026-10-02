@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { ChevronRight } from "lucide-react";
 import type { ActionItem } from "../../api/overview";
+import AskAiButton from "./AskAiButton";
 
 export function IssueRow({ item, linkTo }: { item: ActionItem; linkTo?: string }) {
   const row = (
@@ -15,6 +16,7 @@ export function IssueRow({ item, linkTo }: { item: ActionItem; linkTo?: string }
           </div>
         )}
       </div>
+      {item.ask_ai && item.domain_id && <AskAiButton domainId={item.domain_id} hint={item.ask_ai} />}
       {linkTo && <ChevronRight size={14} style={{ flexShrink: 0, color: "var(--ink-muted)" }} />}
     </>
   );
