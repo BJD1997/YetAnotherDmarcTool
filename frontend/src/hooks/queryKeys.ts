@@ -45,6 +45,7 @@ export const queryKeys = {
   posture: (domainId: string | null, days: number) => ["dmarc-posture", domainId, days] as const,
   dmarcSummary: (domainId: string) => ["dmarc-summary", domainId] as const,
   domainRating: (domainId: string) => ["domain-rating", domainId] as const,
+  domainTrend: (domainId: string) => ["domain-trend", domainId] as const,
   inboundHosts: (domainId: string) => ["dmarc-inbound", domainId] as const,
   ruaCheck: (domainId: string) => ["rua-check", domainId] as const,
   dmarcReports: {

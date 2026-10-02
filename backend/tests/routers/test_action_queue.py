@@ -351,3 +351,62 @@ async def test_failing_count_follows_the_org_rating_window(api):
     assert (await client.patch("/api/organizations/current", json={"name": "Org", "rating_window_days": 30})).status_code == 200
     at_30 = (await client.get("/api/action-queue", params={"domain_id": str(domain.id)})).json()
     assert failing(at_30) == []
+
+
+async def _store_trend(owner_factory, org, domain, state: str, recent: float, baseline: float) -> None:
+    from app.models.domain_trend import DomainTrend
+
+    async with owner_factory() as db:
+        db.add(
+            DomainTrend(
+                domain_id=domain.id, organization_id=org.id, state=state, recent_pass_pct=recent,
+                baseline_pass_pct=baseline, recent_messages=500, baseline_messages=2000, days_below=4,
+                days_above=0, computed_at=datetime.now(timezone.utc),
+            )
+        )
+        await db.commit()
+
+
+async def test_trending_down_adds_an_item(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org, verification_status=DomainVerificationStatus.verified)
+    await _store_trend(owner_factory, org, domain, "down", 91.2, 99.1)
+
+    items = (await client.get("/api/action-queue")).json()
+
+    [item] = [i for i in items if "pass rate down" in i["title"]]
+    assert item["title"] == "example.com: pass rate down from 99.1% to 91.2% this week"
+    assert item["severity"] == "serious"
+    assert item["link_path"] == f"/domains/{domain.id}/senders"
+
+
+async def test_stable_trend_adds_nothing(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org, verification_status=DomainVerificationStatus.verified)
+    await _store_trend(owner_factory, org, domain, "stable", 99.0, 99.1)
+
+    assert not any("pass rate" in i["title"] for i in (await client.get("/api/action-queue")).json())
+
+
+async def test_trend_endpoint_is_org_scoped(api):
+    client, owner_factory = api
+    from app.models.enums import OrganizationStatus
+    from app.models.organization import Organization
+
+    org, user = await seed_org_and_user(owner_factory, role=UserRole.member)
+    async with owner_factory() as db:
+        other_org = Organization(name="Other Org", status=OrganizationStatus.active)
+        db.add(other_org)
+        await db.commit()
+    domain = await _add_domain(owner_factory, org, verification_status=DomainVerificationStatus.verified)
+    other = await _add_domain(owner_factory, other_org, name="other.example", verification_status=DomainVerificationStatus.verified)
+    await _store_trend(owner_factory, org, domain, "down", 91.2, 99.1)
+    await login_as(client, owner_factory, user)
+
+    body = (await client.get(f"/api/domains/{domain.id}/trend")).json()
+    assert (body["state"], body["recent_pass_pct"], body["baseline_pass_pct"]) == ("down", 91.2, 99.1)
+    assert (await client.get(f"/api/domains/{other.id}/trend")).status_code == 404

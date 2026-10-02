@@ -17,6 +17,7 @@ from app.models.user import User
 from app.repositories import dmarc_reports as dmarc_reports_repo
 from app.repositories.domains import get_owned_domain, list_domains_for_org
 from app.repositories.mailbox_connections import get_org_mailbox_connection
+from app.repositories.trends import get_trend
 from app.schemas.dmarc_reports import SenderReviewUpdateRequest
 from app.services.action_queue.rules import reviewed_service_labels, unreviewed_high_volume_senders
 from app.services.dmarc_analytics import service_breakdown, service_breakdown_multi
@@ -112,6 +113,26 @@ async def left_out_reports(
         })
     out.sort(key=lambda r: r["received_at"], reverse=True)
     return out
+
+
+@router.get("/domains/{domain_id}/trend")
+async def domain_trend(
+    domain_id: uuid.UUID, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
+) -> dict:
+    """The stored trend (see app/services/rating/trend.py), refreshed every
+    6 hours; "insufficient_data" until the first refresh."""
+    await get_owned_domain(db, domain_id, user.organization_id)
+    trend = await get_trend(db, domain_id)
+    if trend is None:
+        return {"state": "insufficient_data", "recent_pass_pct": None, "baseline_pass_pct": None, "computed_at": None}
+    return {
+        "state": trend.state,
+        "recent_pass_pct": trend.recent_pass_pct,
+        "baseline_pass_pct": trend.baseline_pass_pct,
+        "recent_messages": trend.recent_messages,
+        "baseline_messages": trend.baseline_messages,
+        "computed_at": trend.computed_at.isoformat(),
+    }
 
 
 @router.get("/domains/{domain_id}/rating")

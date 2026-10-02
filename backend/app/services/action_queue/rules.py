@@ -31,6 +31,7 @@ from app.models.enums import (
 from app.repositories.dmarc_reports import last_report_received_at_for_org, list_reviewed_service_labels_for_domain
 from app.repositories.dns_checks import latest_dns_check_results_of_type_for_domain
 from app.repositories.mailbox_connections import get_org_mailbox_connection
+from app.repositories.trends import get_trend
 from app.services.dns_checks.dmarc_record import check_rua_destination, fetch_current_dmarc_record
 from app.services.dns_checks.resolver import DnsLookupError
 from app.services.rating.domain_rating import (
@@ -347,6 +348,24 @@ async def high_volume_failure(db: AsyncSession, domain: Domain, services: list[d
             action_hint=f'"{worst["service_label"]}" passes DMARC on {worst["dmarc_pass_pct"]}% of its mail',
             domain_id=str(domain.id),
             link_path=_sender_link(domain.id, worst["service_label"]),
+        )
+    ]
+
+
+async def trending_down(db: AsyncSession, domain: Domain) -> list[ActionItem]:
+    """The stored trend says the pass rate dropped for real (see
+    app/services/rating/trend.py: significant, material and persistent)."""
+    trend = await get_trend(db, domain.id)
+    if trend is None or trend.state != "down":
+        return []
+    return [
+        ActionItem(
+            severity="serious",
+            category=CATEGORY_HIGH_VOLUME_FAILURE,
+            title=f"{domain.name}: pass rate down from {trend.baseline_pass_pct}% to {trend.recent_pass_pct}% this week",
+            action_hint="Check which senders started failing",
+            domain_id=str(domain.id),
+            link_path=f"/domains/{domain.id}/senders",
         )
     ]
 

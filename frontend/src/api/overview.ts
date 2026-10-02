@@ -137,3 +137,11 @@ export interface SenderReviewUpdate {
 
 export const DATE_RANGE_PRESETS = [7, 30, 90] as const;
 export type DateRangeDays = (typeof DATE_RANGE_PRESETS)[number];
+
+// GET /domains/{id}/trend — last 7 days' DMARC pass rate vs the 28 before.
+export interface DomainTrend {
+  state: "up" | "stable" | "down" | "insufficient_data";
+  recent_pass_pct: number | null;
+  baseline_pass_pct: number | null;
+  computed_at: string | null;
+}

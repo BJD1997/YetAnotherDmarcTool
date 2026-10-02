@@ -24,6 +24,7 @@ from app.services.action_queue.rules import (
     rua_destination_broken,
     sender_alignment_issue,
     spf_lookup_limit_risk,
+    trending_down,
     unknown_sender_above_threshold,
 )
 
@@ -71,6 +72,7 @@ async def action_queue(
         items += await domain_ready_for_stricter_policy(db, domain)
         items += await low_compliance_domain(db, domain)
         items += await high_volume_failure(db, domain, services)
+        items += await trending_down(db, domain)
         items += await spf_lookup_limit_risk(db, domain)
         items += await rua_destination_broken(db, domain, mailbox_address)
         items += await parked_domain_not_locked_down(domain)
