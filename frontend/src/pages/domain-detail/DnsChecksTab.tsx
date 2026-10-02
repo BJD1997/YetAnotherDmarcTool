@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useOutletContext, useSearchParams } from "react-router-dom";
 import { RefreshCw, Trash2, Plus, Wand2, ChevronDown, ChevronRight, Copy, Check } from "lucide-react";
 import { ApiError } from "../../api/client";
@@ -101,7 +101,11 @@ export default function DnsChecksTab() {
   const [showPolicyBuilder, setShowPolicyBuilder] = useState(() => params.get("open") === "policy-builder");
   const [showMtaStsBuilder, setShowMtaStsBuilder] = useState(false);
   const [showTlsRptBuilder, setShowTlsRptBuilder] = useState(false);
-  const [filter, setFilter] = useState<StatusFilter>("attention");
+  // Notifications about a new DKIM selector link here with
+  // ?open=dkim-selectors: show every check (DKIM may well be passing) and
+  // open DKIM's selector list.
+  const openSelectors = params.get("open") === "dkim-selectors";
+  const [filter, setFilter] = useState<StatusFilter>(openSelectors ? "all" : "attention");
 
   const recheck = useRecheckDns(
     domainId,
@@ -261,6 +265,7 @@ export default function DnsChecksTab() {
                       domainName={domain.name}
                       canManage={canManage}
                       orgMailboxAddress={connection?.mailbox_address ?? null}
+                      focusSelectors={openSelectors && checkType === "dkim"}
                     />
                   ))}
                 </div>
@@ -280,6 +285,7 @@ function CheckRow({
   domainName,
   canManage,
   orgMailboxAddress,
+  focusSelectors = false,
 }: {
   checkType: CheckType;
   results: CheckResult[];
@@ -287,8 +293,9 @@ function CheckRow({
   domainName: string;
   canManage: boolean;
   orgMailboxAddress: string | null;
+  focusSelectors?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(focusSelectors);
   const status = worstStatus(results);
   const primary = primaryFinding(results);
   const recommendation = recommendationOf(primary);
@@ -352,7 +359,7 @@ function CheckRow({
             <SuggestedRecord checkType={checkType} domainName={domainName} finding={primary} orgMailboxAddress={orgMailboxAddress} />
           )}
 
-          {checkType === "dkim" && <DkimSelectors domainId={domainId} canManage={canManage} />}
+          {checkType === "dkim" && <DkimSelectors domainId={domainId} canManage={canManage} focus={focusSelectors} />}
         </div>
       )}
     </div>
@@ -414,7 +421,11 @@ function SuggestedRecord({
   );
 }
 
-function DkimSelectors({ domainId, canManage }: { domainId: string; canManage: boolean }) {
+function DkimSelectors({ domainId, canManage, focus = false }: { domainId: string; canManage: boolean; focus?: boolean }) {
+  const blockRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (focus) blockRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [focus]);
   const { data: selectorList } = useDkimSelectors(domainId);
   const { data: detectedSelectors } = useDetectedDkimSelectors(domainId);
   const [selector, setSelector] = useState("");
@@ -432,7 +443,11 @@ function DkimSelectors({ domainId, canManage }: { domainId: string; canManage: b
   const deleteSelector = useDeleteDkimSelector(domainId);
 
   return (
-    <div style={{ marginTop: "0.6rem", paddingTop: "0.6rem", borderTop: "1px solid var(--border)" }}>
+    <div
+      ref={blockRef}
+      className={focus ? "dkim-selectors--focus" : undefined}
+      style={{ marginTop: "0.6rem", paddingTop: "0.6rem", borderTop: "1px solid var(--border)" }}
+    >
       <div className="stat-tile-label" style={{ marginBottom: "0.3rem" }}>
         Selectors
       </div>

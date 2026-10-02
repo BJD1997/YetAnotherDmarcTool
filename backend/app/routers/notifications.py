@@ -17,7 +17,7 @@ from app.models.notification import Notification
 from app.models.sender_review import SenderReview
 from app.models.user import User
 from app.repositories.notifications import get_notification, open_notifications, recently_resolved, resolve
-from app.services.notifications.refresh import DOMAIN_DETECTED
+from app.services.notifications.refresh import DOMAIN_DETECTED, resolve_handled
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
@@ -62,14 +62,21 @@ def _out(n: Notification, approved: set[tuple[uuid.UUID, str]]) -> dict:
 @router.get("")
 async def list_notifications(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)) -> list[dict]:
     """Open ones first (newest first), then the most recently resolved."""
+    await resolve_handled(db, user.organization_id)
     approved = await _approved_senders(db, user.organization_id)
     rows = [*await open_notifications(db, user.organization_id), *await recently_resolved(db, user.organization_id)]
-    return [_out(n, approved) for n in rows]
+    out = [_out(n, approved) for n in rows]
+    # Last: committing ends the transaction-local RLS context.
+    await db.commit()
+    return out
 
 
 @router.get("/count")
 async def count_notifications(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)) -> dict:
-    return {"open": len(await open_notifications(db, user.organization_id))}
+    await resolve_handled(db, user.organization_id)
+    count = len(await open_notifications(db, user.organization_id))
+    await db.commit()
+    return {"open": count}
 
 
 @router.post("/{notification_id}/dismiss", status_code=status.HTTP_204_NO_CONTENT)

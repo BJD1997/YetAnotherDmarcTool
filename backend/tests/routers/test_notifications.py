@@ -84,3 +84,16 @@ async def test_other_orgs_notification_is_not_found(api):
 
     assert (await client.post(f"/api/notifications/{foreign.id}/dismiss")).status_code == 404
     assert all(n["id"] != str(foreign.id) for n in (await client.get("/api/notifications")).json())
+
+
+async def test_reading_resolves_what_was_just_handled(api):
+    from app.models.dkim_selector import DkimSelector
+
+    client, owner_factory = api
+    org, user, domain = await _seed(owner_factory, UserRole.org_admin)
+    await login_as(client, owner_factory, user)
+    async with owner_factory() as db:
+        db.add(DkimSelector(organization_id=org.id, domain_id=domain.id, selector="s1"))
+        await db.commit()
+
+    assert (await client.get("/api/notifications/count")).json() == {"open": 1}

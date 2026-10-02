@@ -34,6 +34,8 @@ export const queryKeys = {
   health: ["health"] as const,
   actionQueue: (domainId: string | null) => ["action-queue", domainId] as const,
   detectedDomains: ["detected-domains"] as const,
+  notifications: ["notifications"] as const,
+  notificationsCount: ["notifications", "count"] as const,
   dnsChecks: (domainId: string) => ["dns-checks", domainId] as const,
   dkimSelectors: (domainId: string) => ["dkim-selectors", domainId] as const,
   detectedDkimSelectors: (domainId: string) => ["dkim-selectors-detected", domainId] as const,

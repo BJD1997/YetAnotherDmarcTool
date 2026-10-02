@@ -64,6 +64,19 @@ async def refresh_org_notifications(db: AsyncSession, organization_id: uuid.UUID
         ):
             created += 1
 
+    resolved = await resolve_handled(db, organization_id, blocked)
+    return created, resolved
+
+
+async def resolve_handled(
+    db: AsyncSession, organization_id: uuid.UUID, blocked: set[tuple[uuid.UUID, str]] | None = None
+) -> int:
+    """Resolves open notifications whose domain was added or dismissed, whose
+    selector is now monitored, or whose signing sender was blocked. Cheap
+    (four small lookups), so the API also runs it on read: the bell then
+    updates as soon as something is handled, not only every 10 minutes."""
+    if blocked is None:
+        blocked = await _blocked_senders(db, organization_id)
     registered = set((await dmarc_reports_repo.registered_domains_by_name(db, organization_id)).keys())
     dismissed = await dmarc_reports_repo.dismissed_domain_names(db, organization_id)
     monitored = await known_selector_names_for_org(db, organization_id)
@@ -80,7 +93,7 @@ async def refresh_org_notifications(db: AsyncSession, organization_id: uuid.UUID
             resolve(notification, "handled")
             resolved += 1
     await db.flush()
-    return created, resolved
+    return resolved
 
 
 async def run_notifications_refresh() -> None:

@@ -61,6 +61,10 @@ export function useUpdateSenderReview() {
   return useMutation({
     mutationFn: ({ domain_id, service_label, body }: { domain_id: string; service_label: string; body: Partial<Pick<SenderReviewUpdate, "status" | "owner">> }) =>
       api.patch<SenderReviewUpdate>(`/domains/${domain_id}/dmarc/sender-inventory/${encodeURIComponent(service_label)}`, body),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.senderInventory.all }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.senderInventory.all });
+      // A selector notification's link depends on its sender's review.
+      queryClient.invalidateQueries({ queryKey: queryKeys.notifications });
+    },
   });
 }

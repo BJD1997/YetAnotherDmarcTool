@@ -6,6 +6,7 @@ import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { useCurrentOrganization } from "../hooks/useOrganization";
 import { useHealth } from "../hooks/useOverviewResources";
+import NotificationsBell from "./NotificationsBell";
 import ThemeToggle from "./ThemeToggle";
 
 export default function Shell({ children }: { children: ReactNode }) {
@@ -46,6 +47,7 @@ export default function Shell({ children }: { children: ReactNode }) {
         </button>
         <span className="sidebar-brand-mark">Y</span>
         <span className="sidebar-brand-text">YetAnotherDmarcTool</span>
+        <NotificationsBell align="right" />
       </div>
 
       <div className={`sidebar-backdrop ${mobileOpen ? "is-open" : ""}`} onClick={closeMobile} />
@@ -56,6 +58,7 @@ export default function Shell({ children }: { children: ReactNode }) {
             <span className="sidebar-brand-mark">Y</span>
             <span className="sidebar-brand-text">YetAnotherDmarcTool</span>
           </Link>
+          <NotificationsBell align="left" onNavigate={closeMobile} />
           <button className="icon-btn" onClick={closeMobile} aria-label="Close menu" style={{ display: mobileOpen ? "inline-flex" : "none" }}>
             <X />
           </button>
