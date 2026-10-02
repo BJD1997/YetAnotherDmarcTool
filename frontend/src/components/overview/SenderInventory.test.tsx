@@ -90,14 +90,24 @@ describe("SenderInventory ?highlight=", () => {
     await waitFor(() => expect(screen.getByText("sneaky-sender")).toBeInTheDocument());
   });
 
-  it("fetches all-time data instead of the 90-day default when a highlight target is present", async () => {
-    getMock.mockResolvedValue({ [DOMAIN.id]: [row({ service_label: "old-sender" })] });
+  it("keeps the 90-day window when the highlighted sender is in it", async () => {
+    getMock.mockResolvedValue({ [DOMAIN.id]: [row({ service_label: "recent-sender" })] });
+
+    renderInventory("/domains/domain-1/senders?highlight=recent-sender");
+
+    await waitFor(() => expect(screen.getByText("recent-sender")).toBeInTheDocument());
+    expect(getMock.mock.calls.every(([url]) => String(url).includes("days=90"))).toBe(true);
+  });
+
+  it("widens to all time when the highlighted sender isn't in the 90-day window", async () => {
+    getMock.mockImplementation(async (url: string) =>
+      url.includes("days=") ? { [DOMAIN.id]: [] } : { [DOMAIN.id]: [row({ service_label: "old-sender" })] },
+    );
 
     renderInventory("/domains/domain-1/senders?highlight=old-sender");
 
-    await waitFor(() => expect(getMock).toHaveBeenCalled());
-    const [url] = getMock.mock.calls[0];
-    expect(url).not.toContain("days=");
+    await waitFor(() => expect(screen.getByText("old-sender")).toBeInTheDocument());
+    expect(getMock.mock.calls.some(([url]) => !String(url).includes("days="))).toBe(true);
   });
 
   it("renders every sender normally when no highlight param is present", async () => {
