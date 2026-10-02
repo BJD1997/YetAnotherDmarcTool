@@ -475,3 +475,64 @@ async def test_recheck_domain_requires_verified(api):
     response = await client.post(f"/api/domains/{domain.id}/checks/recheck")
 
     assert response.status_code == 409
+
+
+async def _recheck_in_tls_rpt_mode(api, monkeypatch, reports: list[dict]) -> list[dict]:
+    """Recheck with every DNS checker stubbed out and STARTTLS_CHECK_MODE=tls_rpt,
+    the domain's TLS-RPT rua= pointing at its hosted address."""
+    from app.config import settings
+    from app.models.enums import DomainVerificationStatus
+    from app.services.dns_checks import scheduled_recheck, starttls_tls_rpt
+    from app.services.dns_checks.tls_rpt_check import TlsRptRuaDestinationCheck
+
+    async def _no_dns(*args, **kwargs):
+        return {}
+
+    async def _rua_correct(domain, mailbox):
+        return TlsRptRuaDestinationCheck(status="correct", current_targets=[mailbox])
+
+    monkeypatch.setattr(settings, "starttls_check_mode", "tls_rpt")
+    monkeypatch.setattr(scheduled_recheck, "run_all", _no_dns)
+    monkeypatch.setattr(starttls_tls_rpt, "check_tls_rpt_rua_destination", _rua_correct)
+
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin)
+    domain = await _add_domain(
+        owner_factory, org, verification_status=DomainVerificationStatus.verified, hosted_report_address="reports+x@hosted.example"
+    )
+    now = datetime.now(timezone.utc)
+    async with owner_factory() as db:
+        for r in reports:
+            begin = now - timedelta(days=r["days_ago"])
+            db.add(
+                TlsRptReport(
+                    organization_id=org.id, domain_id=domain.id, org_name="google.com", policy_domain=domain.name,
+                    policy_type=TlsRptPolicyType.sts, date_range_begin=begin, date_range_end=begin + timedelta(days=1),
+                    summary_success_count=r["success"], summary_failure_count=r["failure"],
+                    failure_details=r.get("details") or [], received_at=now, created_at=now,
+                )
+            )
+        await db.commit()
+    await login_as(client, owner_factory, user)
+
+    response = await client.post(f"/api/domains/{domain.id}/checks/recheck")
+    assert response.status_code == 200
+    return [row for row in response.json() if row["check_type"] == "starttls"]
+
+
+async def test_starttls_from_tls_rpt_is_pending_without_reports(api, monkeypatch):
+    [row] = await _recheck_in_tls_rpt_mode(api, monkeypatch, [])
+    assert row["status"] == "pending"
+
+
+async def test_starttls_from_tls_rpt_counts_only_the_last_14_days(api, monkeypatch):
+    [row] = await _recheck_in_tls_rpt_mode(
+        api,
+        monkeypatch,
+        [
+            {"days_ago": 3, "success": 500, "failure": 0},
+            {"days_ago": 30, "success": 0, "failure": 50, "details": [{"result_type": "certificate-expired", "failed_session_count": 50}]},
+        ],
+    )
+    assert row["status"] == "pass"
+    assert "500 of 500" in row["summary"]

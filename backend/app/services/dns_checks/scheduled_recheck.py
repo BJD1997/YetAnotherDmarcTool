@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.db.rls import set_platform_admin_context
 from app.db.session import async_session_factory
 from app.models.dns_check import DnsCheckResult
@@ -22,6 +23,7 @@ from app.models.organization import Organization
 from app.repositories.dns_checks import list_domains_due_for_check
 from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.repositories.selectors import list_selectors_for_domain
+from app.services.dns_checks import starttls_tls_rpt
 from app.services.dns_checks.registry import run_all
 from app.services.jobs.advisory_lock import try_advisory_lock
 
@@ -68,6 +70,10 @@ async def run_and_persist_checks(db: AsyncSession, domain: Domain, org: Organiza
         parent_domain_name,
         mailbox_address,
     )
+    # TLS-RPT mode needs the domain's reports, so it runs here rather than
+    # in run_all (which has no DB session).
+    if settings.effective_starttls_mode == "tls_rpt":
+        findings_by_type[CheckType.starttls] = await starttls_tls_rpt.check(db, domain.id, domain.name, mailbox_address)
 
     now = datetime.now(timezone.utc)
     rows = [

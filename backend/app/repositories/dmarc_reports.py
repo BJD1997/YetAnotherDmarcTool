@@ -677,6 +677,23 @@ async def unmatched_record_header_from_counts(db: AsyncSession, organization_id:
     return result.all()
 
 
+async def tls_rpt_session_totals_for_domain(
+    db: AsyncSession, domain_id: UUID, since: datetime
+) -> tuple[int, int, list[dict]]:
+    """(successful sessions, failed sessions, failure detail items) over the
+    domain's TLS-RPT reports since `since` — for the STARTTLS check in
+    tls_rpt mode. ORM, so unverified reports stay out."""
+    rows = (
+        await db.execute(
+            select(
+                TlsRptReport.summary_success_count, TlsRptReport.summary_failure_count, TlsRptReport.failure_details
+            ).where(TlsRptReport.domain_id == domain_id, TlsRptReport.date_range_begin >= since)
+        )
+    ).all()
+    details = [item for _success, _failure, items in rows for item in (items or [])]
+    return sum(r[0] for r in rows), sum(r[1] for r in rows), details
+
+
 async def unmatched_tls_rpt_domain_counts(db: AsyncSession, organization_id: UUID) -> Sequence:
     result = await db.execute(
         select(
