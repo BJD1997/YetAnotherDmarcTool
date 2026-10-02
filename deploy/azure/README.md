@@ -7,26 +7,14 @@ that pre-fills network, Postgres, and replica-count sizing. Bicep is the source 
 truth (`main.bicep` + `modules/`); `azuredeploy.json` is the compiled ARM the Portal
 button uses.
 
-> **Compiled, not yet live-deployment-tested.** `azuredeploy.json` (the compiled ARM
-> template the Portal loads) is generated from `main.bicep` with the standalone Bicep
-> CLI (`bicep build`) — 0 errors, 0 warnings, 0 lint findings, and its parameter list
-> cross-checked against every `createUiDefinition.json` wizard output. What it hasn't
-> had is a real deployment against a live Azure subscription — no environment used to
-> build this held Azure credentials, so treat the first click as the actual
-> end-to-end test. If something doesn't resolve as expected, fall back to the
-> **[manual deploy](#manual-deploy-instead-of-the-button)** path below, or run
-> `az deployment group what-if` first to preview.
->
-> **Keeping `azuredeploy.json` in sync:** it is not regenerated automatically. After
-> any change to `main.bicep` or a module, regenerate and commit it, from `deploy/azure/`:
+> **Keeping `azuredeploy.json` in sync:** the button loads the compiled ARM
+> template, which is not regenerated automatically. After any change to
+> `main.bicep` or a module, regenerate and commit it, from `deploy/azure/`:
 > ```bash
 > az bicep build --file main.bicep --outfile azuredeploy.json
-> # or, without the Azure CLI, the standalone Bicep CLI works identically:
+> # or with the standalone Bicep CLI:
 > # bicep build main.bicep --outfile azuredeploy.json
 > ```
-> A good follow-up (out of scope for this change) would be to automate that compile
-> step in CI so the committed artifact can never drift out of sync with `main.bicep` —
-> it isn't wired up yet.
 
 [![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FBJD1997%2FYetAnotherDmarcTool%2Fmain%2Fdeploy%2Fazure%2Fazuredeploy.json/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2FBJD1997%2FYetAnotherDmarcTool%2Fmain%2Fdeploy%2Fazure%2FcreateUiDefinition.json)
 
@@ -59,9 +47,10 @@ button uses.
   scaler, min 1 so a leader always exists). Both replica ceilings come from the
   sizing tier. Each runs a **DNSSEC Unbound resolver sidecar** (ACA has no UDP
   ingress, so DNS is over `127.0.0.1`).
-- **migrate job** — creates the non-owner `dmarc_app` role, runs Alembic, bootstraps
-  the platform admin. A `deploymentScript` runs it during deployment, before the apps
-  start.
+- **migrate job** — creates or updates the non-owner `dmarc_app` role (its
+  password included), runs Alembic, bootstraps the platform admin. A
+  `deploymentScript` runs it during deployment, before the apps start; the
+  updater job runs it again on every update.
 - **updater job** — started by **Update now** in the admin console; runs the
   migrations, then moves the worker, api and itself to the new release. It has
   its own managed identity with a custom role limited to this resource group's
@@ -69,24 +58,25 @@ button uses.
   this job. See [Updating](#updating).
 
 ## Prerequisites
-- An Azure subscription, and **Owner** (or **Contributor + User Access Administrator**) on the target resource group — the template creates **role assignments** (Key Vault access for the app identity; Contributor for the migrate deployment script).
+- An Azure subscription, and **Owner** (or **Contributor + User Access Administrator**) on the target resource group. The template creates **custom roles** (the updater job's role, and the api's "may only start the updater" role) and **role assignments** (Key Vault access for the app identity, Contributor for the migrate deployment script, the two custom roles).
 - These resource providers registered (Portal usually auto-registers; via CLI: `az provider register -n <NS>`): `Microsoft.App`, `Microsoft.DBforPostgreSQL`, `Microsoft.KeyVault`, `Microsoft.OperationalInsights`, `Microsoft.ManagedIdentity`, `Microsoft.ContainerInstance` (used by the deployment script), `Microsoft.Network`.
 - A **Fernet key** for `fernetKey`: `openssl rand -base64 32 | tr '+/' '-_'`.
 
 ## Parameters (the ones you'll set)
 | Parameter | Required | Notes |
 |---|---|---|
-| `namePrefix` | yes | 2–12 chars, lowercase-letter first. Prefix for resource names. |
-| `imageTag` | yes | Release tag (e.g. `v0.1.5`) or `latest`. Drives both the app image and the resolver sidecar image. |
-| `deploymentSize` | yes | `test` / `small` (default) / `medium` / `large`. Pre-fills network, Postgres, and replica-count sizing — see "What it creates" above. |
-| `postgresHighAvailability` | yes | `Disabled` (default) / `ZoneRedundant`. Independent of `deploymentSize` — roughly doubles Postgres compute cost when enabled. Not offered (hidden) in the wizard for `test`/`small`: Azure's Burstable Postgres SKU (both tiers) doesn't support zone-redundant HA at all — only General Purpose/Memory Optimized (`medium`/`large`) do. Also requires a region with Availability Zone support; an incompatible region surfaces as an Azure deployment-time validation error, not a wizard warning. |
-| `administratorLogin` / `administratorPassword` | yes | Postgres admin (used only by the migrate job). |
-| `dmarcAppDbPassword` | yes | Password for the non-owner `dmarc_app` role the app connects as. |
+| `namePrefix` | optional (default `yadt`) | 2–12 chars, lowercase-letter first. Prefix for resource names. |
+| `imageTag` | optional (default `latest`) | Release tag (e.g. `v0.1.6`) or `latest`. Drives the app, updater and resolver sidecar images. After the first deployment, **Update now** moves to newer releases; this only matters again when you redeploy. |
+| `deploymentSize` | optional (default `small`) | `test` / `small` / `medium` / `large`. Pre-fills network, Postgres, and replica-count sizing — see "What it creates" above. |
+| `postgresHighAvailability` | optional (default `Disabled`) | `Disabled` / `ZoneRedundant`. Independent of `deploymentSize` — roughly doubles Postgres compute cost when enabled. Not offered (hidden) in the wizard for `test`/`small`: Azure's Burstable Postgres SKU (both tiers) doesn't support zone-redundant HA at all — only General Purpose/Memory Optimized (`medium`/`large`) do. Also requires a region with Availability Zone support; an incompatible region surfaces as an Azure deployment-time validation error, not a wizard warning. |
+| `administratorLogin` / `administratorPassword` | password required (login defaults to `dmarcadmin`) | Postgres admin, used only by the migrate job. Azure's Postgres admin is not a superuser; the migrate job is written for that. |
+| `dmarcAppDbPassword` | yes | Password for the non-owner `dmarc_app` role the app connects as. To change it, redeploy with a new value: the migrate job updates the role and the apps get the new connection string. |
 | `fernetKey` | yes | Encrypts TOTP secrets/credentials at rest. |
 | `platformAdminBootstrapEmail` / `…Password` | recommended | First platform-admin login, created if none exists. |
 | `entra*` | optional | Entra SSO (api) and/or Graph mailbox ingestion (worker). Leave blank for local auth + DNS-checks-only. |
 | `hostedReportsTenantId` / `hostedReportsMailboxAddress` | optional | One mailbox in your own Microsoft 365 tenant that gives each domain its own `mailbox+tag@<mailbox's domain>` reporting address. Needs the Entra Mail client. Both or neither. |
 | `cloudflareZoneId` / `cloudflareApiToken` | optional | Needs the hosted mailbox. Creates and removes the DMARC authorization record for each hosted address in that domain's Cloudflare zone. Without it, you add those records by hand. Use a token limited to DNS edit on that zone. |
+| `enableTestUpdate` | optional (default `false`) | Shows **Run test update** in the admin console (see [Updating](#updating)). Not in the portal wizard; set it in a parameters file, or set `UPDATE_REHEARSAL_ENABLED` on the api app. |
 | `publicBaseUrlOverride` | optional | A custom domain URL; leave blank to use the default ACA URL. |
 | `postgresSkuNameOverride` / `postgresSkuTierOverride` / `postgresStorageGBOverride` | optional | Override the tier-derived Postgres SKU/storage. Empty/`0` = use the `deploymentSize` default. |
 | `apiMaxReplicasOverride` / `workerMaxReplicasOverride` | optional | Override the tier-derived autoscale ceilings. `0` = use the `deploymentSize` default. |
@@ -147,9 +137,8 @@ az deployment group create   -g <rg> -f deploy/azure/main.bicep -p @my.parameter
 If the in-deployment migrate step ever doesn't run, trigger it yourself:
 `az containerapp job start -n <namePrefix>-migrate -g <rg>`.
 
-This path deploys directly from `main.bicep`, no compiled ARM template needed — it's
-also the recommended way to test a deployment for the first time, since `what-if`
-gives you a preview before anything is created.
+This path deploys directly from `main.bicep`, no compiled ARM template needed, and
+`what-if` gives you a preview before anything is created.
 
 ## Notes & trade-offs
 - **Sizing tiers are a starting point, not a ceiling.** `deploymentSize` picks
@@ -178,4 +167,4 @@ gives you a preview before anything is created.
   Postgres, Key Vault, and Log Analytics — a small always-on baseline. Raise the
   deployment size / Postgres SKU / replica ceilings for real load; enable HA for
   production.
-- This IaC is validated at **compile time** (`bicep build`) and should be previewed with `az deployment group what-if`; the first live deploy is the real end-to-end test.
+- **Tested on a live subscription:** deployed, then updated in place with **Update now** (v0.1.5 release candidates). `az deployment group what-if` is still the way to preview a change to an existing deployment.
