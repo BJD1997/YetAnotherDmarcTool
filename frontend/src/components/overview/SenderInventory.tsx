@@ -304,10 +304,9 @@ function SenderInventoryRowView({
   const [editingStatus, setEditingStatus] = useState(false);
   const [editingOwner, setEditingOwner] = useState(false);
   const [ownerDraft, setOwnerDraft] = useState(row.owner ?? "");
-  // Only senders with several IPs expand; a single IP and its reverse DNS
-  // show on the row itself.
-  const canExpand = row.source_ips.length > 1;
-  const singleIp = row.source_ips.length === 1 ? row.source_ips[0] : null;
+  // Every sender expands to its per-IP detail, one IP or many, so rows
+  // behave the same.
+  const canExpand = row.source_ips.length > 0;
   const colSpan = 5 + (showDomain ? 1 : 0);
 
   return (
@@ -356,14 +355,6 @@ function SenderInventoryRowView({
               </span>
             )}
           </div>
-          {singleIp && (
-            <div className="muted" style={{ fontSize: "0.8rem", marginLeft: 20, display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-              <a href={`https://ipinfo.io/${singleIp.source_ip}`} target="_blank" rel="noreferrer">
-                {singleIp.source_ip}
-              </a>
-              <FcrdnsCell ip={singleIp} />
-            </div>
-          )}
         </td>
         {showDomain && (
           <td>
