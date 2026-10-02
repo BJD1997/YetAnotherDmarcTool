@@ -184,10 +184,24 @@ async def last_report_received_at_for_org(db: AsyncSession, organization_id: UUI
     return result.scalar_one_or_none()
 
 
+def _blocked_source_ips(domain_id: UUID):
+    """Source IPs whose sender is reviewed as blocked for this domain — a
+    plain SQL join (SourceIpIdentity's service_label against SenderReview),
+    so an IP with no cached identity yet is never treated as blocked."""
+    return (
+        select(SourceIpIdentity.source_ip)
+        .join(SenderReview, SenderReview.service_label == SourceIpIdentity.service_label)
+        .where(SenderReview.domain_id == domain_id, SenderReview.status == SenderReviewStatus.blocked)
+    )
+
+
 async def list_auth_results_for_domain(db: AsyncSession, domain_id: UUID) -> Sequence[tuple]:
+    """For the detected DKIM selectors. Mail from blocked senders is left
+    out: a selector only they sign with isn't one to add."""
     result = await db.execute(
         select(DmarcAggregateRecord.auth_results, DmarcAggregateRecord.report_id, DmarcAggregateRecord.count).where(
-            DmarcAggregateRecord.domain_id == domain_id
+            DmarcAggregateRecord.domain_id == domain_id,
+            DmarcAggregateRecord.source_ip.not_in(_blocked_source_ips(domain_id)),
         )
     )
     return result.all()
