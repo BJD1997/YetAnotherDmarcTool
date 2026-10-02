@@ -56,11 +56,13 @@ async def test_rating_window_is_a_per_org_setting(api):
     assert (await client.patch("/api/organizations/current", json={"name": "Org", "rating_window_days": 45})).status_code == 422
 
 
-async def test_ask_ai_is_opt_in_and_admin_only(api):
+async def test_ask_ai_is_unanswered_until_chosen(api):
     client, owner_factory = api
     _org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin)
     await login_as(client, owner_factory, user)
 
+    assert (await client.get("/api/organizations/current")).json()["ask_ai_enabled"] is None
+    assert (await client.patch("/api/organizations/current", json={"name": "Org", "ask_ai_enabled": False})).status_code == 200
     assert (await client.get("/api/organizations/current")).json()["ask_ai_enabled"] is False
-    assert (await client.patch("/api/organizations/current", json={"name": "Org", "ask_ai_enabled": True})).status_code == 200
+    await client.patch("/api/organizations/current", json={"name": "Org", "ask_ai_enabled": True})
     assert (await client.get("/api/organizations/current")).json()["ask_ai_enabled"] is True

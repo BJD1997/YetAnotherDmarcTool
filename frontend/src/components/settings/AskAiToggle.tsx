@@ -19,7 +19,7 @@ export function AskAiToggle({ org }: { org: Organization }) {
       <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", cursor: "pointer" }}>
         <input
           type="checkbox"
-          checked={org.ask_ai_enabled}
+          checked={org.ask_ai_enabled === true}
           disabled={setEnabled.isPending}
           onChange={(e) => setEnabled.mutate({ name: org.name, ask_ai_enabled: e.target.checked })}
         />

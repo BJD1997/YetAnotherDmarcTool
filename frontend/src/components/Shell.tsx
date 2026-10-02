@@ -6,6 +6,7 @@ import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { useCurrentOrganization } from "../hooks/useOrganization";
 import { useHealth } from "../hooks/useOverviewResources";
+import AskAiInvite from "./AskAiInvite";
 import NotificationsBell from "./NotificationsBell";
 import ThemeToggle from "./ThemeToggle";
 
@@ -113,6 +114,7 @@ export default function Shell({ children }: { children: ReactNode }) {
       <main className="app-main">
         <div className="app-main-inner">{children}</div>
       </main>
+      <AskAiInvite />
     </div>
   );
 }

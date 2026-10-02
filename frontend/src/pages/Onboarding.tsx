@@ -11,7 +11,7 @@ import { MailboxHealthWidget } from "../components/overview/widgets";
 import { useDomains, useVerifyDomain } from "../hooks/useDomains";
 import { useMailboxConnection } from "../hooks/useMailboxConnection";
 import { useGenerateHostedReportAddress, useOnboardingStatus } from "../hooks/useOnboarding";
-import { useCurrentOrganization } from "../hooks/useOrganization";
+import { useCurrentOrganization, useUpdateOrganization } from "../hooks/useOrganization";
 import { useRecheckDns } from "../hooks/useDnsChecks";
 import { useRuaCheck } from "../hooks/useDomainInsights";
 import { ASK_AI_EXPLANATION, AskAiToggle } from "../components/settings/AskAiToggle";
@@ -128,6 +128,13 @@ function StepNav({ onBack, onNext, nextLabel = "Continue" }: { onBack?: () => vo
 
 function AskAiStep({ org, onBack, onNext }: { org: Organization; onBack: () => void; onNext: () => void }) {
   const { user } = useAuth();
+  const decline = useUpdateOrganization();
+  // Continuing without ticking the box is an answer too ("no"), so the
+  // one-time question doesn't ask again later.
+  function next() {
+    if (user?.role === "org_admin" && org.ask_ai_enabled === null) decline.mutate({ name: org.name, ask_ai_enabled: false });
+    onNext();
+  }
   return (
     <div>
       <h2 style={{ marginTop: 0 }}>Help from an AI assistant (optional)</h2>
@@ -138,7 +145,7 @@ function AskAiStep({ org, onBack, onNext }: { org: Organization; onBack: () => v
         <p className="muted">An org admin can turn this on under Settings → General.</p>
       )}
       <p className="muted" style={{ fontSize: "0.82rem" }}>Off unless you turn it on; you can change it any time in Settings → General.</p>
-      <StepNav onBack={onBack} onNext={onNext} />
+      <StepNav onBack={onBack} onNext={next} />
     </div>
   );
 }

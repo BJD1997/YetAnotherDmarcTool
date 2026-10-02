@@ -60,9 +60,10 @@ class Organization(UUIDPkMixin, TimestampMixin, Base):
 
     # How far back each domain's grade, failing-message count, readiness and
     # the Senders list's default look (Settings, org admins): 30/60/90/180.
-    # Ask AI buttons (Settings → General, or the onboarding wizard): off
-    # until an org admin turns them on. See app/services/ask_ai.
-    ask_ai_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    # Ask AI buttons (Settings → General, the onboarding wizard, or a one-time
+    # question for org admins): None = not answered yet (the question shows),
+    # False = declined, True = on. See app/services/ask_ai.
+    ask_ai_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None)
 
     rating_window_days: Mapped[int] = mapped_column(Integer, nullable=False, default=90, server_default="90")
 

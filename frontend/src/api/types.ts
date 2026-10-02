@@ -28,7 +28,8 @@ export interface Organization {
   hosted_mailbox_opt_in: boolean;
   report_sender_check: ReportSenderCheck;
   rating_window_days: RatingWindowDays;
-  ask_ai_enabled: boolean;
+  // null = not answered yet (org admins get asked once).
+  ask_ai_enabled: boolean | null;
   is_demo_read_only: boolean;
   entra_consent_urls: EntraConsentUrls | null;
 }
