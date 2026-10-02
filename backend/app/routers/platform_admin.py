@@ -392,9 +392,13 @@ async def admin_session_choice(
     if body.choice not in await admin_sign_in_candidates(request, db):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "that sign-in isn't available in this browser")
     await db.commit()
+    # A fixed string, not the request's own text: the schema already allows
+    # only these two, but this keeps request input out of the cookie
+    # entirely (CodeQL: cookie constructed from user input).
+    choice_value = "local" if body.choice == "local" else "operator_org"
     response.set_cookie(
         settings.platform_admin_choice_cookie_name,
-        body.choice,
+        choice_value,
         max_age=settings.session_absolute_timeout_days * 86400,
         **cookie_kwargs(),
     )
