@@ -2,8 +2,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import case, column, delete, func, or_, select, true, update
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import case, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -189,39 +188,6 @@ async def list_auth_results_for_domain(db: AsyncSession, domain_id: UUID) -> Seq
         select(DmarcAggregateRecord.auth_results, DmarcAggregateRecord.report_id, DmarcAggregateRecord.count).where(
             DmarcAggregateRecord.domain_id == domain_id
         )
-    )
-    return result.all()
-
-
-async def recent_dkim_selectors_for_org(
-    db: AsyncSession, organization_id: UUID, since: datetime
-) -> Sequence[tuple]:
-    """(domain_id, selector, dkim_domain, message_volume) for every DKIM
-    signature in the org's aggregate records since `since`, in one grouped
-    query (jsonb_array_elements over auth_results.dkim) rather than reading
-    every record per domain like GET /domains/{id}/selectors/detected does.
-    ORM, not text(), so the unverified-report filter still applies."""
-    dkim = DmarcAggregateRecord.auth_results["dkim"]
-    entries = (
-        func.jsonb_array_elements(case((func.jsonb_typeof(dkim) == "array", dkim), else_=func.jsonb_build_array()))
-        .table_valued(column("value", JSONB))
-        .lateral("dkim_entry")
-    )
-    # Labelled once and grouped by label: repeating the expressions would
-    # give each its own bind parameters, which Postgres can't match up.
-    selector = entries.c.value["selector"].astext.label("selector")
-    dkim_domain = entries.c.value["domain"].astext.label("dkim_domain")
-    result = await db.execute(
-        select(DmarcAggregateRecord.domain_id, selector, dkim_domain, func.sum(DmarcAggregateRecord.count))
-        .select_from(DmarcAggregateRecord)
-        .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
-        .join(entries, true())
-        .where(
-            DmarcAggregateRecord.organization_id == organization_id,
-            DmarcAggregateRecord.domain_id.is_not(None),
-            DmarcAggregateReport.date_range_begin >= since,
-        )
-        .group_by(DmarcAggregateRecord.domain_id, selector, dkim_domain)
     )
     return result.all()
 

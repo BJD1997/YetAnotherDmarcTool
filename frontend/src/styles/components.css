@@ -565,21 +565,6 @@ a.issue-row:hover {
   border-color: var(--border);
   color: var(--ink-secondary);
 }
-.discoveries-notice {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.6rem;
-  background: var(--accent-wash);
-  color: var(--ink);
-}
-.discoveries-notice ul {
-  margin: 0.25rem 0 0;
-  padding-left: 1.1rem;
-}
-.discoveries-notice li {
-  overflow-wrap: anywhere;
-}
-
 .alert a {
   color: inherit;
   text-decoration: underline;

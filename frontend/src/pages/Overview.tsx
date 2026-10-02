@@ -11,7 +11,6 @@ import TrendChart from "../components/overview/TrendChart";
 import ActionQueue from "../components/overview/ActionQueue";
 import DomainsNeedingAttention from "../components/overview/DomainsNeedingAttention";
 import SenderInventory from "../components/overview/SenderInventory";
-import DiscoveriesNotice from "../components/overview/DiscoveriesNotice";
 import { MailboxHealthWidget } from "../components/overview/widgets";
 import { useDomains } from "../hooks/useDomains";
 import { useMailboxConnection } from "../hooks/useMailboxConnection";
@@ -111,8 +110,6 @@ export default function Overview() {
           </Link>
         </div>
       )}
-
-      <DiscoveriesNotice enabled={user?.role === "org_admin"} />
 
       <CommandBar
         domains={domains ?? []}

@@ -36,7 +36,6 @@ export function useAddDkimSelector(domainId: string, onSuccess?: () => void, onE
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.dkimSelectors(domainId) });
       queryClient.invalidateQueries({ queryKey: queryKeys.detectedDkimSelectors(domainId) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.discoveries });
       onSuccess?.();
     },
     onError,

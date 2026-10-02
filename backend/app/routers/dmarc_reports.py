@@ -17,12 +17,11 @@ from app.models.user import User
 from app.repositories import dmarc_reports as dmarc_reports_repo
 from app.repositories.domains import get_owned_domain, list_domains_for_org
 from app.repositories.mailbox_connections import get_org_mailbox_connection
-from app.repositories.selectors import known_selector_names_for_org
 from app.schemas.dmarc_reports import SenderReviewUpdateRequest
 from app.services.action_queue.rules import reviewed_service_labels, unreviewed_high_volume_senders
 from app.services.dmarc_analytics import service_breakdown, service_breakdown_multi
 from app.services.ingestion.sender_auth import SenderAuth, left_out_reason
-from app.services.dmarc_narrative import describe_alignment, dkim_narratives, spf_narratives
+from app.services.dmarc_narrative import dkim_narratives, spf_narratives
 from app.services.dns_checks.dmarc_record import DmarcRecordInfo, check_rua_destination, fetch_current_dmarc_record
 from app.services.dns_checks.resolver import DnsLookupError
 from app.services.rating.domain_rating import compute_domain_rating, domain_policy_readiness, policy_stability_days
@@ -658,10 +657,6 @@ async def detected_domains(
     parented in one step) or of another *detected* domain (informational —
     our one-level nesting model means the detected apex should generally be
     added first)."""
-    return await _detected_domain_items(db, user.organization_id)
-
-
-async def _detected_domain_items(db: AsyncSession, organization_id: uuid.UUID) -> list[dict]:
     detected: dict[str, dict] = {}
 
     # Needed up front (not just for the suggested-parent annotation below):
@@ -672,18 +667,18 @@ async def _detected_domain_items(db: AsyncSession, organization_id: uuid.UUID) -
     # that case, e.g. a subdomain sending real mail whose parent is
     # registered but which itself never was, exactly the gap that left
     # a real customer subdomain invisible until its mail started bouncing.
-    registered = await dmarc_reports_repo.registered_domains_by_name(db, organization_id)
+    registered = await dmarc_reports_repo.registered_domains_by_name(db, user.organization_id)
     registered_names = set(registered.keys())
 
-    dismissed_names = await dmarc_reports_repo.dismissed_domain_names(db, organization_id)
+    dismissed_names = await dmarc_reports_repo.dismissed_domain_names(db, user.organization_id)
 
     for name, report_count, message_volume in await dmarc_reports_repo.unmatched_aggregate_domain_counts(
-        db, organization_id
+        db, user.organization_id
     ):
         detected[name] = {"report_count": report_count, "message_volume": int(message_volume)}
 
     for name, report_count, message_volume in await dmarc_reports_repo.unmatched_record_header_from_counts(
-        db, organization_id
+        db, user.organization_id
     ):
         if name in registered_names:
             continue
@@ -692,13 +687,13 @@ async def _detected_domain_items(db: AsyncSession, organization_id: uuid.UUID) -
         entry["message_volume"] += int(message_volume)
 
     for name, report_count, message_volume in await dmarc_reports_repo.unmatched_tls_rpt_domain_counts(
-        db, organization_id
+        db, user.organization_id
     ):
         entry = detected.setdefault(name, {"report_count": 0, "message_volume": 0})
         entry["report_count"] += report_count
         entry["message_volume"] += int(message_volume)
 
-    for name, report_count in await dmarc_reports_repo.unmatched_forensic_domain_counts(db, organization_id):
+    for name, report_count in await dmarc_reports_repo.unmatched_forensic_domain_counts(db, user.organization_id):
         entry = detected.setdefault(name, {"report_count": 0, "message_volume": 0})
         entry["report_count"] += report_count
 
@@ -743,58 +738,6 @@ async def _detected_domain_items(db: AsyncSession, organization_id: uuid.UUID) -
     # Apex-looking entries first, then shorter (more likely-apex) names first.
     items.sort(key=lambda x: (x["relationship"] != "apex", len(x["name"]), -x["report_count"]))
     return items
-
-
-# How far back the Overview's "new in your reports" notice looks for DKIM
-# selectors: recent enough that a selector the org chose not to add fades
-# out on its own (selectors have no dismiss, unlike detected domains).
-DISCOVERY_SELECTOR_DAYS = 30
-
-
-@router.get("/dmarc/discoveries")
-async def discoveries(db: AsyncSession = Depends(get_db), user: User = Depends(require_org_admin)) -> dict:
-    """What the reports turned up that an org admin should act on, for the
-    notice at the top of the Overview: domains seen in reports but not
-    added (same list as /dmarc/detected-domains), and DKIM selectors that
-    signed aligned mail in the last DISCOVERY_SELECTOR_DAYS days but aren't
-    monitored (same rule as /domains/{id}/selectors/detected, one query for
-    the whole org instead of one per domain)."""
-    detected = await _detected_domain_items(db, user.organization_id)
-    since = datetime.now(timezone.utc) - timedelta(days=DISCOVERY_SELECTOR_DAYS)
-    rows = await dmarc_reports_repo.recent_dkim_selectors_for_org(db, user.organization_id, since)
-    known = await known_selector_names_for_org(db, user.organization_id)
-    domains_by_id = {d.id: d for d in await list_domains_for_org(db, user.organization_id)}
-
-    selectors: dict[uuid.UUID, dict[str, int]] = {}
-    for domain_id, selector, dkim_domain, volume in rows:
-        domain = domains_by_id.get(domain_id)
-        if domain is None or not selector or (domain_id, selector) in known:
-            continue
-        if describe_alignment(dkim_domain, domain.name) == "none":
-            continue
-        per_domain = selectors.setdefault(domain_id, {})
-        per_domain[selector] = per_domain.get(selector, 0) + int(volume)
-
-    return {
-        "domains": [
-            {"name": d["name"], "message_volume": d["message_volume"], "relationship": d["relationship"]}
-            for d in detected
-        ],
-        "selectors": sorted(
-            (
-                {
-                    "domain_id": str(domain_id),
-                    "domain_name": domains_by_id[domain_id].name,
-                    "selectors": [
-                        {"selector": name, "message_volume": volume}
-                        for name, volume in sorted(found.items(), key=lambda kv: -kv[1])
-                    ],
-                }
-                for domain_id, found in selectors.items()
-            ),
-            key=lambda x: x["domain_name"],
-        ),
-    }
 
 
 @router.post("/dmarc/detected-domains/{name}/dismiss", status_code=status.HTTP_204_NO_CONTENT)
