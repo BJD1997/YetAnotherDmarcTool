@@ -2,6 +2,7 @@
 the results into a dict keyed by CheckType, ready for the caller (see
 app/routers/dns_checks.py) to persist as dns_check_results rows."""
 
+from app.config import settings
 from app.models.enums import CheckType, DomainMailProfile, SpfAllQualifierMode
 from app.services.dns_checks import dane, dkim, dmarc, dmarcbis, mta_sts, mx, spf, starttls, tls_rpt_check
 from app.services.dns_checks.base import Finding
@@ -36,5 +37,8 @@ async def run_all(
         CheckType.mta_sts: await mta_sts.check(domain_name),
         CheckType.dane: await dane.check(domain_name),
         CheckType.tls_rpt: await tls_rpt_check.check(domain_name, mailbox_address),
-        CheckType.starttls: await starttls.check(domain_name),
+        # Off where outbound port 25 is blocked (Azure, most clouds): every
+        # probe would fail and cost the domain points for the host's network,
+        # not its mail setup. No findings means the grade leaves it out.
+        CheckType.starttls: await starttls.check(domain_name) if settings.starttls_check_enabled else [],
     }

@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "10078627762423487916"
+      "templateHash": "16382787931039350108"
     }
   },
   "parameters": {
@@ -130,6 +130,13 @@
       "defaultValue": false,
       "metadata": {
         "description": "Show \"Run test update\" under admin console → Updates. Off by default; turn on to check the updater after a redeploy or a permission change."
+      }
+    },
+    "enableStarttlsCheck": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Run the STARTTLS check. Azure blocks outbound port 25 for most subscription types (all but Enterprise Agreement), so it is off by default; turn it on only if your subscription allows port 25 out."
       }
     },
     "publicBaseUrlOverride": {
@@ -1341,6 +1348,9 @@
           },
           "enableTestUpdate": {
             "value": "[parameters('enableTestUpdate')]"
+          },
+          "enableStarttlsCheck": {
+            "value": "[parameters('enableStarttlsCheck')]"
           }
         },
         "template": {
@@ -1350,7 +1360,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "9149931582616956437"
+              "templateHash": "13024264577259245290"
             }
           },
           "parameters": {
@@ -1471,9 +1481,22 @@
               "metadata": {
                 "description": "Show \"Run test update\" in the admin console."
               }
+            },
+            "enableStarttlsCheck": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "Run the STARTTLS check (needs outbound port 25)."
+              }
             }
           },
           "variables": {
+            "starttlsEnv": [
+              {
+                "name": "STARTTLS_CHECK_ENABLED",
+                "value": "[if(parameters('enableStarttlsCheck'), 'true', 'false')]"
+              }
+            ],
             "hostedReportsEnv": "[if(empty(parameters('hostedReportsMailboxAddress')), createArray(), createArray(createObject('name', 'HOSTED_REPORTS_TENANT_ID', 'value', parameters('hostedReportsTenantId')), createObject('name', 'HOSTED_REPORTS_MAILBOX_ADDRESS', 'value', parameters('hostedReportsMailboxAddress'))))]",
             "apiFqdn": "[format('{0}-api.{1}', parameters('namePrefix'), parameters('envDefaultDomain'))]",
             "publicBaseUrl": "[if(empty(parameters('publicBaseUrlOverride')), format('https://{0}', variables('apiFqdn')), parameters('publicBaseUrlOverride'))]",
@@ -1486,9 +1509,9 @@
               }
             },
             "apiSecrets": "[concat(createArray(createObject('name', 'app-database-url', 'keyVaultUrl', format('{0}secrets/app-database-url', parameters('vaultUri')), 'identity', parameters('identityId')), createObject('name', 'fernet-key', 'keyVaultUrl', format('{0}secrets/fernet-key', parameters('vaultUri')), 'identity', parameters('identityId'))), if(parameters('deployEntraSsoSecret'), createArray(createObject('name', 'entra-sso-client-secret', 'keyVaultUrl', format('{0}secrets/entra-sso-client-secret', parameters('vaultUri')), 'identity', parameters('identityId'))), createArray()), if(parameters('deployCloudflareSecret'), createArray(createObject('name', 'cloudflare-api-token', 'keyVaultUrl', format('{0}secrets/cloudflare-api-token', parameters('vaultUri')), 'identity', parameters('identityId'))), createArray()))]",
-            "apiEnv": "[concat(createArray(createObject('name', 'DATABASE_URL', 'secretRef', 'app-database-url'), createObject('name', 'FERNET_KEY', 'secretRef', 'fernet-key'), createObject('name', 'PUBLIC_BASE_URL', 'value', variables('publicBaseUrl')), createObject('name', 'DNS_RESOLVER_HOST', 'value', '127.0.0.1'), createObject('name', 'RATE_LIMIT_BACKEND', 'value', 'postgres'), createObject('name', 'FORWARDED_ALLOW_IPS', 'value', format('100.100.0.0/16,{0}', parameters('acaSubnetPrefix'))), createObject('name', 'DEPLOYMENT_PLATFORM', 'value', 'azure-container-apps'), createObject('name', 'AZURE_RESOURCE_GROUP', 'value', resourceGroup().name), createObject('name', 'AZURE_UPDATER_JOB_ID', 'value', resourceId('Microsoft.App/jobs', format('{0}-updater', parameters('namePrefix')))), createObject('name', 'AZURE_UPDATE_CLIENT_ID', 'value', parameters('triggerClientId')), createObject('name', 'UPDATE_REHEARSAL_ENABLED', 'value', if(parameters('enableTestUpdate'), 'true', 'false'))), if(parameters('deployEntraSsoSecret'), createArray(createObject('name', 'ENTRA_SSO_CLIENT_ID', 'value', parameters('entraSsoClientId')), createObject('name', 'ENTRA_SSO_CLIENT_SECRET', 'secretRef', 'entra-sso-client-secret'), createObject('name', 'ENTRA_SSO_AUTHORITY', 'value', parameters('entraSsoAuthority'))), createArray()), if(parameters('deployEntraMailSecret'), createArray(createObject('name', 'ENTRA_MAIL_CLIENT_ID', 'value', parameters('entraMailClientId'))), createArray()), variables('hostedReportsEnv'), if(parameters('deployCloudflareSecret'), createArray(createObject('name', 'CLOUDFLARE_API_TOKEN', 'secretRef', 'cloudflare-api-token'), createObject('name', 'CLOUDFLARE_ZONE_ID', 'value', parameters('cloudflareZoneId'))), createArray()))]",
+            "apiEnv": "[concat(createArray(createObject('name', 'DATABASE_URL', 'secretRef', 'app-database-url'), createObject('name', 'FERNET_KEY', 'secretRef', 'fernet-key'), createObject('name', 'PUBLIC_BASE_URL', 'value', variables('publicBaseUrl')), createObject('name', 'DNS_RESOLVER_HOST', 'value', '127.0.0.1'), createObject('name', 'RATE_LIMIT_BACKEND', 'value', 'postgres'), createObject('name', 'FORWARDED_ALLOW_IPS', 'value', format('100.100.0.0/16,{0}', parameters('acaSubnetPrefix'))), createObject('name', 'DEPLOYMENT_PLATFORM', 'value', 'azure-container-apps'), createObject('name', 'AZURE_RESOURCE_GROUP', 'value', resourceGroup().name), createObject('name', 'AZURE_UPDATER_JOB_ID', 'value', resourceId('Microsoft.App/jobs', format('{0}-updater', parameters('namePrefix')))), createObject('name', 'AZURE_UPDATE_CLIENT_ID', 'value', parameters('triggerClientId')), createObject('name', 'UPDATE_REHEARSAL_ENABLED', 'value', if(parameters('enableTestUpdate'), 'true', 'false'))), if(parameters('deployEntraSsoSecret'), createArray(createObject('name', 'ENTRA_SSO_CLIENT_ID', 'value', parameters('entraSsoClientId')), createObject('name', 'ENTRA_SSO_CLIENT_SECRET', 'secretRef', 'entra-sso-client-secret'), createObject('name', 'ENTRA_SSO_AUTHORITY', 'value', parameters('entraSsoAuthority'))), createArray()), if(parameters('deployEntraMailSecret'), createArray(createObject('name', 'ENTRA_MAIL_CLIENT_ID', 'value', parameters('entraMailClientId'))), createArray()), variables('hostedReportsEnv'), variables('starttlsEnv'), if(parameters('deployCloudflareSecret'), createArray(createObject('name', 'CLOUDFLARE_API_TOKEN', 'secretRef', 'cloudflare-api-token'), createObject('name', 'CLOUDFLARE_ZONE_ID', 'value', parameters('cloudflareZoneId'))), createArray()))]",
             "workerSecrets": "[concat(createArray(createObject('name', 'app-database-url', 'keyVaultUrl', format('{0}secrets/app-database-url', parameters('vaultUri')), 'identity', parameters('identityId')), createObject('name', 'fernet-key', 'keyVaultUrl', format('{0}secrets/fernet-key', parameters('vaultUri')), 'identity', parameters('identityId')), createObject('name', 'keda-pg-connection', 'keyVaultUrl', format('{0}secrets/keda-pg-connection', parameters('vaultUri')), 'identity', parameters('identityId'))), if(parameters('deployEntraMailSecret'), createArray(createObject('name', 'entra-mail-client-secret', 'keyVaultUrl', format('{0}secrets/entra-mail-client-secret', parameters('vaultUri')), 'identity', parameters('identityId'))), createArray()))]",
-            "workerEnv": "[concat(createArray(createObject('name', 'DATABASE_URL', 'secretRef', 'app-database-url'), createObject('name', 'FERNET_KEY', 'secretRef', 'fernet-key'), createObject('name', 'DNS_RESOLVER_HOST', 'value', '127.0.0.1'), createObject('name', 'RATE_LIMIT_BACKEND', 'value', 'postgres')), if(parameters('deployEntraMailSecret'), createArray(createObject('name', 'ENTRA_MAIL_CLIENT_ID', 'value', parameters('entraMailClientId')), createObject('name', 'ENTRA_MAIL_CLIENT_SECRET', 'secretRef', 'entra-mail-client-secret')), createArray()), variables('hostedReportsEnv'))]"
+            "workerEnv": "[concat(createArray(createObject('name', 'DATABASE_URL', 'secretRef', 'app-database-url'), createObject('name', 'FERNET_KEY', 'secretRef', 'fernet-key'), createObject('name', 'DNS_RESOLVER_HOST', 'value', '127.0.0.1'), createObject('name', 'RATE_LIMIT_BACKEND', 'value', 'postgres')), if(parameters('deployEntraMailSecret'), createArray(createObject('name', 'ENTRA_MAIL_CLIENT_ID', 'value', parameters('entraMailClientId')), createObject('name', 'ENTRA_MAIL_CLIENT_SECRET', 'secretRef', 'entra-mail-client-secret')), createArray()), variables('hostedReportsEnv'), variables('starttlsEnv'))]"
           },
           "resources": [
             {

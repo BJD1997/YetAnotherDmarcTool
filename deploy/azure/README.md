@@ -77,6 +77,7 @@ button uses.
 | `hostedReportsTenantId` / `hostedReportsMailboxAddress` | optional | One mailbox in your own Microsoft 365 tenant that gives each domain its own `mailbox+tag@<mailbox's domain>` reporting address. Needs the Entra Mail client. Both or neither. |
 | `cloudflareZoneId` / `cloudflareApiToken` | optional | Needs the hosted mailbox. Creates and removes the DMARC authorization record for each hosted address in that domain's Cloudflare zone. Without it, you add those records by hand. Use a token limited to DNS edit on that zone. |
 | `enableTestUpdate` | optional (default `false`) | Shows **Run test update** in the admin console (see [Updating](#updating)). Not in the portal wizard; set it in a parameters file, or set `UPDATE_REHEARSAL_ENABLED` on the api app. |
+| `enableStarttlsCheck` | optional (default `false`) | Runs the STARTTLS check, which connects to each MX host on port 25. Azure blocks outbound port 25 for every subscription type except Enterprise Agreement, so it's off by default: otherwise every domain gets a STARTTLS error and a lower grade. Not in the portal wizard. |
 | `publicBaseUrlOverride` | optional | A custom domain URL; leave blank to use the default ACA URL. |
 | `postgresSkuNameOverride` / `postgresSkuTierOverride` / `postgresStorageGBOverride` | optional | Override the tier-derived Postgres SKU/storage. Empty/`0` = use the `deploymentSize` default. |
 | `apiMaxReplicasOverride` / `workerMaxReplicasOverride` | optional | Override the tier-derived autoscale ceilings. `0` = use the `deploymentSize` default. |
