@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "16382787931039350108"
+      "templateHash": "12629991080932489678"
     }
   },
   "parameters": {
@@ -132,11 +132,23 @@
         "description": "Show \"Run test update\" under admin console → Updates. Off by default; turn on to check the updater after a redeploy or a permission change."
       }
     },
+    "starttlsCheckMode": {
+      "type": "string",
+      "defaultValue": "tls_rpt",
+      "allowedValues": [
+        "tls_rpt",
+        "probe",
+        "off"
+      ],
+      "metadata": {
+        "description": "Where the STARTTLS result comes from. tls_rpt (default): the TLS-RPT reports senders send. probe: connect to each MX on port 25, which Azure blocks for all but Enterprise Agreement subscriptions. off: no STARTTLS check."
+      }
+    },
     "enableStarttlsCheck": {
       "type": "bool",
       "defaultValue": false,
       "metadata": {
-        "description": "Run the STARTTLS check. Azure blocks outbound port 25 for most subscription types (all but Enterprise Agreement), so it is off by default; turn it on only if your subscription allows port 25 out."
+        "description": "Deprecated (v0.1.7): true means starttlsCheckMode=probe. Kept so older parameter files still deploy."
       }
     },
     "publicBaseUrlOverride": {
@@ -1349,9 +1361,7 @@
           "enableTestUpdate": {
             "value": "[parameters('enableTestUpdate')]"
           },
-          "enableStarttlsCheck": {
-            "value": "[parameters('enableStarttlsCheck')]"
-          }
+          "starttlsCheckMode": "[if(parameters('enableStarttlsCheck'), createObject('value', 'probe'), createObject('value', parameters('starttlsCheckMode')))]"
         },
         "template": {
           "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
@@ -1360,7 +1370,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "13024264577259245290"
+              "templateHash": "11925397527025642092"
             }
           },
           "parameters": {
@@ -1482,19 +1492,23 @@
                 "description": "Show \"Run test update\" in the admin console."
               }
             },
-            "enableStarttlsCheck": {
-              "type": "bool",
-              "defaultValue": false,
+            "starttlsCheckMode": {
+              "type": "string",
+              "defaultValue": "tls_rpt",
               "metadata": {
-                "description": "Run the STARTTLS check (needs outbound port 25)."
+                "description": "Where the STARTTLS result comes from: tls_rpt, probe (needs outbound port 25) or off."
               }
             }
           },
           "variables": {
             "starttlsEnv": [
               {
+                "name": "STARTTLS_CHECK_MODE",
+                "value": "[parameters('starttlsCheckMode')]"
+              },
+              {
                 "name": "STARTTLS_CHECK_ENABLED",
-                "value": "[if(parameters('enableStarttlsCheck'), 'true', 'false')]"
+                "value": "true"
               }
             ],
             "hostedReportsEnv": "[if(empty(parameters('hostedReportsMailboxAddress')), createArray(), createArray(createObject('name', 'HOSTED_REPORTS_TENANT_ID', 'value', parameters('hostedReportsTenantId')), createObject('name', 'HOSTED_REPORTS_MAILBOX_ADDRESS', 'value', parameters('hostedReportsMailboxAddress'))))]",
