@@ -627,6 +627,14 @@ async def registered_domains_by_name(db: AsyncSession, organization_id: UUID) ->
     return {name: domain_id for domain_id, name in result.all()}
 
 
+async def apex_domains_by_name(db: AsyncSession, organization_id: UUID) -> dict[str, UUID]:
+    """Registered top-level domains (no parent), lower-cased name -> id."""
+    result = await db.execute(
+        select(Domain.id, Domain.name).where(Domain.organization_id == organization_id, Domain.parent_domain_id.is_(None))
+    )
+    return {name.lower(): domain_id for domain_id, name in result.all()}
+
+
 async def dismissed_domain_names(db: AsyncSession, organization_id: UUID) -> set[str]:
     result = await db.execute(
         select(DismissedDetectedDomain.name).where(DismissedDetectedDomain.organization_id == organization_id)
