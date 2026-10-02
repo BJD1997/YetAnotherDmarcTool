@@ -23,6 +23,7 @@ def _org_out(org: Organization) -> dict:
         "spf_all_qualifier_mode": org.spf_all_qualifier_mode.value,
         "hosted_mailbox_opt_in": org.hosted_mailbox_opt_in,
         "report_sender_check": org.report_sender_check.value,
+        "rating_window_days": org.rating_window_days,
         "is_demo_read_only": org.is_demo_read_only,
         # Self-service reference: e.g. if the SSO consent link is needed
         # later, or the Mail Access consent needs redoing after a lapse.
@@ -50,6 +51,8 @@ async def update_current_organization(
         org.spf_all_qualifier_mode = body.spf_all_qualifier_mode
     if body.hosted_mailbox_opt_in is not None:
         org.hosted_mailbox_opt_in = body.hosted_mailbox_opt_in
+    if body.rating_window_days is not None:
+        org.rating_window_days = body.rating_window_days
     if body.report_sender_check is not None and body.report_sender_check != org.report_sender_check:
         org.report_sender_check = body.report_sender_check
         # Applies to reports already received, not just new ones.
