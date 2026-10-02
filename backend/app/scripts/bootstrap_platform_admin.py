@@ -10,6 +10,7 @@ from app.config import settings
 from app.db.session import async_session_factory
 from app.models.platform_admin import PlatformAdmin
 from app.repositories.platform_admin import count_platform_admins
+from app.services.auth.admin_access import admin_access_problem
 from app.services.auth.password import hash_password
 
 logging.basicConfig(level=logging.INFO)
@@ -24,11 +25,9 @@ async def main() -> None:
             return
 
         if not settings.platform_admin_bootstrap_email or not settings.platform_admin_bootstrap_password:
-            logger.warning(
-                "no platform_admins exist yet and PLATFORM_ADMIN_BOOTSTRAP_EMAIL/"
-                "PASSWORD are not set — nobody will be able to log in to /admin "
-                "until one is created."
-            )
+            problem = await admin_access_problem(db)
+            if problem:
+                logger.warning("SETUP PROBLEM: %s", problem)
             return
 
         admin = PlatformAdmin(
