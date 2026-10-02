@@ -329,7 +329,6 @@ async def dmarc_posture(
 
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
-    scored: list[tuple[float, int]] = []
     policy_counts: dict[str, int] = {}
     single_domain_policy: str | None = None
     ready_to_enforce_count = 0
@@ -339,8 +338,6 @@ async def dmarc_posture(
         total: int = 0
         if domain.verification_status == DomainVerificationStatus.verified:
             rating, total, _failed = await compute_domain_rating(db, domain)
-            if not rating.insufficient_data and rating.score is not None:
-                scored.append((rating.score, total))
 
         readiness = await domain_policy_readiness(db, domain, rating=rating, total_volume=total)
         if domain_id is not None:
@@ -350,18 +347,13 @@ async def dmarc_posture(
         if readiness.ready:
             ready_to_enforce_count += 1
 
-    compliance_pct: float | None = None
-    if scored:
-        # Weight by volume, but a domain with zero volume in-window still
-        # gets a small nonzero weight (1) rather than being dropped from the
-        # average entirely.
-        weighted_sum = sum(score * max(total, 1) for score, total in scored)
-        weight_total = sum(max(total, 1) for _, total in scored)
-        compliance_pct = round(weighted_sum / weight_total, 1)
-
-    failed_volume = await dmarc_reports_repo.failed_message_volume_for_org_since(
+    # The DMARC pass rate of the messages in the selected range — not the
+    # domains' grade, which also weighs DNS checks over a fixed 90 days and
+    # so never moved with the range.
+    total_volume, failed_volume = await dmarc_reports_repo.message_volume_for_org_since(
         db, user.organization_id, since, domain_id=domain_id
     )
+    compliance_pct = round(100 * (total_volume - failed_volume) / total_volume, 1) if total_volume else None
     if domain_id is not None:
         last_received_at = await dmarc_reports_repo.last_report_received_at_for_domain(db, domain_id)
     else:
@@ -380,7 +372,7 @@ async def dmarc_posture(
         "compliance_pct": compliance_pct,
         "current_policy": single_domain_policy,
         "policy_distribution": policy_counts if domain_id is None else None,
-        "failed_volume": int(failed_volume),
+        "failed_volume": failed_volume,
         "report_freshness_hours": report_freshness_hours,
         "new_sender_count": int(new_sender_count),
         "ready_to_enforce_count": ready_to_enforce_count,

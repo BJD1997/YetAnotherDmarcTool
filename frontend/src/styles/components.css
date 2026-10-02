@@ -742,6 +742,9 @@ select.input {
   flex-direction: column;
   justify-content: center;
 }
+.risk-tile--neutral {
+  background: var(--plane);
+}
 .risk-tile--good {
   background: var(--good-wash);
 }
@@ -842,11 +845,13 @@ select.input {
   display: grid;
   grid-template-columns: 1fr;
   gap: 0.9rem;
-  align-items: start;
+  align-items: stretch;
 }
 @media (min-width: 900px) {
   .overview-main-grid {
-    grid-template-columns: 65% 35%;
+    /* fr, not 65%/35%: percentages plus the gap added up to more than
+       100%, pushing the right column past the cards above it. */
+    grid-template-columns: minmax(0, 65fr) minmax(0, 35fr);
   }
 }
 /* Grid/flex items default to min-width: auto, meaning they refuse to

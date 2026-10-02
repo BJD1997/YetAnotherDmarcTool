@@ -105,7 +105,7 @@ export function freshnessRole(hours: number | null): RiskRole | undefined {
 
 export function RiskTile({ label, value, role }: { label: string; value: ReactNode; role?: RiskRole }) {
   return (
-    <div className={role ? `risk-tile risk-tile--${role}` : undefined}>
+    <div className={`risk-tile risk-tile--${role ?? "neutral"}`}>
       <div className="stat-tile-value num">
         {role && <span className={`dot dot--${role}`} />}
         {value}

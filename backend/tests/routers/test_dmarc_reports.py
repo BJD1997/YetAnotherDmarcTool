@@ -391,6 +391,23 @@ async def test_dmarc_posture_reports_freshness_and_failed_volume(api):
     assert body["report_freshness_hours"] is not None
 
 
+async def test_dmarc_posture_compliance_follows_selected_range(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org, verification_status=DomainVerificationStatus.verified)
+    recent = await _add_aggregate_report(owner_factory, org, domain, date_range_begin=datetime.now(timezone.utc) - timedelta(days=3))
+    await _add_aggregate_record(owner_factory, org, domain, recent, count=10, spf_result=AuthResult.pass_, dkim_result=AuthResult.pass_)
+    older = await _add_aggregate_report(owner_factory, org, domain, date_range_begin=datetime.now(timezone.utc) - timedelta(days=60))
+    await _add_aggregate_record(owner_factory, org, domain, older, count=10, spf_result=AuthResult.fail, dkim_result=AuthResult.fail)
+
+    week = (await client.get("/api/dmarc/posture?days=7")).json()
+    quarter = (await client.get("/api/dmarc/posture?days=90")).json()
+
+    assert (week["compliance_pct"], week["failed_volume"]) == (100.0, 0)
+    assert (quarter["compliance_pct"], quarter["failed_volume"]) == (50.0, 10)
+
+
 async def test_dmarc_reports_by_day_groups_and_paginates(api):
     client, owner_factory = api
     org, user = await seed_org_and_user(owner_factory)

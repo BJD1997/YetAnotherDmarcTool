@@ -203,6 +203,18 @@ export default function SenderInventory({ domainId, domains }: { domainId: strin
                   onUpdate={(body) => updateReview.mutate({ domain_id: r.domain_id, service_label: r.service_label, body })}
                 />
               ))}
+              {collapsedBlockedRows.length > 0 && (
+                // A row above the hidden ones, not a button under the table:
+                // that one moved down every time the rows opened.
+                <tr>
+                  <td colSpan={5 + (domainId ? 0 : 1)} style={{ padding: "0.35rem 0" }}>
+                    <button className="btn btn--ghost btn--sm" onClick={() => setShowBlockedGroup((v) => !v)}>
+                      {showBlockedGroup ? <ChevronDown /> : <ChevronRight />}
+                      {showBlockedGroup ? "Hide" : "Show"} blocked low-volume sources ({collapsedBlockedRows.length})
+                    </button>
+                  </td>
+                </tr>
+              )}
               {collapsedBlockedRows.length > 0 && showBlockedGroup &&
                 collapsedBlockedRows.map((r) => (
                   <SenderInventoryRowView
@@ -215,12 +227,6 @@ export default function SenderInventory({ domainId, domains }: { domainId: strin
                 ))}
             </tbody>
           </table>
-          {collapsedBlockedRows.length > 0 && (
-            <button className="btn btn--ghost btn--sm" style={{ marginTop: "0.5rem" }} onClick={() => setShowBlockedGroup((v) => !v)}>
-              {showBlockedGroup ? <ChevronDown /> : <ChevronRight />}
-              {showBlockedGroup ? "Hide" : "Show"} blocked low-volume sources ({collapsedBlockedRows.length})
-            </button>
-          )}
         </div>
       )}
     </div>
@@ -298,9 +304,10 @@ function SenderInventoryRowView({
   const [editingStatus, setEditingStatus] = useState(false);
   const [editingOwner, setEditingOwner] = useState(false);
   const [ownerDraft, setOwnerDraft] = useState(row.owner ?? "");
-  // Expandable for multi-IP grouping (as before) or whenever there's a reverse-DNS
-  // issue worth inspecting per IP — including single-IP senders.
-  const canExpand = row.source_ips.length > 1 || row.fcrdns_status !== "pass";
+  // Only senders with several IPs expand; a single IP and its reverse DNS
+  // show on the row itself.
+  const canExpand = row.source_ips.length > 1;
+  const singleIp = row.source_ips.length === 1 ? row.source_ips[0] : null;
   const colSpan = 5 + (showDomain ? 1 : 0);
 
   return (
@@ -349,6 +356,14 @@ function SenderInventoryRowView({
               </span>
             )}
           </div>
+          {singleIp && (
+            <div className="muted" style={{ fontSize: "0.8rem", marginLeft: 20, display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+              <a href={`https://ipinfo.io/${singleIp.source_ip}`} target="_blank" rel="noreferrer">
+                {singleIp.source_ip}
+              </a>
+              <FcrdnsCell ip={singleIp} />
+            </div>
+          )}
         </td>
         {showDomain && (
           <td>

@@ -424,28 +424,28 @@ async def dmarc_trend_by_day(
     return (await db.execute(query)).all()
 
 
-async def failed_message_volume_for_org_since(
+async def message_volume_for_org_since(
     db: AsyncSession, organization_id: UUID, since: datetime, *, domain_id: UUID | None = None
-) -> int:
-    """Org-wide-or-domain-scoped AND date-windowed, for /dmarc/posture — the
-    Domains list card gets its failed count from compute_domain_rating
-    instead (same windowed/blocked-excluded population the rating itself
-    is scored on, not a separate all-time query)."""
+) -> tuple[int, int]:
+    """(total, failed) messages in the window, org-wide or for one domain —
+    for /dmarc/posture's compliance and failed-volume tiles, so both follow
+    the selected range and describe the same messages. (The Domains list's
+    grade is a different, fixed-window score: see compute_domain_rating.)"""
     dmarc_pass = (DmarcAggregateRecord.dkim_result == AuthResult.pass_) | (
         DmarcAggregateRecord.spf_result == AuthResult.pass_
     )
-    query = select(func.coalesce(func.sum(case((~dmarc_pass, DmarcAggregateRecord.count), else_=0)), 0)).where(
-        DmarcAggregateRecord.organization_id == organization_id
+    query = (
+        select(
+            func.coalesce(func.sum(DmarcAggregateRecord.count), 0),
+            func.coalesce(func.sum(case((~dmarc_pass, DmarcAggregateRecord.count), else_=0)), 0),
+        )
+        .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
+        .where(DmarcAggregateRecord.organization_id == organization_id, DmarcAggregateReport.date_range_begin >= since)
     )
     if domain_id is not None:
-        query = query.join(
-            DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id
-        ).where(DmarcAggregateRecord.domain_id == domain_id, DmarcAggregateReport.date_range_begin >= since)
-    else:
-        query = query.join(
-            DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id
-        ).where(DmarcAggregateReport.date_range_begin >= since)
-    return (await db.execute(query)).scalar_one()
+        query = query.where(DmarcAggregateRecord.domain_id == domain_id)
+    total, failed = (await db.execute(query)).one()
+    return int(total), int(failed)
 
 
 async def count_new_pending_senders_since(
