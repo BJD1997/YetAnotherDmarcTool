@@ -626,3 +626,36 @@ async def test_entra_consent_callback_error():
     assert response.status_code == 200
     assert "wasn't granted" in response.text
     assert "access_denied" in response.text
+
+
+@pytest.mark.parametrize(
+    "key, expected",
+    [(None, "FERNET_KEY is not set"), ("not-a-real-key", "FERNET_KEY isn't a valid key")],
+)
+async def test_enrollment_without_a_usable_fernet_key_says_so(api, monkeypatch, key, expected):
+    """Regression: a missing or malformed FERNET_KEY made the first
+    authenticator setup fail with a bare "Internal Server Error"."""
+    from app.models.platform_admin import PlatformAdmin
+    from app.services.auth.password import hash_password
+
+    client, owner_factory = api
+    async with owner_factory() as db:
+        admin = PlatformAdmin(
+            email=f"fresh-admin+{uuid.uuid4()}@platform.example",
+            password_hash=hash_password("correct horse battery staple"),
+            is_active=True,
+        )
+        db.add(admin)
+        await db.commit()
+    await client.post("/api/admin/login", json={"email": admin.email, "password": "correct horse battery staple"})
+    secret = (await client.post("/api/admin/enroll-otp")).json()["secret"]
+
+    monkeypatch.setattr(settings, "fernet_key", key)
+    crypto_secrets._fernet.cache_clear()
+    response = await client.post(
+        "/api/admin/enroll-otp/confirm", json={"secret": secret, "code": pyotp.TOTP(secret).now()}
+    )
+
+    assert response.status_code == 503
+    assert expected in response.json()["detail"]
+    assert "openssl rand -base64 32" in response.json()["detail"]
