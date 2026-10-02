@@ -45,7 +45,7 @@ Open `https://<your-domain>/admin`, log in with your bootstrap credentials, crea
 
 A managed, autoscaling deployment (private Postgres + Key Vault, KEDA-scaled Container Apps, a Test/Small/Medium/Large sizing picker) — this branch's own addition, not yet on `main`.
 
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FBJD1997%2FYetAnotherDmarcTool%2Fv0.1.5-beta%2Fdeploy%2Fazure%2Fazuredeploy.json/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2FBJD1997%2FYetAnotherDmarcTool%2Fv0.1.5-beta%2Fdeploy%2Fazure%2FcreateUiDefinition.json)
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FBJD1997%2FYetAnotherDmarcTool%2Fmain%2Fdeploy%2Fazure%2Fazuredeploy.json/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2FBJD1997%2FYetAnotherDmarcTool%2Fmain%2Fdeploy%2Fazure%2FcreateUiDefinition.json)
 
 Compiled and cross-checked (`bicep build` clean, 0 errors/warnings) but not yet tested against a live subscription — the manual `az deployment group create` path is the fallback if anything doesn't resolve as expected. Full parameters, prerequisites, and that manual path → **[`deploy/azure/README.md`](deploy/azure/README.md)** · narrative overview → **[Deploying on Azure Container Apps](https://github.com/BJD1997/YetAnotherDmarcTool/wiki/Deploying-on-Azure-Container-Apps)**.
 
