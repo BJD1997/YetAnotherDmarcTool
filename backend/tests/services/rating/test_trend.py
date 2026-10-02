@@ -48,3 +48,32 @@ def test_recovery_trends_up():
 
 def test_too_little_mail_is_insufficient_data():
     assert compute_trend(series((4, 4), [(0, 0)] * 5 + [(5, 5), (5, 5)]), TODAY).state == "insufficient_data"
+
+
+# Small domains (~2 messages a day): percentages swing a lot, so a trend
+# needs an exact test, at least 3 more failures than usual, and 3 days.
+
+def test_small_domain_single_failure_is_stable():
+    assert compute_trend(series((2, 2), [(2, 2)] * 6 + [(2, 1)]), TODAY).state == "stable"
+
+
+def test_small_domain_failing_on_three_days_trends_down():
+    result = compute_trend(series((2, 2), [(2, 2)] * 4 + [(2, 1)] * 3), TODAY)
+    assert result.state == "down"
+
+
+def test_small_domain_with_usual_failures_is_not_flagged():
+    # A few failures every week already (forwarding, say): 3 this week is
+    # not 3 more than usual, so it's not a trend.
+    baseline = [DayCounts(TODAY - timedelta(days=34 - i), 2, 1 if i % 9 == 0 else 2) for i in range(28)]
+    recent = [DayCounts(TODAY - timedelta(days=6 - i), 2, 1 if i in (1, 3, 5) else 2) for i in range(7)]
+    assert compute_trend(baseline + recent, TODAY).state == "stable"
+
+
+def test_small_domain_two_bad_days_is_stable():
+    assert compute_trend(series((2, 2), [(2, 2)] * 5 + [(2, 0)] * 2), TODAY).state == "stable"
+
+
+def test_ten_messages_a_week_is_enough_nine_is_not():
+    assert compute_trend(series((2, 2), [(2, 2)] * 5 + [(0, 0), (0, 0)]), TODAY).state == "stable"
+    assert compute_trend(series((2, 2), [(2, 2)] * 4 + [(1, 1), (0, 0), (0, 0)]), TODAY).state == "insufficient_data"
