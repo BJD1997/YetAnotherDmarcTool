@@ -15,6 +15,7 @@ from app.models.hosted_reports_poll_state import HostedReportsPollState
 from app.models.job_run import JobRun
 from app.models.mailbox_connection import MailboxConnection
 from app.models.mfa_pending_challenge import MfaPendingChallenge
+from app.models.notification import Notification
 from app.models.organization import Organization
 from app.models.password_setup_token import PasswordSetupToken
 from app.models.platform_admin import PlatformAdmin
@@ -43,6 +44,7 @@ __all__ = [
     "JobRun",
     "MailboxConnection",
     "MfaPendingChallenge",
+    "Notification",
     "Organization",
     "PasswordSetupToken",
     "PlatformAdmin",
