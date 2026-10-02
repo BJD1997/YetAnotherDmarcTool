@@ -66,10 +66,16 @@ const STATUS_FILTERS: { key: StatusFilter; label: string }[] = [
   { key: "pass", label: "Passing" },
 ];
 
+// "pending" (no result yet, e.g. waiting for TLS-RPT reports) is nothing to
+// act on, so it only shows under "All".
+function needsAttention(status: CheckStatus): boolean {
+  return status !== "pass" && status !== "pending";
+}
+
 function matchesFilter(status: CheckStatus, filter: StatusFilter): boolean {
   if (filter === "all") return true;
   if (filter === "pass") return status === "pass";
-  return status !== "pass";
+  return needsAttention(status);
 }
 
 function timeAgo(iso: string): string {
@@ -229,7 +235,8 @@ export default function DnsChecksTab() {
             }
 
             const groupStatuses = typesPresent.map((t) => worstStatus(byType.get(t)!));
-            const groupWarn = groupStatuses.filter((s) => s !== "pass").length;
+            const groupWarn = groupStatuses.filter(needsAttention).length;
+            const groupPending = groupStatuses.filter((s) => s === "pending").length;
             const groupPass = groupStatuses.filter((s) => s === "pass").length;
             const visibleTypes = typesPresent.filter((t) => matchesFilter(worstStatus(byType.get(t)!), filter));
             if (visibleTypes.length === 0) return null;
@@ -240,6 +247,7 @@ export default function DnsChecksTab() {
                   <strong style={{ fontSize: "0.95rem" }}>{category.label}</strong>
                   <span className="muted" style={{ fontSize: "0.78rem" }}>
                     {groupWarn > 0 ? `${groupWarn} to review · ` : ""}
+                    {groupPending > 0 ? `${groupPending} pending · ` : ""}
                     {groupPass} passing
                   </span>
                 </div>
@@ -300,7 +308,10 @@ function CheckRow({
     <div
       style={{
         border: "1px solid var(--border)",
-        borderLeft: `3px solid var(--${status === "pass" ? "good" : status === "warn" ? "warning" : "critical"}-text)`,
+        borderLeft:
+          status === "pending"
+            ? "3px solid var(--border-strong)"
+            : `3px solid var(--${status === "pass" ? "good" : status === "warn" ? "warning" : "critical"}-text)`,
         borderRadius: "var(--radius-sm)",
         padding: "0.65rem 0.85rem",
       }}
