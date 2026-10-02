@@ -34,6 +34,7 @@ from app.services.dns_checks.scheduled_recheck import DNS_CHECK_SWEEP_TICK_SECON
 from app.services.jobs import queue
 from app.services.jobs.leader import LeaderLock
 from app.services.jobs.queue import prune_finished_jobs
+from app.services.notifications.refresh import NOTIFICATIONS_REFRESH_INTERVAL_SECONDS, run_notifications_refresh
 from app.services.rating.trend_refresh import TREND_REFRESH_INTERVAL_SECONDS, run_trend_refresh
 from app.services.retention.forensic_purge import run_retention_purge
 from app.services.update_check import run_update_check
@@ -66,6 +67,7 @@ _SINGLETON_INTERVALS = {
     "rate_limit_prune": RATE_LIMIT_PRUNE_INTERVAL_SECONDS,
     "background_jobs_prune": BACKGROUND_JOBS_PRUNE_INTERVAL_SECONDS,
     "trend_refresh": TREND_REFRESH_INTERVAL_SECONDS,
+    "notifications_refresh": NOTIFICATIONS_REFRESH_INTERVAL_SECONDS,
 }
 
 
@@ -92,6 +94,7 @@ def _register_handlers() -> None:
     queue.register_handler("rate_limit_prune", _ignoring_payload(prune_rate_limit_hits))
     queue.register_handler("background_jobs_prune", _ignoring_payload(prune_finished_jobs))
     queue.register_handler("trend_refresh", _ignoring_payload(run_trend_refresh))
+    queue.register_handler("notifications_refresh", _ignoring_payload(run_notifications_refresh))
 
 
 # --- leader: enqueue recurring work on a cadence ---
