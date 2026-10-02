@@ -4,6 +4,7 @@ import { useOutletContext } from "react-router-dom";
 import { ApiError } from "../../api/client";
 import type { Organization, RatingWindowDays, ReportSenderCheck, SpfAllQualifierMode } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
+import { ASK_AI_EXPLANATION, AskAiToggle } from "../../components/settings/AskAiToggle";
 import MailboxConnectionSection from "../../components/settings/MailboxConnectionSection";
 import { useUpdateOrganization } from "../../hooks/useOrganization";
 
@@ -83,7 +84,7 @@ export default function GeneralTab() {
           <hr className="divider" />
           <h3 className="section-title">Ask AI</h3>
           <p className="section-hint">{ASK_AI_EXPLANATION}</p>
-          <AskAiSection org={org} />
+          <AskAiToggle org={org} />
 
           <hr className="divider" />
           <h3 className="section-title">Report sender check</h3>
@@ -102,35 +103,6 @@ export default function GeneralTab() {
       )}
     </section>
   );
-}
-
-export const ASK_AI_EXPLANATION =
-  "Adds an Ask AI button to issues, which opens a ready-made question in Claude or ChatGPT, or copies it for any other AI. You see the exact text before it's sent, under your own AI account. It holds only that issue's facts: domain names, public DNS records, sender names and IPs, and pass rates. Never your organization's name, email addresses or raw reports.";
-
-export function AskAiToggle({ org }: { org: Organization }) {
-  const [error, setError] = useState<string | null>(null);
-  const setEnabled = useUpdateOrganization(
-    () => setError(null),
-    (err) => setError(err instanceof ApiError ? err.message : "failed to save"),
-  );
-  return (
-    <div style={{ display: "grid", gap: "0.5rem" }}>
-      <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", cursor: "pointer" }}>
-        <input
-          type="checkbox"
-          checked={org.ask_ai_enabled}
-          disabled={setEnabled.isPending}
-          onChange={(e) => setEnabled.mutate({ name: org.name, ask_ai_enabled: e.target.checked })}
-        />
-        Show Ask AI buttons for this organization
-      </label>
-      {error && <div className="alert alert--critical" style={{ margin: 0 }}>{error}</div>}
-    </div>
-  );
-}
-
-function AskAiSection({ org }: { org: Organization }) {
-  return <AskAiToggle org={org} />;
 }
 
 const RATING_WINDOWS: RatingWindowDays[] = [30, 60, 90, 180];

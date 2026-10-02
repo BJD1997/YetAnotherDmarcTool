@@ -14,8 +14,11 @@ import { useGenerateHostedReportAddress, useOnboardingStatus } from "../hooks/us
 import { useCurrentOrganization } from "../hooks/useOrganization";
 import { useRecheckDns } from "../hooks/useDnsChecks";
 import { useRuaCheck } from "../hooks/useDomainInsights";
+import { ASK_AI_EXPLANATION, AskAiToggle } from "../components/settings/AskAiToggle";
+import { useAuth } from "../auth/AuthContext";
+import type { Organization } from "../api/types";
 
-const STEP_LABELS = ["Welcome", "Mailbox", "Domain", "Verify", "DNS baseline", "Reporting", "Waiting room"];
+const STEP_LABELS = ["Welcome", "Mailbox", "Domain", "Verify", "DNS baseline", "Reporting", "AI help", "Waiting room"];
 
 function deriveStep(status: OnboardingStatus, hasEntraTenant: boolean): number {
   // No "have they seen Welcome" flag is persisted anywhere (deliberately
@@ -97,7 +100,8 @@ export default function Onboarding() {
         {step === 4 && <VerifyStep domain={focusDomain} onBack={() => setStep(3)} onNext={() => setStep(5)} />}
         {step === 5 && <BaselineStep domain={focusDomain} onBack={() => setStep(4)} onNext={() => setStep(6)} />}
         {step === 6 && <ReportingStep domain={focusDomain} onBack={() => setStep(5)} onNext={() => setStep(7)} />}
-        {step === 7 && <WaitingRoomStep domain={focusDomain} onBack={() => setStep(6)} />}
+        {step === 7 && org && <AskAiStep org={org} onBack={() => setStep(6)} onNext={() => setStep(8)} />}
+        {step === 8 && <WaitingRoomStep domain={focusDomain} onBack={() => setStep(7)} />}
       </div>
     </section>
   );
@@ -118,6 +122,23 @@ function StepNav({ onBack, onNext, nextLabel = "Continue" }: { onBack?: () => vo
           <ArrowRight />
         </button>
       )}
+    </div>
+  );
+}
+
+function AskAiStep({ org, onBack, onNext }: { org: Organization; onBack: () => void; onNext: () => void }) {
+  const { user } = useAuth();
+  return (
+    <div>
+      <h2 style={{ marginTop: 0 }}>Help from an AI assistant (optional)</h2>
+      <p className="section-hint">{ASK_AI_EXPLANATION}</p>
+      {user?.role === "org_admin" ? (
+        <AskAiToggle org={org} />
+      ) : (
+        <p className="muted">An org admin can turn this on under Settings → General.</p>
+      )}
+      <p className="muted" style={{ fontSize: "0.82rem" }}>Off unless you turn it on; you can change it any time in Settings → General.</p>
+      <StepNav onBack={onBack} onNext={onNext} />
     </div>
   );
 }
