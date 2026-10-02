@@ -2,21 +2,25 @@ import { useLocation } from "react-router-dom";
 import { Sparkles, X } from "lucide-react";
 
 import { useAuth } from "../auth/AuthContext";
+import { useOnboardingStatus } from "../hooks/useOnboarding";
 import { useCurrentOrganization, useUpdateOrganization } from "../hooks/useOrganization";
 
 /** Asks an org admin once whether to turn on Ask AI, while the
  *  organization hasn't answered (ask_ai_enabled is null). Closing it is a
  *  "no" and is saved, so it doesn't come back; the setting stays in
- *  Settings → General either way. Not on the onboarding wizard, which has
- *  its own step for this. */
+ *  Settings → General either way. Not until setup is done (a mailbox and a
+ *  verified domain): the onboarding wizard has its own step for this, and
+ *  setup is busy enough without it. */
 export default function AskAiInvite() {
   const { user } = useAuth();
   const { data: org } = useCurrentOrganization({ enabled: !!user });
   const location = useLocation();
   const answer = useUpdateOrganization();
+  const { data: onboarding } = useOnboardingStatus();
 
   if (!org || user?.role !== "org_admin" || org.ask_ai_enabled !== null || org.is_demo_read_only) return null;
-  if (location.pathname.startsWith("/onboarding")) return null;
+  const setupDone = !!onboarding && onboarding.has_mailbox && onboarding.has_verified_domain;
+  if (!setupDone || location.pathname.startsWith("/onboarding")) return null;
 
   const choose = (enabled: boolean) => answer.mutate({ name: org.name, ask_ai_enabled: enabled });
 

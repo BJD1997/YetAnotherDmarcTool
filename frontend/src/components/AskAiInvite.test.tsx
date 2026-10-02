@@ -14,14 +14,21 @@ vi.mock("../auth/AuthContext", () => ({ useAuth: () => ({ user: { role: role.val
 const getMock = vi.mocked(api.get);
 const patchMock = vi.mocked(api.patch);
 
+const setup = vi.hoisted(() => ({ done: true }));
+
 function org(ask_ai_enabled: boolean | null) {
-  getMock.mockResolvedValue({ name: "Org", ask_ai_enabled, is_demo_read_only: false });
+  getMock.mockImplementation(async (url: string) =>
+    url === "/onboarding/status"
+      ? { has_mailbox: setup.done, has_verified_domain: setup.done }
+      : { name: "Org", ask_ai_enabled, is_demo_read_only: false },
+  );
 }
 
 beforeEach(() => {
   getMock.mockReset();
   patchMock.mockReset().mockResolvedValue({});
   role.value = "org_admin";
+  setup.done = true;
 });
 
 describe("AskAiInvite", () => {
@@ -50,6 +57,14 @@ describe("AskAiInvite", () => {
     org(null);
     renderWithAppProviders(<AskAiInvite />);
     await waitFor(() => expect(getMock).toHaveBeenCalled());
+    expect(screen.queryByText(/Get help from an AI assistant/)).not.toBeInTheDocument();
+  });
+
+  it("waits until setup is done", async () => {
+    setup.done = false;
+    org(null);
+    renderWithAppProviders(<AskAiInvite />);
+    await waitFor(() => expect(getMock).toHaveBeenCalledWith("/onboarding/status"));
     expect(screen.queryByText(/Get help from an AI assistant/)).not.toBeInTheDocument();
   });
 });
