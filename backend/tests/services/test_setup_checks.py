@@ -24,7 +24,7 @@ def clean_settings(monkeypatch):
         "hosted_reports_mailbox_address": None, "hosted_reports_tenant_id": None,
         "cloudflare_api_token": None, "cloudflare_zone_id": None,
         "deployment_platform": None,
-        "updater_url": None, "updater_shared_secret": None,
+        "updater_url": None, "updater_shared_secret": None, "starttls_check_mode": "tls_rpt",
         "fernet_key": Fernet.generate_key().decode(),
     }.items():
         monkeypatch.setattr(settings, name, value)
@@ -155,3 +155,12 @@ def test_tips_for_optional_integrations(clean_settings):
     clean_settings.setattr(settings, "cloudflare_api_token", "tok")
     clean_settings.setattr(settings, "cloudflare_zone_id", "zone")
     assert setup_checks.config_tips() == []
+
+
+def test_starttls_probe_on_azure(clean_settings):
+    clean_settings.setattr(settings, "starttls_check_enabled", True)
+    clean_settings.setattr(settings, "starttls_check_mode", "probe")
+    clean_settings.setattr(settings, "deployment_platform", "azure-container-apps")
+    assert "STARTTLS_CHECK_MODE=tls_rpt" in problems()
+    clean_settings.setattr(settings, "starttls_check_mode", "tls_rpt")
+    assert setup_checks.config_problems() == []

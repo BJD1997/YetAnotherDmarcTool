@@ -110,6 +110,12 @@ def config_problems() -> list[str]:
                 "Cloudflare settings are only used with the hosted reporting mailbox "
                 "(HOSTED_REPORTS_MAILBOX_ADDRESS), which isn't set, so they do nothing."
             )
+    if settings.deployment_platform == "azure-container-apps" and settings.effective_starttls_mode == "probe":
+        found.append(
+            "The STARTTLS check is set to probe port 25, which Azure blocks, so it fails for every domain. "
+            "Set STARTTLS_CHECK_MODE=tls_rpt (results from TLS-RPT reports) or off on the api and worker, "
+            "or redeploy with starttlsCheckMode=tls_rpt."
+        )
     # The Docker Compose files always point the api at the updater; it only
     # accepts requests carrying this secret. (Portainer and Azure update
     # another way and don't set UPDATER_URL.)
