@@ -124,9 +124,12 @@ How it's locked down:
   this resource group's container apps and jobs: read, update, start, and read
   job runs. No delete, no exec, no assigning identities.
 
-**Test the updater** (same page, Azure only) runs every one of those steps on
+**Run test update** (same page, Azure only) runs every one of those steps on
 the version you already run, so you can check the permissions before a real
-update exists. Nothing changes; the app restarts briefly.
+update. Nothing changes; the app restarts briefly. It's hidden unless turned
+on: redeploy with `enableTestUpdate=true`, or set `UPDATE_REHEARSAL_ENABLED`
+to `true` on the `<namePrefix>-api` container app (Containers → Environment
+variables). Turn it off again afterwards.
 
 Creating those custom roles needs **Owner** or **User Access Administrator**
 on the resource group at deployment time. Role assignments can take a few

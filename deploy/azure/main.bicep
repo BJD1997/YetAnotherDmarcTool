@@ -78,6 +78,10 @@ param hostedReportsMailboxAddress string = ''
 param cloudflareApiToken string = ''
 param cloudflareZoneId string = ''
 
+// --- "Run test update" in the admin console (rehearses an in-app update on the running version) ---
+@description('Show "Run test update" under admin console → Updates. Off by default; turn on to check the updater after a redeploy or a permission change.')
+param enableTestUpdate bool = false
+
 // --- optional custom domain (bind the managed cert post-deploy; see README) ---
 param publicBaseUrlOverride string = ''
 
@@ -360,6 +364,7 @@ module apps 'modules/apps.bicep' = {
     hostedReportsMailboxAddress: deployHostedReports ? hostedReportsMailboxAddress : ''
     cloudflareZoneId: deployCloudflareSecret ? cloudflareZoneId : ''
     deployCloudflareSecret: deployCloudflareSecret
+    enableTestUpdate: enableTestUpdate
   }
   // Apps must not start until the schema + dmarc_app role exist.
   dependsOn: [

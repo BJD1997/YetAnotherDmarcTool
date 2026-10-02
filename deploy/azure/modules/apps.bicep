@@ -53,6 +53,8 @@ param deployCloudflareSecret bool = false
 // (see updater.bicep); the job's resource id is fixed by naming.
 param triggerIdentityId string
 param triggerClientId string
+@description('Show "Run test update" in the admin console.')
+param enableTestUpdate bool = false
 
 var hostedReportsEnv = empty(hostedReportsMailboxAddress) ? [] : [
   {
@@ -157,6 +159,10 @@ var apiEnv = concat(
     {
       name: 'AZURE_UPDATE_CLIENT_ID'
       value: triggerClientId
+    }
+    {
+      name: 'UPDATE_REHEARSAL_ENABLED'
+      value: enableTestUpdate ? 'true' : 'false'
     }
   ],
   deployEntraSsoSecret ? [

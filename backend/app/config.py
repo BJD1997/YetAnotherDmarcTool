@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     # its parameters. Turn on for local development.
     api_docs_enabled: bool = False
 
+    # "Run test update" on Azure (admin console → Updates): rehearses a full
+    # in-app update on the running version. Off by default; turn on to check
+    # the updater after a redeploy or a permission change.
+    update_rehearsal_enabled: bool = False
+
     # Sessions (Phase 1)
     session_cookie_name: str = "dmarc_session"
     platform_admin_session_cookie_name: str = "dmarc_admin_session"

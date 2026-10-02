@@ -91,6 +91,14 @@ async def test_test_update_rehearses_the_running_version_on_azure(api, monkeypat
 
     monkeypatch.setattr(settings, "azure_updater_job_id", "/subscriptions/s/resourceGroups/rg/providers/Microsoft.App/jobs/yadt-updater")
     monkeypatch.setattr(settings, "azure_update_client_id", "trigger-client")
+
+    # On Azure but not switched on: hidden and refused.
+    monkeypatch.setattr(settings, "update_rehearsal_enabled", False)
+    assert (await client.get("/api/admin/updates")).json()["rehearsal_available"] is False
+    assert (await client.post("/api/admin/updates/rehearse")).status_code == 409
+    assert triggered == []
+
+    monkeypatch.setattr(settings, "update_rehearsal_enabled", True)
     assert (await client.get("/api/admin/updates")).json()["rehearsal_available"] is True
     assert (await client.post("/api/admin/updates/rehearse")).status_code == 202
     assert triggered == ["v0.1.5-rc3"]

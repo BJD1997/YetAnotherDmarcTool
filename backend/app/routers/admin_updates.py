@@ -41,8 +41,9 @@ def _status_out(state: UpdateCheckState) -> dict:
         # False: no updater sidecar here (Azure, Portainer) — the console shows
         # how this deployment updates instead of an "Update now" button.
         "self_update_available": settings.self_update_available,
-        # Azure only: rehearse the whole update on the running version.
-        "rehearsal_available": settings.azure_self_update_available and not dev_build,
+        # Azure only, and only with UPDATE_REHEARSAL_ENABLED: rehearse the
+        # whole update on the running version.
+        "rehearsal_available": settings.azure_self_update_available and settings.update_rehearsal_enabled and not dev_build,
         "deployment_platform": settings.deployment_platform,
         "azure_resource_group": settings.azure_resource_group,
     }
@@ -121,6 +122,8 @@ async def rehearse(
     other than the running one."""
     if not settings.azure_self_update_available:
         raise HTTPException(status.HTTP_409_CONFLICT, "a test update is only available on Azure deployments")
+    if not settings.update_rehearsal_enabled:
+        raise HTTPException(status.HTTP_409_CONFLICT, "test updates are turned off (UPDATE_REHEARSAL_ENABLED)")
     if update_check.is_dev_build(settings.app_version):
         raise HTTPException(status.HTTP_409_CONFLICT, "running a development build — nothing to rehearse")
     state = await update_check.get_or_create_state(db)
