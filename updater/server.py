@@ -28,6 +28,8 @@ import threading
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import portainer_update
+
 WORKSPACE = "/workspace"
 # The running app's own health endpoint, which reports its baked-in version.
 # The api is this sidecar's only legitimate caller, so if it can't be reached
@@ -192,6 +194,17 @@ def _run_update(version: str) -> None:
     _self_update(version, compose, env)
 
 
+def _run_portainer_update(version: str) -> None:
+    """Portainer mode: Portainer redeploys the whole stack, this updater
+    included, so this process usually ends before the answer comes back."""
+    print(f"asking Portainer to redeploy the stack on {version}", flush=True)
+    try:
+        portainer_update.Portainer.from_env().redeploy(version)
+        print(f"update to {version} completed successfully", flush=True)
+    except portainer_update.PortainerError as exc:
+        print(f"update to {version} failed: {exc}", flush=True)
+
+
 def _self_update(version: str, compose: list[str], env: dict) -> None:
     """Replaces this container with the new updater image. It can't
     recreate itself directly (stopping this container kills the compose
@@ -254,6 +267,14 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"error": "missing or invalid 'version' in request body"}).encode())
             return
 
+        problem = portainer_update.config_problem()
+        if problem:
+            self.send_response(503)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": problem}).encode())
+            return
+
         refusal = check_requested_version(version, _running_version())
         if refusal is not None:
             self.send_response(409)
@@ -271,7 +292,8 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json.dumps({"status": "started", "version": version}).encode())
 
-        threading.Thread(target=_run_update, args=(version,), daemon=True).start()
+        target = _run_portainer_update if portainer_update.portainer_mode() else _run_update
+        threading.Thread(target=target, args=(version,), daemon=True).start()
 
     def log_message(self, format: str, *args) -> None:
         print(f"{self.address_string()} - {format % args}", flush=True)
@@ -280,7 +302,11 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     if not SHARED_SECRET:
         print("WARNING: UPDATER_SHARED_SECRET is unset — every request will be rejected", flush=True)
-    print(f"configured for {COMPOSE_FILE} (env: {ENV_FILE})", flush=True)
+    if portainer_update.portainer_mode():
+        problem = portainer_update.config_problem()
+        print(f"SETUP PROBLEM: {problem}" if problem else "configured for Portainer stack updates", flush=True)
+    else:
+        print(f"configured for {COMPOSE_FILE} (env: {ENV_FILE})", flush=True)
     server = ThreadingHTTPServer(("0.0.0.0", 9999), Handler)
     print("updater listening on :9999", flush=True)
     server.serve_forever()
