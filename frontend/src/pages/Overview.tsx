@@ -125,7 +125,8 @@ export default function Overview() {
       <div className="overview-main-grid">
         <TrendChart domainId={domainId} days={days} />
         <div className="overview-side-stack">
-          <div className="card">
+          {/* Scrolls inside the same height as the trend card beside it. */}
+          <div className="card overview-widget overview-widget--scroll">
             <ActionQueue domainId={domainId} />
             {!domainId && <DomainsNeedingAttention />}
           </div>

@@ -862,6 +862,60 @@ select.input {
   min-width: 0;
 }
 
+/* The trend card and the action-queue card share one fixed height on wide
+   screens, so hovering the chart, switching to its table, or a long queue
+   never changes the row's height or pushes the sender inventory down:
+   the table and the queue scroll inside their card instead. */
+.overview-widget {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.overview-widget-fill {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.overview-widget-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+/* Stacked (phone): the trend card alone keeps a fixed height, chart or table. */
+.trend-card {
+  height: 24rem;
+}
+.trend-legend {
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+}
+.trend-plot {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+@media (min-width: 900px) {
+  .overview-main-grid {
+    height: 27rem;
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .overview-main-grid > .card,
+  .overview-side-stack,
+  .overview-side-stack > .card {
+    height: 100%;
+  }
+  .overview-widget--scroll {
+    overflow-y: auto;
+  }
+}
+.table--sticky-head thead th {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  z-index: 1;
+}
+
 .overview-side-stack {
   display: flex;
   flex-direction: column;
