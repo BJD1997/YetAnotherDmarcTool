@@ -1,14 +1,17 @@
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request, status
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.exc import StatementError
 
 from app.config import settings
-from app.db.session import assert_rls_enforced
+from app.db.rls import set_platform_admin_context
+from app.db.session import assert_rls_enforced, async_session_factory
 from app.middleware.csrf import enforce_csrf_header
 from app.middleware.demo_read_only import enforce_demo_read_only
 from app.middleware.mta_sts_routing import restrict_mta_sts_hostname
@@ -31,12 +34,34 @@ from app.routers import (
     sign_in_events,
     users,
 )
+from app.services.auth.admin_access import admin_access_problem
+from app.services.crypto.secrets import SecretKeyNotConfigured, fernet_key_problem
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+logger = logging.getLogger(__name__)
+
+async def _warn_if_admin_console_unreachable() -> None:
+    try:
+        async with async_session_factory() as db:
+            await set_platform_admin_context(db, is_admin=True)
+            problem = await admin_access_problem(db)
+            await db.rollback()
+    except Exception:
+        logger.exception("couldn't check whether anyone can sign in to the admin console")
+        return
+    if problem:
+        logger.warning("SETUP PROBLEM: %s", problem)
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     await assert_rls_enforced()
+    # Warn loudly rather than refuse to start: the app works until someone
+    # sets up two-factor sign-in, and that then says what to fix too.
+    problem = fernet_key_problem()
+    if problem:
+        logger.error("SETUP PROBLEM: %s", problem)
+    await _warn_if_admin_console_unreachable()
     yield
 
 
@@ -47,6 +72,25 @@ app = FastAPI(
     redoc_url="/redoc" if settings.api_docs_enabled else None,
     openapi_url="/openapi.json" if settings.api_docs_enabled else None,
 )
+
+def _key_problem_response(exc: Exception) -> JSONResponse:
+    return JSONResponse({"detail": str(exc)}, status_code=503)
+
+
+@app.exception_handler(SecretKeyNotConfigured)
+async def _secret_key_not_configured(_request: Request, exc: SecretKeyNotConfigured) -> JSONResponse:
+    return _key_problem_response(exc)
+
+
+@app.exception_handler(StatementError)
+async def _statement_error(_request: Request, exc: StatementError) -> Response:
+    # Encrypting a two-factor secret happens while the row is written, so a
+    # FERNET_KEY problem arrives wrapped in SQLAlchemy's StatementError.
+    if isinstance(exc.orig, SecretKeyNotConfigured):
+        return _key_problem_response(exc.orig)
+    logger.error("database error", exc_info=exc)
+    return PlainTextResponse("Internal Server Error", status_code=500)
+
 
 app.middleware("http")(add_security_headers)
 app.middleware("http")(enforce_csrf_header)
