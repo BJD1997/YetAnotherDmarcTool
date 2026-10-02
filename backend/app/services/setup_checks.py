@@ -24,7 +24,7 @@ PREFIX = "SETUP PROBLEM: "
 TIP_PREFIX = "SETUP TIP: "
 _CONFIG_DOCS = "https://github.com/BJD1997/YetAnotherDmarcTool/wiki/Configuration-Reference"
 DEFAULT_PUBLIC_BASE_URL = "http://localhost:8000"
-MIN_UPDATER_SECRET_LENGTH = 32
+UPDATER_TOKEN_MIN_CHARS = 32
 _ENV_HINT = "in the environment (the .env file, or the stack's environment variables in Portainer) and redeploy"
 # Requests from inside the stack (health checks, the updater) aren't judged.
 _UNJUDGED_PATHS = ("/api/health", "/api/update-request")
@@ -53,9 +53,9 @@ def _together(*pairs: tuple[str, object]) -> bool:
 
 def config_problems() -> list[str]:
     found: list[str] = []
-    key = fernet_key_problem()
-    if key:
-        found.append(key)
+    fernet_problem = fernet_key_problem()
+    if fernet_problem:
+        found.append(fernet_problem)
 
     url = settings.public_base_url.rstrip("/")
     host = urlsplit(url).netloc
@@ -119,9 +119,11 @@ def config_problems() -> list[str]:
             "rejects every request without it. Generate one with: openssl rand -hex 32 — and set it "
             f"{_ENV_HINT}."
         )
-    elif settings.updater_url and len(settings.updater_shared_secret or "") < MIN_UPDATER_SECRET_LENGTH:
+    elif settings.updater_url and len(settings.updater_shared_secret or "") < UPDATER_TOKEN_MIN_CHARS:
+        # The limit is written out, not interpolated: a value derived from the
+        # secret's settings shouldn't flow into a log line, even its length rule.
         found.append(
-            f"UPDATER_SHARED_SECRET is too short (under {MIN_UPDATER_SECRET_LENGTH} characters). It lets the "
+            "UPDATER_SHARED_SECRET is too short (under 32 characters). It lets the "
             "api replace the app's containers, so it should be hard to guess: generate one with: "
             f"openssl rand -hex 32 — and set it {_ENV_HINT}."
         )
