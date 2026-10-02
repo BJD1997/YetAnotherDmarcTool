@@ -361,6 +361,32 @@ async def daily_totals_excluding_blocked(db: AsyncSession, domain_id: UUID, sinc
     return [(d.date(), int(total), int(passed)) for d, total, passed in rows]
 
 
+async def auth_domains_for_ips(
+    db: AsyncSession, domain_id: UUID, ips: list[str], since: datetime
+) -> tuple[dict[str, int], dict[str, int]]:
+    """({spf domain: messages}, {dkim domain: messages}) for the domain's mail
+    from `ips` since `since`, from the reports' auth_results — which domains
+    a sender actually authenticates as, for Ask AI's sender prompts."""
+    rows = await db.execute(
+        select(DmarcAggregateRecord.auth_results, DmarcAggregateRecord.count)
+        .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
+        .where(
+            DmarcAggregateRecord.domain_id == domain_id,
+            DmarcAggregateRecord.source_ip.in_(ips),
+            DmarcAggregateReport.date_range_begin >= since,
+        )
+    )
+    spf: dict[str, int] = {}
+    dkim: dict[str, int] = {}
+    for auth_results, count in rows:
+        for target, key in ((spf, "spf"), (dkim, "dkim")):
+            for entry in (auth_results or {}).get(key) or []:
+                name = (entry.get("domain") or "").lower()
+                if name:
+                    target[name] = target.get(name, 0) + count
+    return spf, dkim
+
+
 async def latest_published_policy_for_domain(db: AsyncSession, domain_id: UUID) -> str | None:
     return (
         await db.execute(
