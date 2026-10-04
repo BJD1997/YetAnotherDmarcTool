@@ -26,9 +26,9 @@ from app.services.dmarc_narrative import dkim_narratives, spf_narratives
 from app.services.dns_checks.dmarc_record import DmarcRecordInfo, check_rua_destination, fetch_current_dmarc_record
 from app.services.dns_checks.resolver import DnsLookupError
 from app.services.notifications.sources import detected_domain_items
+from app.services.overview.posture import compute_posture
 from app.services.rating.domain_rating import compute_domain_rating, domain_policy_readiness, policy_stability_days
 from app.services.rating.policy_recommendation import build_policy_recommendation
-from app.services.rating.score import DomainRating
 from app.services.source_identification.service_identifier import identify_many
 
 router = APIRouter(tags=["dmarc-reports"])
@@ -357,57 +357,7 @@ async def dmarc_posture(
         domains = [await get_owned_domain(db, domain_id, user.organization_id)]
     else:
         domains = await list_domains_for_org(db, user.organization_id)
-
-    since = datetime.now(timezone.utc) - timedelta(days=days)
-
-    policy_counts: dict[str, int] = {}
-    single_domain_policy: str | None = None
-    ready_to_enforce_count = 0
-
-    for domain in domains:
-        rating: DomainRating | None = None
-        total: int = 0
-        if domain.verification_status == DomainVerificationStatus.verified:
-            rating, total, _failed = await compute_domain_rating(db, domain)
-
-        readiness = await domain_policy_readiness(db, domain, rating=rating, total_volume=total)
-        if domain_id is not None:
-            single_domain_policy = readiness.latest_policy
-        elif readiness.latest_policy is not None:
-            policy_counts[readiness.latest_policy] = policy_counts.get(readiness.latest_policy, 0) + 1
-        if readiness.ready:
-            ready_to_enforce_count += 1
-
-    # The DMARC pass rate of the messages in the selected range — not the
-    # domains' grade, which also weighs DNS checks over a fixed 90 days and
-    # so never moved with the range.
-    total_volume, failed_volume = await dmarc_reports_repo.message_volume_for_org_since(
-        db, user.organization_id, since, domain_id=domain_id
-    )
-    compliance_pct = round(100 * (total_volume - failed_volume) / total_volume, 1) if total_volume else None
-    if domain_id is not None:
-        last_received_at = await dmarc_reports_repo.last_report_received_at_for_domain(db, domain_id)
-    else:
-        last_received_at = await dmarc_reports_repo.last_report_received_at_for_org(db, user.organization_id)
-    new_sender_count = await dmarc_reports_repo.count_new_pending_senders_since(
-        db, user.organization_id, since, domain_id=domain_id
-    )
-
-    report_freshness_hours = (
-        round((datetime.now(timezone.utc) - last_received_at).total_seconds() / 3600, 1)
-        if last_received_at is not None
-        else None
-    )
-
-    return {
-        "compliance_pct": compliance_pct,
-        "current_policy": single_domain_policy,
-        "policy_distribution": policy_counts if domain_id is None else None,
-        "failed_volume": failed_volume,
-        "report_freshness_hours": report_freshness_hours,
-        "new_sender_count": int(new_sender_count),
-        "ready_to_enforce_count": ready_to_enforce_count,
-    }
+    return await compute_posture(db, user.organization_id, domains, domain_id, days)
 
 
 @router.get("/domains/{domain_id}/dmarc/reports/by-day")
