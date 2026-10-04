@@ -52,22 +52,18 @@ def _parse_agg_datetime(value: str) -> datetime:
     return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
 
 
-async def write_aggregate_report(
-    db: AsyncSession,
+def aggregate_report_row(
     organization_id: uuid.UUID,
+    domain_id: uuid.UUID | None,
     parsed: dict,
     source_message_id: str,
     sender: SenderAuth = UNCHECKED,
     verified: bool | None = None,
-) -> bool:
-    """Returns True if newly written, False if this exact report was already
-    ingested (natural key: organization + org_name + report_id + published domain,
-    per RFC 7489's own dedup guidance)."""
+) -> DmarcAggregateReport:
+    """The report-level row for a parsed aggregate report (no records)."""
     metadata = parsed["report_metadata"]
     policy = parsed["policy_published"]
-    domain_id = await match_domain(db, organization_id, policy["domain"])
-
-    report = DmarcAggregateReport(
+    return DmarcAggregateReport(
         organization_id=organization_id,
         domain_id=domain_id,
         report_id=metadata["report_id"],
@@ -86,9 +82,55 @@ async def write_aggregate_report(
         **_sender_columns(sender, verified),
     )
 
+
+def aggregate_record_row(
+    organization_id: uuid.UUID,
+    report_id: uuid.UUID,
+    domain_id: uuid.UUID | None,
+    record: dict,
+    verified: bool | None,
+    created_at: datetime,
+) -> DmarcAggregateRecord:
+    """One record (one source IP, one header_from) of a parsed aggregate report."""
+    evaluated = record["policy_evaluated"]
+    identifiers = record["identifiers"]
+    return DmarcAggregateRecord(
+        organization_id=organization_id,
+        report_id=report_id,
+        domain_id=domain_id,
+        source_ip=record["source"]["ip_address"],
+        count=record["count"],
+        disposition=Disposition(evaluated["disposition"]),
+        dkim_result=AuthResult(evaluated["dkim"]),
+        spf_result=AuthResult(evaluated["spf"]),
+        header_from=identifiers["header_from"],
+        envelope_from=identifiers.get("envelope_from"),
+        envelope_to=identifiers.get("envelope_to"),
+        auth_results=record.get("auth_results") or {},
+        policy_evaluated_reasons=evaluated.get("policy_override_reasons") or None,
+        sender_verified=verified,
+        created_at=created_at,
+    )
+
+
+async def write_aggregate_report(
+    db: AsyncSession,
+    organization_id: uuid.UUID,
+    parsed: dict,
+    source_message_id: str,
+    sender: SenderAuth = UNCHECKED,
+    verified: bool | None = None,
+) -> bool:
+    """Returns True if newly written, False if this exact report was already
+    ingested (natural key: organization + org_name + report_id + published domain,
+    per RFC 7489's own dedup guidance)."""
+    domain_id = await match_domain(db, organization_id, parsed["policy_published"]["domain"])
+    report = aggregate_report_row(organization_id, domain_id, parsed, source_message_id, sender, verified)
+
     if verified:
         await delete_unverified_aggregate_duplicate(db, report)
     if not await insert_aggregate_report_if_new(db, report):
+        metadata = parsed["report_metadata"]
         logger.debug("duplicate aggregate report %s from %s, skipping", metadata.get("report_id"), metadata.get("org_name"))
         return False
 
@@ -111,25 +153,7 @@ async def write_aggregate_report(
         header_from = rec["identifiers"]["header_from"]
         if header_from not in header_from_domain_ids:
             header_from_domain_ids[header_from] = await match_domain(db, organization_id, header_from)
-        records.append(
-            DmarcAggregateRecord(
-                organization_id=organization_id,
-                report_id=report.id,
-                domain_id=header_from_domain_ids[header_from],
-                source_ip=rec["source"]["ip_address"],
-                count=rec["count"],
-                disposition=Disposition(rec["policy_evaluated"]["disposition"]),
-                dkim_result=AuthResult(rec["policy_evaluated"]["dkim"]),
-                spf_result=AuthResult(rec["policy_evaluated"]["spf"]),
-                header_from=header_from,
-                envelope_from=rec["identifiers"].get("envelope_from"),
-                envelope_to=rec["identifiers"].get("envelope_to"),
-                auth_results=rec.get("auth_results") or {},
-                policy_evaluated_reasons=rec["policy_evaluated"].get("policy_override_reasons") or None,
-                sender_verified=verified,
-                created_at=now,
-            )
-        )
+        records.append(aggregate_record_row(organization_id, report.id, header_from_domain_ids[header_from], rec, verified, now))
     db.add_all(records)
     await db.flush()
     return True
@@ -172,6 +196,36 @@ def _parse_tls_rpt_datetime(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+def tls_rpt_row(
+    organization_id: uuid.UUID,
+    domain_id: uuid.UUID | None,
+    parsed: dict,
+    policy: dict,
+    source_message_id: str,
+    sender: SenderAuth = UNCHECKED,
+    verified: bool | None = None,
+) -> TlsRptReport:
+    """The row for one policy entry of a parsed TLS-RPT report."""
+    now = datetime.now(timezone.utc)
+    return TlsRptReport(
+        organization_id=organization_id,
+        domain_id=domain_id,
+        org_name=parsed["organization_name"],
+        date_range_begin=_parse_tls_rpt_datetime(parsed["begin_date"]),
+        date_range_end=_parse_tls_rpt_datetime(parsed["end_date"]),
+        policy_type=TlsRptPolicyType(policy["policy_type"]),
+        policy_domain=policy["policy_domain"],
+        policy_string={"policy_strings": policy.get("policy_strings")},
+        summary_success_count=policy.get("successful_session_count") or 0,
+        summary_failure_count=policy.get("failed_session_count") or 0,
+        failure_details=policy.get("failure_details") or None,
+        source_message_id=source_message_id,
+        received_at=now,
+        created_at=now,
+        **_sender_columns(sender, verified),
+    )
+
+
 async def write_smtp_tls_report(
     db: AsyncSession,
     organization_id: uuid.UUID,
@@ -183,38 +237,18 @@ async def write_smtp_tls_report(
     """A single TLS-RPT report can cover multiple policy domains — one row
     is written per policy entry. Returns the count of newly-written rows
     (policies already ingested are skipped, not counted)."""
-    date_begin = _parse_tls_rpt_datetime(parsed["begin_date"])
-    date_end = _parse_tls_rpt_datetime(parsed["end_date"])
     written = 0
-
     for policy in parsed.get("policies", []):
-        policy_domain = policy["policy_domain"]
-        domain_id = await match_domain(db, organization_id, policy_domain)
-
-        report = TlsRptReport(
-            organization_id=organization_id,
-            domain_id=domain_id,
-            org_name=parsed["organization_name"],
-            date_range_begin=date_begin,
-            date_range_end=date_end,
-            policy_type=TlsRptPolicyType(policy["policy_type"]),
-            policy_domain=policy_domain,
-            policy_string={"policy_strings": policy.get("policy_strings")},
-            summary_success_count=policy.get("successful_session_count") or 0,
-            summary_failure_count=policy.get("failed_session_count") or 0,
-            failure_details=policy.get("failure_details") or None,
-            source_message_id=source_message_id,
-            received_at=datetime.now(timezone.utc),
-            created_at=datetime.now(timezone.utc),
-            **_sender_columns(sender, verified),
-        )
+        domain_id = await match_domain(db, organization_id, policy["policy_domain"])
+        report = tls_rpt_row(organization_id, domain_id, parsed, policy, source_message_id, sender, verified)
         if verified:
             await delete_unverified_tls_rpt_duplicate(db, report)
         if await insert_tls_rpt_report_if_new(db, report):
             written += 1
         else:
-            logger.debug("duplicate TLS-RPT policy %s from %s, skipping", policy_domain, parsed.get("organization_name"))
-
+            logger.debug(
+                "duplicate TLS-RPT policy %s from %s, skipping", policy["policy_domain"], parsed.get("organization_name")
+            )
     return written
 
 
