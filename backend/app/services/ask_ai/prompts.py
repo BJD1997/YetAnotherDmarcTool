@@ -171,6 +171,44 @@ async def _since(db: AsyncSession, domain: Domain) -> tuple[datetime, int]:
     return datetime.now(timezone.utc) - timedelta(days=days), days
 
 
+def _verdict(status: str | None, likely_spoofed: bool) -> tuple[str, str]:
+    """(short label, what to ask of the AI) for a sender, from its review in
+    the Senders list and the app's own likely-spoofed signal — so the answer
+    doesn't try to "fix" mail that isn't the domain owner's."""
+    if status == "approved":
+        return "approved", "My verdict: approved, a legitimate sender of mine. Help me make it pass DMARC."
+    if status == "blocked":
+        return (
+            "blocked: not mine",
+            "My verdict: blocked, this is not my mail (spoofing or abuse). Don't suggest making it pass SPF, DKIM "
+            "or DMARC. Tell me whether my DMARC policy already stops it, and whether anything else is worth doing.",
+        )
+    if status == "ignored":
+        return (
+            "ignored",
+            "My verdict: ignored, I marked it as not relevant. Don't suggest making it pass; tell me if that "
+            "verdict looks wrong from the data.",
+        )
+    if status == "archived":
+        return (
+            "no longer in use",
+            "My verdict: no longer in use, I retired this sender. Don't suggest making it pass; help me find out "
+            "why it still sends mail as my domain.",
+        )
+    if likely_spoofed:
+        return (
+            "not reviewed; looks spoofed",
+            "My verdict: not reviewed yet, and it looks spoofed: receivers rejected or quarantined most of its mail "
+            "and it passes neither SPF nor DKIM. First help me judge whether it's mine (sending IPs, reverse DNS). "
+            "If it isn't, don't suggest making it pass: my DMARC policy is doing its job.",
+        )
+    return (
+        "not reviewed",
+        "My verdict: not reviewed yet. First help me judge whether it's a legitimate sender of mine; only if it "
+        "is, how to make it pass DMARC.",
+    )
+
+
 def _pct(value) -> str:
     return "—" if value is None else f"{value}%"
 
@@ -217,6 +255,9 @@ async def _sender(db: AsyncSession, domain: Domain, subject: str | None) -> list
     lines.append(_record_line("SPF", await current_record("spf", domain.name)))
     lines.append(_record_line("DMARC", await current_record("dmarc", domain.name)))
     lines.append("For DMARC to pass, SPF or DKIM must pass with a domain that aligns with the From domain.")
+    # Right under the sender line: the verdict decides what kind of help fits.
+    review = await dmarc_reports_repo.get_sender_review(db, domain.id, sender["service_label"])
+    lines.insert(2, _verdict(review.status.value if review else None, sender.get("likely_spoofed", False))[1])
     return lines
 
 
@@ -241,12 +282,17 @@ async def _compliance(db: AsyncSession, domain: Domain, _subject: str | None) ->
         key=lambda s: -s["volume"] * (1 - s["dmarc_pass_pct"] / 100),
     )[:3]
     if failing:
-        lines.append("Senders failing the most:")
+        reviews = {r.service_label: r.status.value for r in await dmarc_reports_repo.list_sender_reviews_for_domain(db, domain.id)}
+        lines.append("Senders failing the most, with my verdict on each:")
         for s in failing:
+            label, _ask = _verdict(reviews.get(s["service_label"]), s.get("likely_spoofed", False))
             lines.append(
-                f'- "{s["service_label"]}": {s["volume"]:,} messages, {_pct(s["dmarc_pass_pct"])} pass DMARC, '
+                f'- "{s["service_label"]}" ({label}): {s["volume"]:,} messages, {_pct(s["dmarc_pass_pct"])} pass DMARC, '
                 f'{_pct(s["spf_aligned_pct"])} SPF aligned, {_pct(s["dkim_aligned_pct"])} DKIM aligned'
             )
+        lines.append(
+            "Senders I blocked or that look spoofed should keep failing: only suggest fixes for legitimate senders."
+        )
     lines.append(_record_line("DMARC", await current_record("dmarc", domain.name)))
     return lines
 

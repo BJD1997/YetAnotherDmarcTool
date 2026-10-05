@@ -180,3 +180,59 @@ async def test_mail_setup_follows_spf_redirect(monkeypatch):
 
 def test_microsofts_newer_mx_names_are_recognized():
     assert prompts._providers(["example-com.x-v1.mx.microsoft"]) == ["Microsoft 365"]
+
+
+async def _review(owner_factory, org, domain, label, status):
+    from app.models.sender_review import SenderReview
+
+    async with owner_factory() as db:
+        db.add(SenderReview(organization_id=org.id, domain_id=domain.id, service_label=label, status=status))
+        await db.commit()
+
+
+async def test_sender_prompt_states_the_verdict(api):
+    from app.models.enums import SenderReviewStatus
+
+    _client, owner_factory = api
+    org, domain = await _seed(owner_factory)
+
+    text = await _build(owner_factory, org, domain, "sender", "203.0.113.70")
+    assert "My verdict: not reviewed yet." in text and "only if it is" in text
+
+    await _review(owner_factory, org, domain, "203.0.113.70", SenderReviewStatus.blocked)
+    text = await _build(owner_factory, org, domain, "sender", "203.0.113.70")
+    assert "My verdict: blocked" in text and "Don't suggest making it pass" in text
+
+    await _review(owner_factory, org, domain, "203.0.113.71", SenderReviewStatus.approved)
+    text = await _build(owner_factory, org, domain, "sender", "203.0.113.71")
+    assert "My verdict: approved" in text and "make it pass DMARC" in text
+
+
+async def test_likely_spoofed_sender_is_not_to_be_fixed(api):
+    import uuid as _uuid
+    from datetime import datetime, timedelta, timezone
+
+    _client, owner_factory = api
+    org, domain = await _seed(owner_factory)
+    now = datetime.now(timezone.utc)
+    async with owner_factory() as db:
+        report = DmarcAggregateReport(
+            organization_id=org.id, domain_id=domain.id, report_id=str(_uuid.uuid4()), org_name="google.com",
+            date_range_begin=now - timedelta(days=2), date_range_end=now - timedelta(days=1),
+            policy_published_domain=domain.name, policy_p="reject", received_at=now, created_at=now,
+        )
+        db.add(report)
+        await db.flush()
+        db.add(DmarcAggregateRecord(
+            organization_id=org.id, report_id=report.id, domain_id=domain.id, source_ip="198.51.100.66", count=30,
+            disposition=Disposition.reject, dkim_result=AuthResult.fail, spf_result=AuthResult.fail,
+            header_from=domain.name, created_at=now, auth_results={},
+        ))
+        await db.commit()
+
+    text = await _build(owner_factory, org, domain, "sender", "198.51.100.66")
+    assert "looks spoofed" in text and "don't suggest making it pass" in text.lower()
+
+    compliance = await _build(owner_factory, org, domain, "compliance", None)
+    assert '"198.51.100.66"' in compliance and "looks spoofed" in compliance
+    assert "keep failing" in compliance
