@@ -91,9 +91,9 @@ async def test_per_source_ip_volume_breakdown_groups_by_ip(api):
 
 
 async def test_per_source_ip_volume_breakdown_returns_correct_value_in_every_column(api):
-    """per_source_ip_volume_breakdown returns an 8-column row
+    """per_source_ip_volume_breakdown returns a 10-column row
     (source_ip, volume, spf_pass, dkim_pass, dmarc_pass_count, accepted,
-    quarantined, rejected) that dmarc_analytics.py's service_breakdown
+    quarantined, rejected, enforced, enforced_blocked) that dmarc_analytics.py's service_breakdown
     destructures positionally — a column reordering bug there would pass
     silently unless every position is pinned down here. One record with
     spf pass / dkim fail / disposition=quarantine exercises all three
@@ -107,13 +107,14 @@ async def test_per_source_ip_volume_breakdown_returns_correct_value_in_every_col
     await _add_report_and_record(
         owner_factory, org, domain, source_ip="192.0.2.40", count=7,
         spf_result=AuthResult.pass_, dkim_result=AuthResult.fail, disposition=Disposition.quarantine,
+        policy_p="quarantine",
     )
 
     async with owner_factory() as db:
         rows = await per_source_ip_volume_breakdown(db, domain.id)
 
     assert len(rows) == 1
-    source_ip, volume, spf_pass, dkim_pass, dmarc_pass_count, accepted, quarantined, rejected = rows[0]
+    source_ip, volume, spf_pass, dkim_pass, dmarc_pass_count, accepted, quarantined, rejected, enforced, enforced_blocked = rows[0]
     assert str(source_ip) == "192.0.2.40"
     assert volume == 7
     assert spf_pass == 7
@@ -122,6 +123,8 @@ async def test_per_source_ip_volume_breakdown_returns_correct_value_in_every_col
     assert accepted == 0
     assert quarantined == 7
     assert rejected == 0
+    assert enforced == 7
+    assert enforced_blocked == 7
 
 
 async def test_per_source_ip_volume_breakdown_since_filter_excludes_old_traffic(api):
