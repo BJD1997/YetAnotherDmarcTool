@@ -726,6 +726,21 @@ async def unmatched_forensic_domain_counts(db: AsyncSession, organization_id: UU
     return result.all()
 
 
+def _enforcing_policy():
+    """Whether the DMARC policy that applied to a record told receivers to
+    quarantine or reject: the published p= for the domain itself, sp= (when
+    set) for a subdomain's mail. Under p=none receivers deliver as told, so
+    their disposition says nothing about whether the mail was trusted."""
+    applied = case(
+        (
+            func.lower(DmarcAggregateRecord.header_from) == func.lower(DmarcAggregateReport.policy_published_domain),
+            DmarcAggregateReport.policy_p,
+        ),
+        else_=func.coalesce(DmarcAggregateReport.policy_sp, DmarcAggregateReport.policy_p),
+    )
+    return func.lower(applied).in_(["quarantine", "reject"])
+
+
 async def per_source_ip_volume_breakdown(
     db: AsyncSession, domain_id: UUID, *, since: datetime | None = None
 ) -> Sequence:
@@ -743,6 +758,8 @@ async def per_source_ip_volume_breakdown(
     def _sum_where(condition):
         return func.sum(case((condition, DmarcAggregateRecord.count), else_=0))
 
+    enforcing = _enforcing_policy()
+
     query = (
         select(
             DmarcAggregateRecord.source_ip,
@@ -753,14 +770,17 @@ async def per_source_ip_volume_breakdown(
             _sum_where(DmarcAggregateRecord.disposition == Disposition.none),
             _sum_where(DmarcAggregateRecord.disposition == Disposition.quarantine),
             _sum_where(DmarcAggregateRecord.disposition == Disposition.reject),
+            # Mail sent while the domain enforced DMARC, and how much of it
+            # receivers blocked: for the likely-spoofed signal.
+            _sum_where(enforcing),
+            _sum_where(enforcing & DmarcAggregateRecord.disposition.in_([Disposition.quarantine, Disposition.reject])),
         )
+        .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
         .where(DmarcAggregateRecord.domain_id == domain_id)
         .group_by(DmarcAggregateRecord.source_ip)
     )
     if since is not None:
-        query = query.join(
-            DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id
-        ).where(DmarcAggregateReport.date_range_begin >= since)
+        query = query.where(DmarcAggregateReport.date_range_begin >= since)
     return (await db.execute(query)).all()
 
 
@@ -782,6 +802,8 @@ async def per_source_ip_volume_breakdown_multi(
     def _sum_where(condition):
         return func.sum(case((condition, DmarcAggregateRecord.count), else_=0))
 
+    enforcing = _enforcing_policy()
+
     query = (
         select(
             DmarcAggregateRecord.domain_id,
@@ -793,14 +815,15 @@ async def per_source_ip_volume_breakdown_multi(
             _sum_where(DmarcAggregateRecord.disposition == Disposition.none),
             _sum_where(DmarcAggregateRecord.disposition == Disposition.quarantine),
             _sum_where(DmarcAggregateRecord.disposition == Disposition.reject),
+            _sum_where(enforcing),
+            _sum_where(enforcing & DmarcAggregateRecord.disposition.in_([Disposition.quarantine, Disposition.reject])),
         )
+        .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
         .where(DmarcAggregateRecord.domain_id.in_(domain_ids))
         .group_by(DmarcAggregateRecord.domain_id, DmarcAggregateRecord.source_ip)
     )
     if since is not None:
-        query = query.join(
-            DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id
-        ).where(DmarcAggregateReport.date_range_begin >= since)
+        query = query.where(DmarcAggregateReport.date_range_begin >= since)
     return (await db.execute(query)).all()
 
 

@@ -25,15 +25,20 @@ def _is_ipv6(ip: str) -> bool:
 # (quarantined/rejected) AND it's essentially unauthenticated on both
 # mechanisms — the strongest available signal that this isn't a legitimate
 # sender that just needs SPF/DKIM configured, but unauthorized use of the
-# domain that the existing policy is already correctly blocking.
+# domain that the existing policy is already correctly blocking. "Mostly
+# blocked" only counts mail sent while the domain enforced DMARC: under
+# p=none receivers deliver spoofed mail as told, so a window reaching back
+# before enforcement would otherwise hide the signal.
 SPOOFED_BLOCKED_MIN_PCT = 90.0
 SPOOFED_ALIGNED_MAX_PCT = 5.0
 
 
-def _is_likely_spoofed(volume: int, quarantined: int, rejected: int, spf_aligned_pct: float | None, dkim_aligned_pct: float | None) -> bool:
-    if volume == 0:
-        return False
-    blocked_pct = (quarantined + rejected) / volume * 100
+def _is_likely_spoofed(
+    enforced: int, enforced_blocked: int, spf_aligned_pct: float | None, dkim_aligned_pct: float | None
+) -> bool:
+    if enforced == 0:
+        return False  # only seen under p=none: receivers' choices say nothing
+    blocked_pct = enforced_blocked / enforced * 100
     if blocked_pct < SPOOFED_BLOCKED_MIN_PCT:
         return False
     return (spf_aligned_pct or 0) <= SPOOFED_ALIGNED_MAX_PCT and (dkim_aligned_pct or 0) <= SPOOFED_ALIGNED_MAX_PCT
@@ -83,12 +88,14 @@ def _build_services(per_ip: list[dict], identities: dict) -> list[dict]:
                 "accepted": 0,
                 "quarantined": 0,
                 "rejected": 0,
+                "enforced": 0,
+                "enforced_blocked": 0,
                 "ips": [],  # per-IP rows, percentages filled in below once totals are known
             },
         )
         bucket["volume"] += row["volume"]
         bucket["source_ip_count"] += 1
-        for key in ("spf_pass", "dkim_pass", "dmarc_pass", "accepted", "quarantined", "rejected"):
+        for key in ("spf_pass", "dkim_pass", "dmarc_pass", "accepted", "quarantined", "rejected", "enforced", "enforced_blocked"):
             bucket[key] += row[key]
         bucket["ips"].append(row)
 
@@ -108,7 +115,7 @@ def _build_services(per_ip: list[dict], identities: dict) -> list[dict]:
             "accepted": b["accepted"],
             "quarantined": b["quarantined"],
             "rejected": b["rejected"],
-            "likely_spoofed": _is_likely_spoofed(b["volume"], b["quarantined"], b["rejected"], spf_aligned_pct, dkim_aligned_pct),
+            "likely_spoofed": _is_likely_spoofed(b["enforced"], b["enforced_blocked"], spf_aligned_pct, dkim_aligned_pct),
             "fcrdns_status": _fcrdns_status(b["ips"]),
             # Per-family roll-ups too, since IPv6-without-valid-rDNS is the case
             # Gmail/Microsoft actually junk or reject (v4 is far more forgiving),
@@ -152,8 +159,10 @@ def _rows_to_per_ip(rows) -> list[dict]:
             "accepted": int(accepted),
             "quarantined": int(quarantined),
             "rejected": int(rejected),
+            "enforced": int(enforced),
+            "enforced_blocked": int(enforced_blocked),
         }
-        for ip, volume, spf_pass, dkim_pass, dmarc_pass_count, accepted, quarantined, rejected in rows
+        for ip, volume, spf_pass, dkim_pass, dmarc_pass_count, accepted, quarantined, rejected, enforced, enforced_blocked in rows
     ]
 
 
@@ -212,7 +221,7 @@ async def service_breakdown_multi(
     rows = await per_source_ip_volume_breakdown_multi(db, domain_ids, since=since)
 
     per_ip_by_domain: dict[uuid.UUID, list[dict]] = defaultdict(list)
-    for domain_id, ip, volume, spf_pass, dkim_pass, dmarc_pass_count, accepted, quarantined, rejected in rows:
+    for domain_id, ip, volume, spf_pass, dkim_pass, dmarc_pass_count, accepted, quarantined, rejected, enforced, enforced_blocked in rows:
         per_ip_by_domain[domain_id].append(
             {
                 "source_ip": str(ip),
@@ -223,6 +232,8 @@ async def service_breakdown_multi(
                 "accepted": int(accepted),
                 "quarantined": int(quarantined),
                 "rejected": int(rejected),
+                "enforced": int(enforced),
+                "enforced_blocked": int(enforced_blocked),
             }
         )
     if not per_ip_by_domain:
