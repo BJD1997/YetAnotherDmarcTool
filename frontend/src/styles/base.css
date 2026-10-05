@@ -10,9 +10,11 @@ body {
   padding: 0;
 }
 
-/* Keep room for the scrollbar on every page, so going from a long page
-   (Settings → General) to a short one doesn't shift the layout sideways. */
+/* Always show the scrollbar, so a page growing past the window (expanding a
+   row, going from a short page to a long one) doesn't shift the layout
+   sideways. scrollbar-gutter alone wasn't enough in Edge on Windows. */
 html {
+  overflow-y: scroll;
   scrollbar-gutter: stable;
 }
 

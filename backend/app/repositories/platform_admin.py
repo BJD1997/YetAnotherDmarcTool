@@ -175,6 +175,8 @@ async def list_job_runs(
     job_type: JobType | None,
     status_filter: JobStatus | None,
     since_days: int | None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
 ) -> tuple[Sequence[JobRun], bool]:
     query = select(JobRun)
     if organization_id is not None:
@@ -185,6 +187,10 @@ async def list_job_runs(
         query = query.where(JobRun.status == status_filter)
     if since_days is not None:
         query = query.where(JobRun.started_at >= datetime.now(timezone.utc) - timedelta(days=since_days))
+    if created_from is not None:
+        query = query.where(JobRun.started_at >= created_from)
+    if created_to is not None:
+        query = query.where(JobRun.started_at < created_to)
 
     anchor_query = None
     if before_id is not None:
