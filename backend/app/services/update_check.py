@@ -63,6 +63,19 @@ def is_dev_build(version: str) -> bool:
     return _parse_version(version) is None
 
 
+def pick_latest_release(releases: list[dict]) -> dict | None:
+    """The highest-versioned release in a GitHub releases listing. GitHub
+    doesn't list them newest-first (it sorts by tag name, so v0.2.0-beta9
+    came before beta10 and beta11), so the order can't be trusted. Drafts and
+    tags that aren't vX.Y.Z[-betaN|-rcN] are skipped."""
+    candidates = [
+        (parsed, release)
+        for release in releases
+        if not release.get("draft") and (parsed := _parse_version(release.get("tag_name", ""))) is not None
+    ]
+    return max(candidates, key=lambda c: c[0])[1] if candidates else None
+
+
 async def get_or_create_state(db) -> UpdateCheckState:
     """Also used directly by GET /admin/updates to read the cached result
     without re-running the check."""
@@ -79,20 +92,17 @@ async def run_update_check() -> None:
             async with httpx.AsyncClient(timeout=15) as client:
                 if state.include_prereleases:
                     # The list endpoint (not /latest) is the only way to see
-                    # prereleases — it's already newest-first and excludes
-                    # drafts with no extra filtering needed, so the first
-                    # entry is simply "the latest release, prerelease or
-                    # not".
+                    # prereleases. It isn't sorted by version, so take a full
+                    # page and pick the highest ourselves.
                     resp = await client.get(
                         f"{GITHUB_API_BASE}/repos/{settings.update_check_repo}/releases",
                         headers={"Accept": "application/vnd.github+json"},
-                        params={"per_page": 1},
+                        params={"per_page": 100},
                     )
                     resp.raise_for_status()
-                    releases = resp.json()
-                    if not releases:
+                    release = pick_latest_release(resp.json())
+                    if release is None:
                         raise httpx.HTTPError("no releases found")
-                    release = releases[0]
                 else:
                     resp = await client.get(
                         f"{GITHUB_API_BASE}/repos/{settings.update_check_repo}/releases/latest",

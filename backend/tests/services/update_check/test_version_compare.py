@@ -1,6 +1,6 @@
 import pytest
 
-from app.services.update_check import is_dev_build, is_newer_version
+from app.services.update_check import is_dev_build, is_newer_version, pick_latest_release
 
 
 @pytest.mark.parametrize(
@@ -71,3 +71,27 @@ def test_is_newer_version(latest: str, running: str, expected: bool):
 )
 def test_is_dev_build(version: str, expected: bool):
     assert is_dev_build(version) is expected
+
+
+def test_pick_latest_release_ignores_githubs_listing_order():
+    # The order GitHub actually returned on 2026-10-05 (sorted by tag name).
+    releases = [
+        {"tag_name": "v0.2.0-beta9", "draft": False},
+        {"tag_name": "v0.2.0-beta11", "draft": False},
+        {"tag_name": "v0.2.0-beta10", "draft": False},
+        {"tag_name": "v0.1.14", "draft": False},
+    ]
+
+    assert pick_latest_release(releases)["tag_name"] == "v0.2.0-beta11"
+
+
+def test_pick_latest_release_skips_drafts_and_unknown_tags():
+    releases = [
+        {"tag_name": "v0.3.0", "draft": True},
+        {"tag_name": "nightly", "draft": False},
+        {"tag_name": "v0.2.0-rc1", "draft": False},
+        {"tag_name": "v0.2.0-beta11", "draft": False},
+    ]
+
+    assert pick_latest_release(releases)["tag_name"] == "v0.2.0-rc1"
+    assert pick_latest_release([{"tag_name": "nightly"}]) is None
