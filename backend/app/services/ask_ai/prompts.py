@@ -12,6 +12,7 @@ decided in one tested place:
 
 import re
 from datetime import datetime, timedelta, timezone
+from typing import Literal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -145,7 +146,7 @@ def _record_line(label: str, record: str | None) -> str:
     return f"Current {label} record: {record}" if record else f"Current {label} record: none published"
 
 
-async def _dns_check(db: AsyncSession, domain: Domain, subject: str | None) -> list[str]:
+async def _dns_check(db: AsyncSession, domain: Domain, subject: str | None, _period: "Period" = None) -> list[str]:
     try:
         check_type = CheckType(subject)
     except ValueError as exc:
@@ -166,9 +167,19 @@ async def _dns_check(db: AsyncSession, domain: Domain, subject: str | None) -> l
     return lines
 
 
-async def _since(db: AsyncSession, domain: Domain) -> tuple[datetime, int]:
-    days = await rating_window_days(db, domain.organization_id)
-    return datetime.now(timezone.utc) - timedelta(days=days), days
+# A sender question covers the period picked in the Senders list: a number
+# of days, "all" for all time, or None for the organization's rating window.
+Period = int | Literal["all"] | None
+
+ALL_TIME = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+async def _since(db: AsyncSession, domain: Domain, period: Period = None) -> tuple[datetime, str]:
+    """(start of the window, how to say it: "last 90 days" / "all time")."""
+    if period == "all":
+        return ALL_TIME, "all time"
+    days = period if isinstance(period, int) else await rating_window_days(db, domain.organization_id)
+    return datetime.now(timezone.utc) - timedelta(days=days), f"last {days} days"
 
 
 def _verdict(status: str | None, likely_spoofed: bool) -> tuple[str, str]:
@@ -213,18 +224,18 @@ def _pct(value) -> str:
     return "—" if value is None else f"{value}%"
 
 
-async def _sender(db: AsyncSession, domain: Domain, subject: str | None) -> list[str]:
-    since, days = await _since(db, domain)
+async def _sender(db: AsyncSession, domain: Domain, subject: str | None, period: Period = None) -> list[str]:
+    since, window = await _since(db, domain, period)
     sender = next((s for s in await service_breakdown(db, domain.id, since=since) if s["service_label"] == subject), None)
     if sender is None:
-        raise ValueError(f"no sender {subject!r} for this domain in the last {days} days")
+        raise ValueError(f"no sender {subject!r} for this domain ({window})")
     ips = sender["source_ips"][:MAX_IPS]
     details = await dmarc_reports_repo.sender_auth_details(
         db, domain.id, [ip["source_ip"] for ip in sender["source_ips"]], since
     )
     lines = [
         f"Domain: {domain.name}",
-        f'Sender: "{sender["service_label"]}", last {days} days: {sender["volume"]:,} messages, '
+        f'Sender: "{sender["service_label"]}", {window}: {sender["volume"]:,} messages, '
         f'{_pct(sender["dmarc_pass_pct"])} pass DMARC, {_pct(sender["spf_aligned_pct"])} SPF aligned, '
         f'{_pct(sender["dkim_aligned_pct"])} DKIM aligned; {sender["accepted"]:,} delivered, '
         f'{sender["quarantined"]:,} quarantined, {sender["rejected"]:,} rejected by receivers.',
@@ -261,14 +272,14 @@ async def _sender(db: AsyncSession, domain: Domain, subject: str | None) -> list
     return lines
 
 
-async def _compliance(db: AsyncSession, domain: Domain, _subject: str | None) -> list[str]:
-    since, days = await _since(db, domain)
+async def _compliance(db: AsyncSession, domain: Domain, _subject: str | None, period: Period = None) -> list[str]:
+    since, window = await _since(db, domain, period)
     total, passed = await dmarc_reports_repo.windowed_totals_excluding_blocked(db, domain.id, since)
     policy = await dmarc_reports_repo.latest_published_policy_for_domain(db, domain.id)
     pass_pct = f"{round(passed / total * 100, 1)}%" if total else "—"
     lines = [
         f"Domain: {domain.name} ({domain.mail_profile.value.replace('_', ' ')})",
-        f"Last {days} days: {total:,} messages, {pass_pct} pass DMARC. Published policy: p={policy or 'none published'}.",
+        f"{window[0].upper() + window[1:]}: {total:,} messages, {pass_pct} pass DMARC. Published policy: p={policy or 'none published'}.",
     ]
     trend = await get_trend(db, domain.id)
     if trend and trend.state in ("up", "down") and trend.recent_pass_pct is not None:
@@ -301,7 +312,7 @@ _BUILDERS = {"dns_check": _dns_check, "sender": _sender, "compliance": _complian
 
 
 async def build_prompt(
-    db: AsyncSession, domain: Domain, kind: str, subject: str | None, issue: str | None = None
+    db: AsyncSession, domain: Domain, kind: str, subject: str | None, issue: str | None = None, period: Period = None
 ) -> str:
     """`issue` is the issue as the user saw it (an Action queue item's title
     and hint, a check's summary), so the question says what's being asked
@@ -312,7 +323,7 @@ async def build_prompt(
     head = [INTRO]
     if issue and issue.strip():
         head.append(f"The issue: {' '.join(issue.split())[:MAX_ISSUE_CHARS]}")
-    body = await builder(db, domain, subject)
+    body = await builder(db, domain, subject, period)
     setup = await _mail_setup(domain.name)
     if setup:
         body.insert(1, setup)

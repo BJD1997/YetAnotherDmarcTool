@@ -219,6 +219,7 @@ export default function SenderInventory({ domainId, domains }: { domainId: strin
                   row={r}
                   showDomain={!domainId}
                   canManage={canManage}
+                  period={windowDays ?? "all"}
                   highlighted={isHighlighted(r)}
                   rowRef={isHighlighted(r) ? highlightedRowRef : undefined}
                   onUpdate={(body) => updateReview.mutate({ domain_id: r.domain_id, service_label: r.service_label, body })}
@@ -243,6 +244,7 @@ export default function SenderInventory({ domainId, domains }: { domainId: strin
                     row={r}
                     showDomain={!domainId}
                     canManage={canManage}
+                    period={windowDays ?? "all"}
                     onUpdate={(body) => updateReview.mutate({ domain_id: r.domain_id, service_label: r.service_label, body })}
                   />
                 ))}
@@ -310,6 +312,7 @@ function SenderInventoryRowView({
   row,
   showDomain,
   canManage,
+  period,
   onUpdate,
   highlighted = false,
   rowRef,
@@ -317,6 +320,8 @@ function SenderInventoryRowView({
   row: MergedRow;
   showDomain: boolean;
   canManage: boolean;
+  // The list's chosen period, so Ask AI looks at the same data.
+  period: number | "all";
   onUpdate: (body: Partial<Pick<SenderReviewUpdate, "status" | "owner">>) => void;
   highlighted?: boolean;
   rowRef?: RefObject<HTMLTableRowElement | null>;
@@ -355,11 +360,12 @@ function SenderInventoryRowView({
                 ({row.source_ip_count} IPs)
               </span>
             )}
-            {row.dmarc_pass_pct !== null && row.dmarc_pass_pct < 90 && (
+            {/* Blocked senders should keep failing: nothing to ask. */}
+            {row.dmarc_pass_pct !== null && row.dmarc_pass_pct < 90 && row.status !== "blocked" && (
               <span style={{ marginLeft: "0.4rem" }}>
                 <AskAiButton
                   domainId={row.domain_id}
-                  hint={{ kind: "sender", subject: row.service_label }}
+                  hint={{ kind: "sender", subject: row.service_label, period }}
                   issue={`Sender "${row.service_label}" passes DMARC on only ${row.dmarc_pass_pct}% of its mail.`}
                 />
               </span>

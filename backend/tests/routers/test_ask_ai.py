@@ -87,3 +87,26 @@ async def test_action_queue_items_say_what_to_ask(api):
     items = (await client.get("/api/action-queue")).json()
     [sender_item] = [i for i in items if "203.0.113.80" in (i["link_path"] or "")]
     assert sender_item["ask_ai"] == {"kind": "sender", "subject": "203.0.113.80"}
+
+
+async def test_sender_question_uses_the_period_picked_in_the_senders_list(api):
+    client, owner_factory = api
+    org, user, domain = await _setup(owner_factory)
+    # Only seen 400 days ago: outside the default window, inside "all time".
+    await _add_sender(owner_factory, org, domain, source_ip="198.51.100.7", count=20, days_ago=400)
+    await login_as(client, owner_factory, user)
+    await client.patch("/api/organizations/current", json={"name": "Org", "ask_ai_enabled": True})
+    params = {"kind": "sender", "domain_id": str(domain.id), "subject": "198.51.100.7"}
+
+    default = await client.get("/api/ask-ai/prompt", params=params)
+    assert default.status_code == 404
+    assert "last 90 days" in default.json()["detail"]
+    assert (await client.get("/api/ask-ai/prompt", params={**params, "period": "365"})).status_code == 404
+
+    all_time = await client.get("/api/ask-ai/prompt", params={**params, "period": "all"})
+    assert all_time.status_code == 200
+    assert '"198.51.100.7", all time: 20 messages' in all_time.json()["prompt"]
+    assert (await client.get("/api/ask-ai/prompt", params={**params, "period": "500"})).status_code == 200
+
+    assert (await client.get("/api/ask-ai/prompt", params={**params, "period": "0"})).status_code == 422
+    assert (await client.get("/api/ask-ai/prompt", params={**params, "period": "forever"})).status_code == 422

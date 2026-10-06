@@ -25,6 +25,9 @@ async def ask_ai_prompt(
     domain_id: uuid.UUID,
     subject: str | None = Query(None, max_length=255),
     issue: str | None = Query(None, max_length=500),
+    # The period picked in the Senders list: a number of days or "all";
+    # left out, the organization's rating window.
+    period: str | None = Query(None, pattern=r"^(all|[1-9][0-9]{0,3})$"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict:
@@ -35,7 +38,9 @@ async def ask_ai_prompt(
     if domain.verification_status != DomainVerificationStatus.verified:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "domain isn't verified yet")
     try:
-        prompt = await build_prompt(db, domain, kind, subject, issue)
+        prompt = await build_prompt(
+            db, domain, kind, subject, issue, period=None if period is None else "all" if period == "all" else int(period)
+        )
     except ValueError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     # build_prompt may have cached new sender identities; nothing else is written.

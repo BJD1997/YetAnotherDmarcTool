@@ -68,6 +68,9 @@ export type ActionItemSeverity = "good" | "warning" | "serious" | "critical" | "
 export interface AskAiHint {
   kind: "dns_check" | "sender" | "compliance";
   subject: string | null;
+  // Sender questions from the Senders list: its chosen period (days, or
+  // "all"). Left out, the organization's rating window.
+  period?: number | "all";
 }
 
 export interface ActionItem {

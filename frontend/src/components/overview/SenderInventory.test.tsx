@@ -168,3 +168,37 @@ describe("SenderInventory window", () => {
     );
   });
 });
+
+describe("SenderInventory Ask AI", () => {
+  function mockApi(rows: SenderInventoryRow[]) {
+    getMock.mockImplementation(async (url: string) => {
+      if (url === "/organizations/current") return { ask_ai_enabled: true, rating_window_days: 90 };
+      if (url.startsWith("/ask-ai/prompt")) return { prompt: "the prompt" };
+      return { [DOMAIN.id]: rows };
+    });
+  }
+
+  it("isn't offered for blocked senders", async () => {
+    mockApi([
+      row({ service_label: "failing-sender", dmarc_pass_pct: 10, volume: 500 }),
+      row({ service_label: "blocked-sender", dmarc_pass_pct: 0, volume: 500, status: "blocked" }),
+    ]);
+
+    renderInventory("/domains/domain-1/senders");
+
+    await waitFor(() => expect(screen.getByText("blocked-sender")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByRole("button", { name: /Ask AI/ })).toHaveLength(1));
+  });
+
+  it("asks about the period picked in the list", async () => {
+    mockApi([row({ service_label: "failing-sender", dmarc_pass_pct: 10, volume: 500 })]);
+
+    renderInventory("/domains/domain-1/senders");
+    fireEvent.change(await screen.findByDisplayValue("Last 90 days"), { target: { value: "all" } });
+    fireEvent.click(await screen.findByRole("button", { name: /Ask AI/ }));
+
+    await waitFor(() =>
+      expect(getMock.mock.calls.some(([url]) => String(url).startsWith("/ask-ai/prompt") && String(url).includes("period=all"))).toBe(true),
+    );
+  });
+});
