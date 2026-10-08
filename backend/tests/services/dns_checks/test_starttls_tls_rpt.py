@@ -1,3 +1,5 @@
+import re
+
 from app.services.dns_checks.starttls_tls_rpt import evaluate
 
 
@@ -19,7 +21,7 @@ def test_pass_at_or_under_two_percent():
 def test_warn_above_two_percent_names_hosts_and_types():
     [f] = evaluate("correct", 90, 10, [{"result_type": "starttls-not-supported", "failed_session_count": 10, "receiving_mx_hostname": "mx2.example.com"}])
     assert f.status == "warn"
-    assert "mx2.example.com" in f.summary and "starttls-not-supported" in f.summary
+    assert re.search(r"\bmx2\.example\.com\b", f.summary) and "starttls-not-supported" in f.summary
 
 
 def test_fail_when_no_session_succeeded():

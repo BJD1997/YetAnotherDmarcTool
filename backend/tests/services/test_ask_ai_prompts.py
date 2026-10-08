@@ -1,6 +1,7 @@
 """Ask AI prompts: the facts behind one issue, and never anything private —
 no organization name, user email, mailbox or reporting address, raw report."""
 
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -100,7 +101,7 @@ async def test_dns_check_prompt(api):
     org, domain = await _seed(owner_factory)
     text = await _build(owner_factory, org, domain, "dns_check", "dmarc")
 
-    assert "example.com" in text and "DMARC" in text
+    assert re.search(r"\bexample\.com\b", text) and "DMARC" in text
     assert "no authorization record" in text and "Add the external authorization record." in text
     assert "v=DMARC1; p=none; rua=mailto:<your reporting address>" in text
     _assert_private_left_out(text)

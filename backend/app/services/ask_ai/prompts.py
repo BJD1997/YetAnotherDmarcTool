@@ -59,7 +59,9 @@ _PROVIDERS: list[tuple[tuple[str, ...], str]] = [
     (("messagelabs",), "Broadcom Email Security"),
 ]
 
-_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+# Bounded, and can't start inside a run of address characters: a long run
+# without an "@" would otherwise be rescanned from every position.
+_EMAIL = re.compile(r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}\.[A-Za-z]{2,24}")
 _CHECK_NAMES = {
     CheckType.spf: "SPF",
     CheckType.dkim: "DKIM",
