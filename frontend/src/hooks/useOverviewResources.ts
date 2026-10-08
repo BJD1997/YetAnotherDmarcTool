@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "../api/client";
 import type { Domain } from "../api/types";
@@ -53,6 +53,10 @@ export function useSenderInventory(
     // initial load burst until the card is actually scrolled to matters more
     // here than for the page's other, cheaper queries.
     enabled: domains.length > 0 && ready,
+    // Picking another period keeps the current list on screen until the new
+    // one arrives, instead of swapping it for "Loading…": the card collapsed
+    // and the page jumped, which felt like a page refresh.
+    placeholderData: keepPreviousData,
   });
 }
 

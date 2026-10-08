@@ -202,3 +202,25 @@ describe("SenderInventory Ask AI", () => {
     );
   });
 });
+
+describe("SenderInventory period change", () => {
+  it("keeps the current list on screen while another period loads", async () => {
+    let releaseAllTime: (rows: unknown) => void = () => {};
+    getMock.mockImplementation(async (url: string) => {
+      if (url === "/organizations/current") return { ask_ai_enabled: false, rating_window_days: 90 };
+      if (url.includes("days=90")) return { [DOMAIN.id]: [row({ service_label: "recent-sender" })] };
+      return new Promise((resolve) => { releaseAllTime = resolve; });
+    });
+
+    renderInventory("/domains/domain-1/senders");
+    fireEvent.change(await screen.findByDisplayValue("Last 90 days"), { target: { value: "all" } });
+
+    expect(await screen.findByText("Updating…")).toBeInTheDocument();
+    expect(screen.getByText("recent-sender")).toBeInTheDocument();
+    expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+
+    releaseAllTime({ [DOMAIN.id]: [row({ service_label: "old-sender" })] });
+    expect(await screen.findByText("old-sender")).toBeInTheDocument();
+    expect(screen.queryByText("Updating…")).not.toBeInTheDocument();
+  });
+});

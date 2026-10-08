@@ -113,7 +113,7 @@ export default function SenderInventory({ domainId, domains }: { domainId: strin
   // isPending (not isLoading) covers both "still waiting to come into view"
   // and "actively fetching" — isLoading alone is false while the query sits
   // disabled pre-view, which would otherwise show the empty state early.
-  const { data, isPending } = useSenderInventory(targetDomains, windowDays, riskScore, inView);
+  const { data, isPending, isPlaceholderData } = useSenderInventory(targetDomains, windowDays, riskScore, inView);
   const updateReview = useUpdateSenderReview();
 
   const allRows = data ?? [];
@@ -139,7 +139,7 @@ export default function SenderInventory({ domainId, domains }: { domainId: strin
   // time once, so the link still lands on it.
   const widenedForHighlight = useRef(false);
   useEffect(() => {
-    if (!highlightLabel || isPending || windowDays === null || widenedForHighlight.current) return;
+    if (!highlightLabel || isPending || isPlaceholderData || windowDays === null || widenedForHighlight.current) return;
     if (!allRows.some(isHighlighted)) {
       widenedForHighlight.current = true;
       setWindowDays(null);
@@ -155,7 +155,14 @@ export default function SenderInventory({ domainId, domains }: { domainId: strin
   return (
     <div className="card" ref={cardRef}>
       <div className="card-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem" }}>
-        <h3>Sender inventory</h3>
+        <h3>
+          Sender inventory
+          {isPlaceholderData && (
+            <span className="muted" style={{ fontSize: "0.8rem", fontWeight: 400, marginLeft: "0.5rem" }}>
+              Updating…
+            </span>
+          )}
+        </h3>
         <select
           className="input"
           style={{ padding: "0.25rem 0.5rem", fontSize: "0.8rem", width: "auto" }}
@@ -200,7 +207,7 @@ export default function SenderInventory({ domainId, domains }: { domainId: strin
         <p className="empty-state">No senders match this filter.</p>
       )}
       {!isLoading && filteredRows.length > 0 && (
-        <div className="table-wrap">
+        <div className="table-wrap" style={isPlaceholderData ? { opacity: 0.55, transition: "opacity 0.15s" } : undefined}>
           <table className="table">
             <thead>
               <tr>
