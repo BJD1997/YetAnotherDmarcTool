@@ -236,3 +236,8 @@ async def test_likely_spoofed_sender_is_not_to_be_fixed(api):
     compliance = await _build(owner_factory, org, domain, "compliance", None)
     assert '"198.51.100.66"' in compliance and "looks spoofed" in compliance
     assert "keep failing" in compliance
+
+
+def test_message_counts_read_naturally():
+    assert prompts._messages(1) == "1 message"
+    assert prompts._messages(1200) == "1,200 messages"

@@ -220,6 +220,10 @@ def _verdict(status: str | None, likely_spoofed: bool) -> tuple[str, str]:
     )
 
 
+def _messages(count: int) -> str:
+    return f"{count:,} message" if count == 1 else f"{count:,} messages"
+
+
 def _pct(value) -> str:
     return "—" if value is None else f"{value}%"
 
@@ -235,7 +239,7 @@ async def _sender(db: AsyncSession, domain: Domain, subject: str | None, period:
     )
     lines = [
         f"Domain: {domain.name}",
-        f'Sender: "{sender["service_label"]}", {window}: {sender["volume"]:,} messages, '
+        f'Sender: "{sender["service_label"]}", {window}: {_messages(sender["volume"])}, '
         f'{_pct(sender["dmarc_pass_pct"])} pass DMARC, {_pct(sender["spf_aligned_pct"])} SPF aligned, '
         f'{_pct(sender["dkim_aligned_pct"])} DKIM aligned; {sender["accepted"]:,} delivered, '
         f'{sender["quarantined"]:,} quarantined, {sender["rejected"]:,} rejected by receivers.',
@@ -243,7 +247,7 @@ async def _sender(db: AsyncSession, domain: Domain, subject: str | None, period:
     ]
     for ip in ips:
         ptr = ip["ptr_hostname"] or "no reverse DNS"
-        lines.append(f'- {ip["source_ip"]} ({ptr}): {ip["volume"]:,} messages')
+        lines.append(f'- {ip["source_ip"]} ({ptr}): {_messages(ip["volume"])}')
     if len(sender["source_ips"]) > MAX_IPS:
         lines.append(f'- and {len(sender["source_ips"]) - MAX_IPS} more')
     for label, seen in (
@@ -279,7 +283,7 @@ async def _compliance(db: AsyncSession, domain: Domain, _subject: str | None, pe
     pass_pct = f"{round(passed / total * 100, 1)}%" if total else "—"
     lines = [
         f"Domain: {domain.name} ({domain.mail_profile.value.replace('_', ' ')})",
-        f"{window[0].upper() + window[1:]}: {total:,} messages, {pass_pct} pass DMARC. Published policy: p={policy or 'none published'}.",
+        f"{window[0].upper() + window[1:]}: {_messages(total)}, {pass_pct} pass DMARC. Published policy: p={policy or 'none published'}.",
     ]
     trend = await get_trend(db, domain.id)
     if trend and trend.state in ("up", "down") and trend.recent_pass_pct is not None:
@@ -298,7 +302,7 @@ async def _compliance(db: AsyncSession, domain: Domain, _subject: str | None, pe
         for s in failing:
             label, _ask = _verdict(reviews.get(s["service_label"]), s.get("likely_spoofed", False))
             lines.append(
-                f'- "{s["service_label"]}" ({label}): {s["volume"]:,} messages, {_pct(s["dmarc_pass_pct"])} pass DMARC, '
+                f'- "{s["service_label"]}" ({label}): {_messages(s["volume"])}, {_pct(s["dmarc_pass_pct"])} pass DMARC, '
                 f'{_pct(s["spf_aligned_pct"])} SPF aligned, {_pct(s["dkim_aligned_pct"])} DKIM aligned'
             )
         lines.append(
