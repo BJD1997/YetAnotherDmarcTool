@@ -8,4 +8,5 @@ export interface OnboardingStatus {
   has_verified_domain: boolean;
   has_dns_baseline: boolean;
   has_any_report: boolean;
+  hosted_mailbox_ready: boolean;
 }

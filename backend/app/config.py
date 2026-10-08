@@ -232,6 +232,19 @@ class Settings(BaseSettings):
         return bool(self.azure_updater_job_id and self.azure_update_client_id)
 
     @property
+    def hosted_mailbox_ready(self) -> bool:
+        """Everything the hosted reporting mailbox needs to be read: without
+        it, organizations that sign in without Microsoft can't receive
+        reports at all. Only that it's filled in, not that it works: a
+        failing poll shows under Job runs."""
+        return bool(
+            self.hosted_reports_mailbox_address
+            and self.hosted_reports_tenant_id
+            and self.entra_mail_client_id
+            and self.entra_mail_client_secret
+        )
+
+    @property
     def hosted_reports_domain(self) -> str | None:
         """Domain of the hosted reporting addresses: HOSTED_REPORTS_ADDRESS_DOMAIN
         if set, otherwise the hosted mailbox's own domain."""

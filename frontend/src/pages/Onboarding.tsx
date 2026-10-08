@@ -167,11 +167,34 @@ function WelcomeStep({ status, onNext }: { status: OnboardingStatus; onNext: () 
   );
 }
 
+/** True for an organization that can only get reports through the server's
+ *  hosted mailbox (no Microsoft sign-in) while this server has none. */
+function useNoReportMailbox(): boolean {
+  const { data: org } = useCurrentOrganization();
+  const { data: status } = useOnboardingStatus();
+  return !!org && !org.entra_tenant_id && !!status && !status.hosted_mailbox_ready;
+}
+
+function NoReportMailboxNotice() {
+  return (
+    <div className="alert alert--warning">
+      <strong>This server can't receive DMARC reports yet.</strong> Organizations that sign in without Microsoft get
+      their reports through the server's hosted reporting mailbox, and that hasn't been set up. You can add and verify
+      domains and run DNS checks now; reports start arriving once your administrator sets it up (see the{" "}
+      <a href="https://github.com/BJD1997/YetAnotherDmarcTool/wiki/Configuration-Reference" target="_blank" rel="noreferrer">
+        Configuration reference
+      </a>
+      ).
+    </div>
+  );
+}
+
 function MailboxStep({ onBack, onNext }: { onBack: () => void; onNext: () => void }) {
   // Same query key/options MailboxConnectionSection uses below, so
   // react-query dedupes into one shared fetch/poll rather than two.
   const { data: connection } = useMailboxConnection();
   const { data: org } = useCurrentOrganization();
+  const noReportMailbox = useNoReportMailbox();
 
   // No Entra tenant means no Mail Access consent is possible — this org
   // gets a hosted address per domain instead (offered later, once a domain
@@ -181,10 +204,14 @@ function MailboxStep({ onBack, onNext }: { onBack: () => void; onNext: () => voi
     return (
       <div>
         <h2 style={{ marginTop: 0 }}>Report mailbox</h2>
-        <div className="alert alert--good">
-          Your organization signs in without Microsoft Entra, so there's no mailbox to connect here. Once you add a
-          domain, we'll generate a dedicated YetAnotherDmarcTool-hosted reporting address for it automatically.
-        </div>
+        {noReportMailbox ? (
+          <NoReportMailboxNotice />
+        ) : (
+          <div className="alert alert--good">
+            Your organization signs in without Microsoft Entra, so there's no mailbox to connect here. Once you add a
+            domain, we'll generate a dedicated YetAnotherDmarcTool-hosted reporting address for it automatically.
+          </div>
+        )}
         <StepNav onBack={onBack} onNext={onNext} />
       </div>
     );
@@ -219,13 +246,14 @@ function DomainStep({ onBack, onNext }: { onBack: () => void; onNext: () => void
   const apexDomains = (domains ?? []).filter((d) => !d.parent_domain_id);
   const latestDomain = [...apexDomains].sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
   const hostedOnly = !!org && !org.entra_tenant_id;
+  const noReportMailbox = useNoReportMailbox();
 
   return (
     <div>
       <h2 style={{ marginTop: 0 }}>Add your first domain</h2>
       <p className="section-hint">Start with the domain you send the most mail from — you can add more later.</p>
       <AddDomainForm />
-      {hostedOnly && latestDomain && <HostedAddressPreview domain={latestDomain} />}
+      {hostedOnly && latestDomain && !noReportMailbox && <HostedAddressPreview domain={latestDomain} />}
       <StepNav onBack={onBack} onNext={hasDomain ? onNext : undefined} />
     </div>
   );
@@ -431,9 +459,20 @@ function BaselineStep({ domain, onBack, onNext }: { domain: Domain | undefined; 
 function ReportingStep({ domain, onBack, onNext }: { domain: Domain | undefined; onBack: () => void; onNext: () => void }) {
   const [showBuilder, setShowBuilder] = useState(false);
   const { data, isLoading } = useRuaCheck(domain?.id);
+  const noReportMailbox = useNoReportMailbox();
 
   if (!domain) {
     return <p className="muted">No verified domain yet — go back and verify one first.</p>;
+  }
+
+  if (noReportMailbox) {
+    return (
+      <div>
+        <h2 style={{ marginTop: 0 }}>Make sure reports reach this dashboard</h2>
+        <NoReportMailboxNotice />
+        <StepNav onBack={onBack} onNext={onNext} />
+      </div>
+    );
   }
 
   const correct = data?.status === "correct";
@@ -471,10 +510,12 @@ function ReportingStep({ domain, onBack, onNext }: { domain: Domain | undefined;
 
 function WaitingRoomStep({ domain, onBack }: { domain: Domain | undefined; onBack: () => void }) {
   const { data: connection, isLoading: mailboxLoading } = useMailboxConnection();
+  const noReportMailbox = useNoReportMailbox();
 
   return (
     <div>
       <h2 style={{ marginTop: 0 }}>Waiting for your first report</h2>
+      {noReportMailbox && <NoReportMailboxNotice />}
       <p className="section-hint">
         DMARC aggregate reports usually arrive daily — most senders publish their first one within 24–48 hours of
         seeing your updated <code>rua=</code> address. You'll land on the full dashboard automatically once reports
