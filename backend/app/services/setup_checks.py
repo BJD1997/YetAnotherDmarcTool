@@ -27,9 +27,6 @@ _CONFIG_DOCS = "https://github.com/BJD1997/YetAnotherDmarcTool/wiki/Configuratio
 DEFAULT_PUBLIC_BASE_URL = "http://localhost:8000"
 UPDATER_TOKEN_MIN_CHARS = 32
 _ENV_HINT = "in the environment (the .env file, or the stack's environment variables in Portainer) and redeploy"
-# The example passwords in the compose files: a stack started without setting
-# its own still runs, so it gets a SETUP PROBLEM line instead of a refusal.
-_DEFAULT_DB_PASSWORDS = {"dmarc": "POSTGRES_PASSWORD", "dmarc_app": "DMARC_APP_DB_PASSWORD"}
 # Requests from inside the stack (health checks, the updater) aren't judged.
 _UNJUDGED_PATHS = ("/api/health", "/api/update-request")
 
@@ -56,12 +53,17 @@ def _together(*pairs: tuple[str, object]) -> bool:
 
 
 def database_password_problem(database_url: str) -> str | None:
-    """The database user's password is still the compose files' example.
-    The message is fixed text only: nothing from the URL gets logged."""
-    variable = _DEFAULT_DB_PASSWORDS.get(make_url(database_url).password or "")
-    if variable is None:
+    """The database user's password is still one of the compose files'
+    examples: a stack started without its own still runs, so it gets a
+    SETUP PROBLEM line instead of a refusal. The message is fixed text
+    only: nothing from the URL gets logged."""
+    password = make_url(database_url).password
+    if password == "dmarc":
+        variable, role = "POSTGRES_PASSWORD", "the database owner (POSTGRES_USER)"
+    elif password == "dmarc_app":
+        variable, role = "DMARC_APP_DB_PASSWORD", "dmarc_app"
+    else:
         return None
-    role = "the database owner (POSTGRES_USER)" if variable == "POSTGRES_PASSWORD" else "dmarc_app"
     return (
         f"The database password for {role} is still the example default from the compose file. Change it in "
         f"the database first (ALTER ROLE ... PASSWORD '...'), then set {variable} to the same value {_ENV_HINT}."
