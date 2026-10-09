@@ -56,15 +56,15 @@ def _together(*pairs: tuple[str, object]) -> bool:
 
 
 def database_password_problem(database_url: str) -> str | None:
-    """The database user's password is still the compose files' example."""
-    url = make_url(database_url)
-    variable = _DEFAULT_DB_PASSWORDS.get(url.password or "")
+    """The database user's password is still the compose files' example.
+    The message is fixed text only: nothing from the URL gets logged."""
+    variable = _DEFAULT_DB_PASSWORDS.get(make_url(database_url).password or "")
     if variable is None:
         return None
+    role = "the database owner (POSTGRES_USER)" if variable == "POSTGRES_PASSWORD" else "dmarc_app"
     return (
-        f"The database password for {url.username} is still the example default from the compose file. "
-        f"Change it in the database first (ALTER ROLE {url.username} PASSWORD '...'), then set {variable} to the "
-        f"same value {_ENV_HINT}."
+        f"The database password for {role} is still the example default from the compose file. Change it in "
+        f"the database first (ALTER ROLE ... PASSWORD '...'), then set {variable} to the same value {_ENV_HINT}."
     )
 
 
