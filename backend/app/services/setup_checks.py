@@ -52,15 +52,15 @@ def _together(*pairs: tuple[str, object]) -> bool:
     return all(present) or not any(present)
 
 
-def database_password_problem(database_url: str) -> str | None:
+def example_database_login_problem(database_url: str) -> str | None:
     """The database user's password is still one of the compose files'
     examples: a stack started without its own still runs, so it gets a
     SETUP PROBLEM line instead of a refusal. The message is fixed text
     only: nothing from the URL gets logged."""
-    password = make_url(database_url).password
-    if password == "dmarc":
+    given = make_url(database_url).password
+    if given == "dmarc":
         variable, role = "POSTGRES_PASSWORD", "the database owner (POSTGRES_USER)"
-    elif password == "dmarc_app":
+    elif given == "dmarc_app":
         variable, role = "DMARC_APP_DB_PASSWORD", "dmarc_app"
     else:
         return None
@@ -75,9 +75,9 @@ def config_problems() -> list[str]:
     fernet_problem = fernet_key_problem()
     if fernet_problem:
         found.append(fernet_problem)
-    password_problem = database_password_problem(settings.database_url)
-    if password_problem:
-        found.append(password_problem)
+    db_login_problem = example_database_login_problem(settings.database_url)
+    if db_login_problem:
+        found.append(db_login_problem)
 
     url = settings.public_base_url.rstrip("/")
     host = urlsplit(url).netloc

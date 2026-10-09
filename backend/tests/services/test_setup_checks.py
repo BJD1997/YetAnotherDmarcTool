@@ -185,10 +185,10 @@ def test_portainer_updates_are_optional(clean_settings):
     ],
 )
 def test_example_database_passwords_are_flagged(url, variable):
-    problem = setup_checks.database_password_problem(url)
+    problem = setup_checks.example_database_login_problem(url)
 
     assert problem is not None and variable in problem and "ALTER ROLE" in problem
 
 
 def test_own_database_password_is_fine():
-    assert setup_checks.database_password_problem("postgresql+asyncpg://dmarc_app:Str0ng-Pw@db:5432/dmarc") is None
+    assert setup_checks.example_database_login_problem("postgresql+asyncpg://dmarc_app:Str0ng-Pw@db:5432/dmarc") is None
