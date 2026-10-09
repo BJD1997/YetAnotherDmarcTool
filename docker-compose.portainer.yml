@@ -106,7 +106,8 @@ services:
       - internal
 
   resolver:
-    image: mvance/unbound:latest
+    # Pinned: the same version the Azure resolver image is built on.
+    image: mvance/unbound:1.22.0
     restart: unless-stopped
     configs:
       - source: unbound_forward
@@ -151,7 +152,8 @@ services:
       UPDATER_URL: http://updater:9999
       UPDATER_SHARED_SECRET: ${UPDATER_SHARED_SECRET:-}
     ports:
-      - "${API_HOST_PORT:-8000}:8000"
+      # API_BIND_ADDRESS: publish on one interface only (see .env.example).
+      - "${API_BIND_ADDRESS:-0.0.0.0}:${API_HOST_PORT:-8000}:8000"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -165,6 +167,9 @@ services:
     # Nothing in the app writes to disk at runtime: a read-only filesystem
     # means code that gets in can't drop files or change the app.
     read_only: true
+    # Reports come from public mailboxes: a report built to eat memory
+    # restarts the worker, not the whole server.
+    mem_limit: ${WORKER_MEMORY_LIMIT:-1g}
     tmpfs:
       - /tmp
     restart: unless-stopped

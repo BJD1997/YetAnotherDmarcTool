@@ -12,12 +12,18 @@ from app.models.platform_admin import PlatformAdmin
 from app.repositories.platform_admin import count_platform_admins
 from app.services.auth.admin_access import admin_access_problem
 from app.services.auth.password import hash_password
+from app.services.setup_checks import database_password_problem
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("bootstrap_platform_admin")
 
 
 async def main() -> None:
+    # Runs with the database owner's connection, the one password the api
+    # never sees: warn here if it's still the example default.
+    password_problem = database_password_problem(settings.database_url)
+    if password_problem:
+        logger.warning("SETUP PROBLEM: %s", password_problem)
     async with async_session_factory() as db:
         existing_count = await count_platform_admins(db)
         if existing_count > 0:

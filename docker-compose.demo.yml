@@ -51,7 +51,8 @@ services:
       - internal
 
   resolver:
-    image: mvance/unbound:latest
+    # Pinned: the same version the Azure resolver image is built on.
+    image: mvance/unbound:1.22.0
     restart: unless-stopped
     volumes:
       - ./resolver/forward-records.conf:/opt/unbound/etc/unbound/forward-records.conf:ro
@@ -110,7 +111,7 @@ services:
     ports:
       # Different host port from the real instance's :8000 — both run on
       # the same host.
-      - "8001:8000"
+      - "${API_BIND_ADDRESS:-0.0.0.0}:8001:8000"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -127,6 +128,9 @@ services:
     # Nothing in the app writes to disk at runtime: a read-only filesystem
     # means code that gets in can't drop files or change the app.
     read_only: true
+    # Reports come from public mailboxes: a report built to eat memory
+    # restarts the worker, not the whole server.
+    mem_limit: ${WORKER_MEMORY_LIMIT:-1g}
     tmpfs:
       - /tmp
     restart: unless-stopped

@@ -26,6 +26,7 @@ def clean_settings(monkeypatch):
         "deployment_platform": None,
         "updater_url": None, "updater_shared_secret": None, "starttls_check_mode": "tls_rpt",
         "fernet_key": Fernet.generate_key().decode(),
+        "database_url": "postgresql+asyncpg://dmarc_app:Str0ng-Pw@db:5432/dmarc",
     }.items():
         monkeypatch.setattr(settings, name, value)
     return monkeypatch
@@ -174,3 +175,20 @@ def test_portainer_updates_are_optional(clean_settings):
 
     clean_settings.setattr(settings, "updater_shared_secret", "x" * 32)
     assert not any("PORTAINER" in tip for tip in setup_checks.config_tips())
+
+
+@pytest.mark.parametrize(
+    "url,variable",
+    [
+        ("postgresql+asyncpg://dmarc:dmarc@db:5432/dmarc", "POSTGRES_PASSWORD"),
+        ("postgresql+asyncpg://dmarc_app:dmarc_app@db:5432/dmarc", "DMARC_APP_DB_PASSWORD"),
+    ],
+)
+def test_example_database_passwords_are_flagged(url, variable):
+    problem = setup_checks.database_password_problem(url)
+
+    assert problem is not None and variable in problem and "ALTER ROLE" in problem
+
+
+def test_own_database_password_is_fine():
+    assert setup_checks.database_password_problem("postgresql+asyncpg://dmarc_app:Str0ng-Pw@db:5432/dmarc") is None

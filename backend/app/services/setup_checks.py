@@ -10,6 +10,7 @@ import logging
 from urllib.parse import urlsplit
 
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 from app.config import settings
@@ -26,6 +27,9 @@ _CONFIG_DOCS = "https://github.com/BJD1997/YetAnotherDmarcTool/wiki/Configuratio
 DEFAULT_PUBLIC_BASE_URL = "http://localhost:8000"
 UPDATER_TOKEN_MIN_CHARS = 32
 _ENV_HINT = "in the environment (the .env file, or the stack's environment variables in Portainer) and redeploy"
+# The example passwords in the compose files: a stack started without setting
+# its own still runs, so it gets a SETUP PROBLEM line instead of a refusal.
+_DEFAULT_DB_PASSWORDS = {"dmarc": "POSTGRES_PASSWORD", "dmarc_app": "DMARC_APP_DB_PASSWORD"}
 # Requests from inside the stack (health checks, the updater) aren't judged.
 _UNJUDGED_PATHS = ("/api/health", "/api/update-request")
 
@@ -51,11 +55,27 @@ def _together(*pairs: tuple[str, object]) -> bool:
     return all(present) or not any(present)
 
 
+def database_password_problem(database_url: str) -> str | None:
+    """The database user's password is still the compose files' example."""
+    url = make_url(database_url)
+    variable = _DEFAULT_DB_PASSWORDS.get(url.password or "")
+    if variable is None:
+        return None
+    return (
+        f"The database password for {url.username} is still the example default from the compose file. "
+        f"Change it in the database first (ALTER ROLE {url.username} PASSWORD '...'), then set {variable} to the "
+        f"same value {_ENV_HINT}."
+    )
+
+
 def config_problems() -> list[str]:
     found: list[str] = []
     fernet_problem = fernet_key_problem()
     if fernet_problem:
         found.append(fernet_problem)
+    password_problem = database_password_problem(settings.database_url)
+    if password_problem:
+        found.append(password_problem)
 
     url = settings.public_base_url.rstrip("/")
     host = urlsplit(url).netloc

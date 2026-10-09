@@ -26,19 +26,28 @@ class BlockedAddressError(Exception):
     resolved at all) — callers surface it as a fetch failure, not a crash."""
 
 
+_NAT64 = ipaddress.ip_network("64:ff9b::/96")
+_NAT64_LOCAL = ipaddress.ip_network("64:ff9b:1::/48")
+
+
 def _is_public(ip: str) -> bool:
+    """Only a globally routable address counts: an allowlist, so ranges like
+    carrier-grade NAT (100.64.0.0/10, which Tailscale uses) are refused too.
+    IPv6 addresses that carry an IPv4 address (IPv4-mapped, NAT64, 6to4,
+    Teredo) are judged by the IPv4 address inside."""
     addr = ipaddress.ip_address(ip)
-    # Unwrap IPv4-mapped IPv6 (::ffff:10.0.0.1) so the v4 rules apply.
-    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
-        addr = addr.ipv4_mapped
-    return not (
-        addr.is_private
-        or addr.is_loopback
-        or addr.is_link_local
-        or addr.is_multicast
-        or addr.is_reserved
-        or addr.is_unspecified
-    )
+    if isinstance(addr, ipaddress.IPv6Address):
+        if addr in _NAT64_LOCAL:
+            return False
+        if addr.ipv4_mapped is not None:
+            addr = addr.ipv4_mapped
+        elif addr in _NAT64:
+            addr = ipaddress.IPv4Address(int(addr) & 0xFFFFFFFF)
+        elif addr.sixtofour is not None:
+            addr = addr.sixtofour
+        elif addr.teredo is not None:
+            addr = addr.teredo[1]
+    return addr.is_global and not addr.is_multicast
 
 
 async def _resolve_public(host: str, port: int) -> list[str]:
