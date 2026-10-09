@@ -2,7 +2,8 @@ from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import case, delete, func, or_, select, update
+from sqlalchemy import case, column, delete, exists, func, or_, select, true, update
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -206,6 +207,54 @@ async def list_auth_results_for_domain(db: AsyncSession, domain_id: UUID) -> Seq
     return result.all()
 
 
+async def recent_dkim_selectors_for_org(db: AsyncSession, organization_id: UUID, since: datetime) -> Sequence[tuple]:
+    """(domain_id, selector, dkim_domain, source_ip, message_volume) for every
+    DKIM signature in the org's aggregate records since `since`, in one
+    grouped query (jsonb_array_elements over auth_results.dkim) rather than
+    reading every record per domain like GET /domains/{id}/selectors/detected
+    does. For the selector notifications. ORM, not text(), so the
+    unverified-report filter still applies."""
+    dkim = DmarcAggregateRecord.auth_results["dkim"]
+    entries = (
+        func.jsonb_array_elements(case((func.jsonb_typeof(dkim) == "array", dkim), else_=func.jsonb_build_array()))
+        .table_valued(column("value", JSONB))
+        .lateral("dkim_entry")
+    )
+    # Labelled once and grouped by label: repeating the expressions would
+    # give each its own bind parameters, which Postgres can't match up.
+    selector = entries.c.value["selector"].astext.label("selector")
+    dkim_domain = entries.c.value["domain"].astext.label("dkim_domain")
+    result = await db.execute(
+        select(
+            DmarcAggregateRecord.domain_id,
+            selector,
+            dkim_domain,
+            DmarcAggregateRecord.source_ip,
+            func.sum(DmarcAggregateRecord.count),
+        )
+        .select_from(DmarcAggregateRecord)
+        .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
+        .join(entries, true())
+        .where(
+            DmarcAggregateRecord.organization_id == organization_id,
+            DmarcAggregateRecord.domain_id.is_not(None),
+            DmarcAggregateReport.date_range_begin >= since,
+            # Mail from senders blocked for that domain doesn't suggest selectors.
+            ~exists(
+                select(SourceIpIdentity.source_ip)
+                .join(SenderReview, SenderReview.service_label == SourceIpIdentity.service_label)
+                .where(
+                    SourceIpIdentity.source_ip == DmarcAggregateRecord.source_ip,
+                    SenderReview.domain_id == DmarcAggregateRecord.domain_id,
+                    SenderReview.status == SenderReviewStatus.blocked,
+                )
+            ),
+        )
+        .group_by(DmarcAggregateRecord.domain_id, selector, dkim_domain, DmarcAggregateRecord.source_ip)
+    )
+    return result.all()
+
+
 async def dmarc_summary_totals(db: AsyncSession, domain_id: UUID) -> tuple[int, int]:
     """(total_message_count, dmarc_pass_count) for one domain, all-time. A
     message passes DMARC if EITHER SPF or DKIM is aligned-pass (RFC 7489) —
@@ -278,6 +327,73 @@ async def windowed_totals_excluding_blocked(db: AsyncSession, domain_id: UUID, s
         )
     ).one()
     return int(total_count), int(pass_count)
+
+
+async def daily_totals_excluding_blocked(db: AsyncSession, domain_id: UUID, since: datetime) -> list[tuple]:
+    """(day, total_count, dmarc_pass_count) per day since `since` — the same
+    population windowed_totals_excluding_blocked rates (blocked senders out,
+    unverified reports out via the ORM filter), bucketed on the report's
+    date_range_begin. For the per-domain trend."""
+    dmarc_pass = (DmarcAggregateRecord.dkim_result == AuthResult.pass_) | (
+        DmarcAggregateRecord.spf_result == AuthResult.pass_
+    )
+    blocked_source_ips = (
+        select(SourceIpIdentity.source_ip)
+        .join(SenderReview, SenderReview.service_label == SourceIpIdentity.service_label)
+        .where(SenderReview.domain_id == domain_id, SenderReview.status == SenderReviewStatus.blocked)
+    )
+    day = func.date_trunc("day", DmarcAggregateReport.date_range_begin).label("day")
+    rows = await db.execute(
+        select(
+            day,
+            func.coalesce(func.sum(DmarcAggregateRecord.count), 0),
+            func.coalesce(func.sum(case((dmarc_pass, DmarcAggregateRecord.count), else_=0)), 0),
+        )
+        .select_from(DmarcAggregateRecord)
+        .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
+        .where(
+            DmarcAggregateRecord.domain_id == domain_id,
+            DmarcAggregateReport.date_range_begin >= since,
+            DmarcAggregateRecord.source_ip.not_in(blocked_source_ips),
+        )
+        .group_by(day)
+    )
+    return [(d.date(), int(total), int(passed)) for d, total, passed in rows]
+
+
+async def sender_auth_details(db: AsyncSession, domain_id: UUID, ips: list[str], since: datetime) -> dict:
+    """How a sender's mail (from `ips`, since `since`) authenticated, from
+    the reports' auth_results, for Ask AI's sender questions:
+    {"spf_domains": {domain: messages}, "dkim_domains": {domain: messages},
+     "dkim_selectors": {(domain, selector): {"pass": n, "fail": n}},
+     "reporters": {reporting organization: messages}}."""
+    rows = await db.execute(
+        select(DmarcAggregateRecord.auth_results, DmarcAggregateRecord.count, DmarcAggregateReport.org_name)
+        .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
+        .where(
+            DmarcAggregateRecord.domain_id == domain_id,
+            DmarcAggregateRecord.source_ip.in_(ips),
+            DmarcAggregateReport.date_range_begin >= since,
+        )
+    )
+    out: dict = {"spf_domains": {}, "dkim_domains": {}, "dkim_selectors": {}, "reporters": {}}
+    for auth_results, count, reporter in rows:
+        auth_results = auth_results or {}
+        for entry in auth_results.get("spf") or []:
+            name = (entry.get("domain") or "").lower()
+            if name:
+                out["spf_domains"][name] = out["spf_domains"].get(name, 0) + count
+        for entry in auth_results.get("dkim") or []:
+            name = (entry.get("domain") or "").lower()
+            if not name:
+                continue
+            out["dkim_domains"][name] = out["dkim_domains"].get(name, 0) + count
+            key = (name, entry.get("selector") or "?")
+            tally = out["dkim_selectors"].setdefault(key, {"pass": 0, "fail": 0})
+            tally["pass" if (entry.get("result") or "").lower() == "pass" else "fail"] += count
+        if reporter:
+            out["reporters"][reporter] = out["reporters"].get(reporter, 0) + count
+    return out
 
 
 async def latest_published_policy_for_domain(db: AsyncSession, domain_id: UUID) -> str | None:
@@ -697,6 +813,23 @@ async def unmatched_record_header_from_counts(db: AsyncSession, organization_id:
         .group_by(DmarcAggregateRecord.header_from)
     )
     return result.all()
+
+
+async def tls_rpt_session_totals_for_domain(
+    db: AsyncSession, domain_id: UUID, since: datetime
+) -> tuple[int, int, list[dict]]:
+    """(successful sessions, failed sessions, failure detail items) over the
+    domain's TLS-RPT reports since `since` — for the STARTTLS check in
+    tls_rpt mode. ORM, so unverified reports stay out."""
+    rows = (
+        await db.execute(
+            select(
+                TlsRptReport.summary_success_count, TlsRptReport.summary_failure_count, TlsRptReport.failure_details
+            ).where(TlsRptReport.domain_id == domain_id, TlsRptReport.date_range_begin >= since)
+        )
+    ).all()
+    details = [item for _success, _failure, items in rows for item in (items or [])]
+    return sum(r[0] for r in rows), sum(r[1] for r in rows), details
 
 
 async def unmatched_tls_rpt_domain_counts(db: AsyncSession, organization_id: UUID) -> Sequence:

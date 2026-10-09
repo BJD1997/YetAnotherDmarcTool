@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -38,6 +40,10 @@ class Settings(BaseSettings):
     # outbound port 25 is blocked (Azure blocks it for most subscription
     # types): every probe would fail and lower each domain's grade.
     starttls_check_enabled: bool = True
+    # Where the STARTTLS result comes from: "probe" connects to each MX on
+    # port 25; "tls_rpt" reads the TLS-RPT reports senders send (for hosts
+    # that block port 25, like Azure); "off" skips it.
+    starttls_check_mode: Literal["probe", "tls_rpt", "off"] = "probe"
 
     # Sessions (Phase 1)
     session_cookie_name: str = "dmarc_session"
@@ -217,8 +223,26 @@ class Settings(BaseSettings):
         return bool(self.updater_url and self.updater_shared_secret) or self.azure_self_update_available
 
     @property
+    def effective_starttls_mode(self) -> str:
+        """STARTTLS_CHECK_ENABLED=false (v0.1.7) still means off."""
+        return self.starttls_check_mode if self.starttls_check_enabled else "off"
+
+    @property
     def azure_self_update_available(self) -> bool:
         return bool(self.azure_updater_job_id and self.azure_update_client_id)
+
+    @property
+    def hosted_mailbox_ready(self) -> bool:
+        """Everything the hosted reporting mailbox needs to be read: without
+        it, organizations that sign in without Microsoft can't receive
+        reports at all. Only that it's filled in, not that it works: a
+        failing poll shows under Job runs."""
+        return bool(
+            self.hosted_reports_mailbox_address
+            and self.hosted_reports_tenant_id
+            and self.entra_mail_client_id
+            and self.entra_mail_client_secret
+        )
 
     @property
     def hosted_reports_domain(self) -> str | None:

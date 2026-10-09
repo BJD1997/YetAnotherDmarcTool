@@ -19,7 +19,7 @@ from app.db.session import async_session_factory, engine
 from app.models.enums import SyncStatus
 from app.repositories.domains import list_domains_with_hosted_report_address
 from app.repositories.mailbox_connections import get_or_create_hosted_reports_poll_state
-from app.services.graph.mailbox_poller import fetch_message_raw_mime, fetch_new_message_ids
+from app.services.graph.mailbox_poller import MessageTooLargeError, fetch_message_raw_mime, fetch_new_message_ids
 from app.services.ingestion import report_writer
 from app.services.ingestion.parsedmarc_adapter import UnparseableReportError, parse_report_email
 from app.services.ingestion.sender_auth import authenticate_report_sender
@@ -83,6 +83,10 @@ async def _do_poll() -> None:
                         mailbox=settings.hosted_reports_mailbox_address,
                         message_id=message_id,
                     )
+                except MessageTooLargeError as exc:
+                    logger.warning("skipped hosted-reports message: %s", exc)
+                    errors += 1
+                    continue
                 except Exception:
                     logger.exception("failed to fetch hosted-reports message %s", message_id)
                     errors += 1

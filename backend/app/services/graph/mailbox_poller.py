@@ -17,6 +17,16 @@ from app.services.graph.client_credentials import get_graph_token
 logger = logging.getLogger(__name__)
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
+
+# Real DMARC/TLS-RPT report emails are kilobytes to a few MB. The report
+# mailboxes are public (the rua= address is in DNS), so anything bigger is
+# skipped unread rather than held in memory: one huge message in the shared
+# hosted mailbox would otherwise slow processing for every organization.
+MAX_MESSAGE_BYTES = 25 * 1024 * 1024
+
+
+class MessageTooLargeError(Exception):
+    """The message is larger than MAX_MESSAGE_BYTES; it's skipped."""
 _MAX_THROTTLE_RETRIES = 3
 
 
@@ -73,6 +83,13 @@ async def fetch_message_raw_mime(*, tenant_id: str, mailbox: str, message_id: st
     token = await get_graph_token(tenant_id)
     url = f"{GRAPH_BASE}/users/{mailbox}/messages/{message_id}/$value"
     async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(url, headers={"Authorization": f"Bearer {token}"})
-        resp.raise_for_status()
-        return resp.content
+        async with client.stream("GET", url, headers={"Authorization": f"Bearer {token}"}) as resp:
+            resp.raise_for_status()
+            chunks: list[bytes] = []
+            size = 0
+            async for chunk in resp.aiter_bytes():
+                size += len(chunk)
+                if size > MAX_MESSAGE_BYTES:
+                    raise MessageTooLargeError(f"message {message_id} is larger than {MAX_MESSAGE_BYTES // (1024 * 1024)} MB")
+                chunks.append(chunk)
+            return b"".join(chunks)

@@ -1,23 +1,18 @@
 import { useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { LoadMoreButton } from "../../components/shared/LoadMoreButton";
+import { DateRangeFilter, EMPTY_DATE_RANGE, setDateRangeParams } from "../../components/shared/DateRangeFilter";
 import { ReportFreshnessValue, RiskTile } from "../../components/overview/widgets";
 import { useAdminJobRuns, useAdminJobRunsSummary, useAdminOrganizationNames } from "../../hooks/useAdmin";
 
 const JOB_TYPES = ["mailbox_poll", "dns_check"];
 const STATUSES = ["success", "failure"];
-const SINCE_OPTIONS = [
-  { label: "Any time", value: "" },
-  { label: "Last 24h", value: "1" },
-  { label: "Last 7 days", value: "7" },
-  { label: "Last 30 days", value: "30" },
-];
 
 export default function AdminJobRuns() {
   const [orgFilter, setOrgFilter] = useState("");
   const [jobTypeFilter, setJobTypeFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
-  const [sinceFilter, setSinceFilter] = useState("");
+  const [dateRange, setDateRange] = useState(EMPTY_DATE_RANGE);
 
   const { data: orgs = [] } = useAdminOrganizationNames();
   const orgNameById = new Map(orgs.map((o) => [o.id, o.name]));
@@ -28,7 +23,7 @@ export default function AdminJobRuns() {
   if (orgFilter) params.set("organization_id", orgFilter);
   if (jobTypeFilter) params.set("job_type", jobTypeFilter);
   if (statusFilter) params.set("status", statusFilter);
-  if (sinceFilter) params.set("since_days", sinceFilter);
+  setDateRangeParams(params, dateRange);
 
   const query = useAdminJobRuns(params.toString());
   const runs = query.data?.pages.flatMap((p) => p.job_runs) ?? [];
@@ -107,13 +102,7 @@ export default function AdminJobRuns() {
             </option>
           ))}
         </select>
-        <select className="input" value={sinceFilter} onChange={(e) => setSinceFilter(e.target.value)}>
-          {SINCE_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
+        <DateRangeFilter value={dateRange} onChange={setDateRange} />
         <button className="btn btn--secondary btn--sm" onClick={() => query.refetch()} disabled={query.isFetching}>
           <RefreshCw />
           {query.isFetching ? "Refreshing…" : "Refresh"}

@@ -43,3 +43,23 @@ async def test_onboarding_status_with_verified_domain(api):
     body = response.json()
     assert body["has_domain"] is True
     assert body["has_verified_domain"] is True
+
+
+async def test_onboarding_status_says_whether_the_server_has_a_hosted_mailbox(api, monkeypatch):
+    from app.config import settings
+
+    client, owner_factory = api
+    _org, user = await seed_org_and_user(owner_factory, entra=False)
+    await login_as(client, owner_factory, user)
+    for name in ("hosted_reports_mailbox_address", "hosted_reports_tenant_id", "entra_mail_client_id", "entra_mail_client_secret"):
+        monkeypatch.setattr(settings, name, None)
+
+    assert (await client.get("/api/onboarding/status")).json()["hosted_mailbox_ready"] is False
+
+    monkeypatch.setattr(settings, "hosted_reports_mailbox_address", "reports@hosted.example")
+    monkeypatch.setattr(settings, "hosted_reports_tenant_id", "00000000-0000-0000-0000-000000000001")
+    monkeypatch.setattr(settings, "entra_mail_client_id", "client")
+    assert (await client.get("/api/onboarding/status")).json()["hosted_mailbox_ready"] is False  # no secret yet
+
+    monkeypatch.setattr(settings, "entra_mail_client_secret", "secret")
+    assert (await client.get("/api/onboarding/status")).json()["hosted_mailbox_ready"] is True

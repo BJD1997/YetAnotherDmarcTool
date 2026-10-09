@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user
 from app.repositories.dmarc_reports import count_reports_for_org
@@ -47,4 +48,8 @@ async def onboarding_status(db: AsyncSession = Depends(get_db), user: User = Dep
         "has_verified_domain": has_verified_domain,
         "has_dns_baseline": has_dns_baseline,
         "has_any_report": has_any_report,
+        # Organizations without Microsoft sign-in can only receive reports
+        # through the server's hosted mailbox: the wizard says so plainly
+        # when this server doesn't have one.
+        "hosted_mailbox_ready": settings.hosted_mailbox_ready,
     }

@@ -5,8 +5,10 @@ import type { Domain } from "../../api/types";
 import type { SenderInventoryRow, SenderReviewStatus, SenderReviewUpdate, SenderSourceIp } from "../../api/overview";
 import { useAuth } from "../../auth/AuthContext";
 import { useInView } from "../../hooks/useInView";
+import { useCurrentOrganization } from "../../hooks/useOrganization";
 import { useSenderInventory, useUpdateSenderReview } from "../../hooks/useOverviewResources";
 import { ServiceBadge, riskScore, passRateStyle } from "../domain/shared";
+import AskAiButton from "../shared/AskAiButton";
 
 interface MergedRow extends SenderInventoryRow {
   domain_id: string;
@@ -24,10 +26,13 @@ const BLOCKED_LOW_VOLUME_THRESHOLD = 10;
 // still shows everything.
 const WINDOW_OPTIONS: { label: string; days: number | null }[] = [
   { label: "Last 30 days", days: 30 },
+  { label: "Last 60 days", days: 60 },
   { label: "Last 90 days", days: 90 },
+  { label: "Last 180 days", days: 180 },
   { label: "All time", days: null },
 ];
-const DEFAULT_WINDOW_DAYS: number | null = 90;
+// Until the organization (and its rating period) has loaded.
+const FALLBACK_WINDOW_DAYS = 90;
 
 type FilterKey = "all" | "failing" | "unknown" | "approved" | "needs_owner" | "spoofed" | "rdns" | "archived";
 
@@ -93,7 +98,11 @@ export default function SenderInventory({ domainId, domains }: { domainId: strin
   const highlightLabel = searchParams.get("highlight");
   const [filter, setFilter] = useState<FilterKey>("all");
   const [showBlockedGroup, setShowBlockedGroup] = useState(false);
-  const [windowDays, setWindowDays] = useState<number | null>(DEFAULT_WINDOW_DAYS);
+  // Defaults to the organization's rating period (Settings → General), the
+  // same window the Action queue counts in; undefined = not changed here.
+  const { data: org } = useCurrentOrganization();
+  const [chosenWindowDays, setWindowDays] = useState<number | null | undefined>(undefined);
+  const windowDays = chosenWindowDays === undefined ? (org?.rating_window_days ?? FALLBACK_WINDOW_DAYS) : chosenWindowDays;
   const { ref: cardRef, inView } = useInView<HTMLDivElement>();
   const highlightedRowRef = useRef<HTMLTableRowElement | null>(null);
 
@@ -104,7 +113,7 @@ export default function SenderInventory({ domainId, domains }: { domainId: strin
   // isPending (not isLoading) covers both "still waiting to come into view"
   // and "actively fetching" — isLoading alone is false while the query sits
   // disabled pre-view, which would otherwise show the empty state early.
-  const { data, isPending } = useSenderInventory(targetDomains, windowDays, riskScore, inView);
+  const { data, isPending, isPlaceholderData } = useSenderInventory(targetDomains, windowDays, riskScore, inView);
   const updateReview = useUpdateSenderReview();
 
   const allRows = data ?? [];
@@ -130,7 +139,7 @@ export default function SenderInventory({ domainId, domains }: { domainId: strin
   // time once, so the link still lands on it.
   const widenedForHighlight = useRef(false);
   useEffect(() => {
-    if (!highlightLabel || isPending || windowDays === null || widenedForHighlight.current) return;
+    if (!highlightLabel || isPending || isPlaceholderData || windowDays === null || widenedForHighlight.current) return;
     if (!allRows.some(isHighlighted)) {
       widenedForHighlight.current = true;
       setWindowDays(null);
@@ -146,7 +155,14 @@ export default function SenderInventory({ domainId, domains }: { domainId: strin
   return (
     <div className="card" ref={cardRef}>
       <div className="card-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem" }}>
-        <h3>Sender inventory</h3>
+        <h3>
+          Sender inventory
+          {isPlaceholderData && (
+            <span className="muted" style={{ fontSize: "0.8rem", fontWeight: 400, marginLeft: "0.5rem" }}>
+              Updating…
+            </span>
+          )}
+        </h3>
         <select
           className="input"
           style={{ padding: "0.25rem 0.5rem", fontSize: "0.8rem", width: "auto" }}
@@ -191,7 +207,7 @@ export default function SenderInventory({ domainId, domains }: { domainId: strin
         <p className="empty-state">No senders match this filter.</p>
       )}
       {!isLoading && filteredRows.length > 0 && (
-        <div className="table-wrap">
+        <div className="table-wrap" style={isPlaceholderData ? { opacity: 0.55, transition: "opacity 0.15s" } : undefined}>
           <table className="table">
             <thead>
               <tr>
@@ -210,6 +226,7 @@ export default function SenderInventory({ domainId, domains }: { domainId: strin
                   row={r}
                   showDomain={!domainId}
                   canManage={canManage}
+                  period={windowDays ?? "all"}
                   highlighted={isHighlighted(r)}
                   rowRef={isHighlighted(r) ? highlightedRowRef : undefined}
                   onUpdate={(body) => updateReview.mutate({ domain_id: r.domain_id, service_label: r.service_label, body })}
@@ -234,6 +251,7 @@ export default function SenderInventory({ domainId, domains }: { domainId: strin
                     row={r}
                     showDomain={!domainId}
                     canManage={canManage}
+                    period={windowDays ?? "all"}
                     onUpdate={(body) => updateReview.mutate({ domain_id: r.domain_id, service_label: r.service_label, body })}
                   />
                 ))}
@@ -301,6 +319,7 @@ function SenderInventoryRowView({
   row,
   showDomain,
   canManage,
+  period,
   onUpdate,
   highlighted = false,
   rowRef,
@@ -308,6 +327,8 @@ function SenderInventoryRowView({
   row: MergedRow;
   showDomain: boolean;
   canManage: boolean;
+  // The list's chosen period, so Ask AI looks at the same data.
+  period: number | "all";
   onUpdate: (body: Partial<Pick<SenderReviewUpdate, "status" | "owner">>) => void;
   highlighted?: boolean;
   rowRef?: RefObject<HTMLTableRowElement | null>;
@@ -344,6 +365,16 @@ function SenderInventoryRowView({
               <span className="muted" style={{ fontSize: "0.8rem" }}>
                 {" "}
                 ({row.source_ip_count} IPs)
+              </span>
+            )}
+            {/* Blocked senders should keep failing: nothing to ask. */}
+            {row.dmarc_pass_pct !== null && row.dmarc_pass_pct < 90 && row.status !== "blocked" && (
+              <span style={{ marginLeft: "0.4rem" }}>
+                <AskAiButton
+                  domainId={row.domain_id}
+                  hint={{ kind: "sender", subject: row.service_label, period }}
+                  issue={`Sender "${row.service_label}" passes DMARC on only ${row.dmarc_pass_pct}% of its mail.`}
+                />
               </span>
             )}
             {row.likely_spoofed && row.status === "pending" && (

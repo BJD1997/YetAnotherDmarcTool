@@ -44,6 +44,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 _OAUTH_STATE_COOKIE = "oauth_state"
 _OAUTH_VERIFIER_COOKIE = "oauth_verifier"
+_OAUTH_NONCE_COOKIE = "oauth_nonce"
 _MFA_PENDING_COOKIE = settings.mfa_pending_cookie_name
 
 
@@ -60,16 +61,18 @@ async def login() -> RedirectResponse:
         raise HTTPException(status.HTTP_404_NOT_FOUND)
 
     state = secrets.token_urlsafe(24)
+    nonce = secrets.token_urlsafe(24)
     verifier = pkce.generate_verifier()
     challenge = pkce.derive_challenge(verifier)
 
     auth_url = entra_oidc.build_authorization_url(
-        state=state, code_challenge=challenge, redirect_uri=settings.entra_sso_redirect_uri
+        state=state, nonce=nonce, code_challenge=challenge, redirect_uri=settings.entra_sso_redirect_uri
     )
     response = RedirectResponse(auth_url, status_code=302)
     short_lived = {**cookie_kwargs(), "max_age": 600}
     response.set_cookie(_OAUTH_STATE_COOKIE, state, **short_lived)
     response.set_cookie(_OAUTH_VERIFIER_COOKIE, verifier, **short_lived)
+    response.set_cookie(_OAUTH_NONCE_COOKIE, nonce, **short_lived)
     return response
 
 
@@ -89,8 +92,9 @@ async def callback(request: Request, db: AsyncSession = Depends(get_db)) -> Redi
     state = request.query_params.get("state")
     cookie_state = request.cookies.get(_OAUTH_STATE_COOKIE)
     verifier = request.cookies.get(_OAUTH_VERIFIER_COOKIE)
+    nonce = request.cookies.get(_OAUTH_NONCE_COOKIE)
 
-    if not code or not state or not cookie_state or not secrets.compare_digest(state, cookie_state) or not verifier:
+    if not code or not state or not cookie_state or not secrets.compare_digest(state, cookie_state) or not verifier or not nonce:
         await record_sign_in_event(
             db, result=SignInResult.failure, auth_method=AuthMethod.entra,
             failure_reason="invalid_state", ip_address=ip_address, user_agent=user_agent,
@@ -103,6 +107,8 @@ async def callback(request: Request, db: AsyncSession = Depends(get_db)) -> Redi
             code=code, code_verifier=verifier, redirect_uri=settings.entra_sso_redirect_uri
         )
         claims = await entra_oidc.validate_id_token(tokens["id_token"])
+        if not secrets.compare_digest(str(claims.get("nonce", "")), nonce):
+            raise entra_oidc.TokenValidationError("id_token nonce doesn't match this sign-in")
     except (entra_oidc.TokenValidationError, KeyError, httpx.HTTPError):
         # HTTPError: Microsoft rejected the code exchange (expired/already
         # used, e.g. the user pressed Back mid-login) or was unreachable.
@@ -186,6 +192,7 @@ async def callback(request: Request, db: AsyncSession = Depends(get_db)) -> Redi
     response = RedirectResponse("/", status_code=302)
     response.delete_cookie(_OAUTH_STATE_COOKIE, path="/")
     response.delete_cookie(_OAUTH_VERIFIER_COOKIE, path="/")
+    response.delete_cookie(_OAUTH_NONCE_COOKIE, path="/")
     response.set_cookie(
         settings.session_cookie_name,
         raw_token,
@@ -245,6 +252,22 @@ async def _set_mfa_pending(db: AsyncSession, response: Response, user_id) -> Non
     response.set_cookie(_MFA_PENDING_COOKIE, raw_token, **short_lived)
 
 
+async def _lookup_across_orgs(db: AsyncSession, lookup):
+    """Finds the user behind a sign-in step before their organization is
+    known: the one place sign-in needs to read across organizations. The
+    bypass is switched off again straight after, and the rest of the
+    request runs in that user's own organization, so a bug further on
+    can't reach other organizations' data."""
+    await set_platform_admin_context(db, is_admin=True)
+    try:
+        user = await lookup()
+    finally:
+        await set_platform_admin_context(db, is_admin=False)
+    if user is not None:
+        await set_org_context(db, user.organization_id)
+    return user
+
+
 async def _get_pending_user(request: Request, db: AsyncSession) -> tuple[User, MfaPendingChallenge]:
     raw_token = request.cookies.get(_MFA_PENDING_COOKIE)
     if not raw_token:
@@ -258,8 +281,7 @@ async def _get_pending_user(request: Request, db: AsyncSession) -> tuple[User, M
     # bypass the Entra callback effectively sidesteps by resolving org
     # first; here there's no org to resolve to ahead of time, so this reads
     # across all orgs the same way the worker's cross-org sweeps do.
-    await set_platform_admin_context(db, is_admin=True)
-    user = await db.get(User, challenge.user_id)
+    user = await _lookup_across_orgs(db, lambda: db.get(User, challenge.user_id))
     if user is None or user.status != UserStatus.active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "no pending login")
     return user, challenge
@@ -268,8 +290,7 @@ async def _get_pending_user(request: Request, db: AsyncSession) -> tuple[User, M
 @router.post("/local-login", dependencies=[Depends(rate_limiter(login_limiter))])
 async def local_login(body: LocalLoginRequest, request: Request, db: AsyncSession = Depends(get_db)) -> Response:
     ip_address, user_agent = client_network_info(request)
-    await set_platform_admin_context(db, is_admin=True)
-    user = await get_local_user_by_email(db, body.email)
+    user = await _lookup_across_orgs(db, lambda: get_local_user_by_email(db, body.email))
     if user is None:
         # Spend the same Argon2 cost as a real verify so response timing
         # doesn't reveal whether this email exists (user enumeration).
@@ -444,8 +465,7 @@ async def set_password(body: SetPasswordRequest, db: AsyncSession = Depends(get_
     # See _get_pending_user's comment — same pre-org-context bypass, needed
     # here because users is RLS-protected and this endpoint doesn't know
     # the org until after this lookup.
-    await set_platform_admin_context(db, is_admin=True)
-    user = await db.get(User, setup_token.user_id)
+    user = await _lookup_across_orgs(db, lambda: db.get(User, setup_token.user_id))
     if user is None or user.status != UserStatus.active:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "this link is invalid or has expired")
     if len(body.new_password) < 12:

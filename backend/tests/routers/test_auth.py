@@ -304,7 +304,7 @@ async def _mock_entra_success(monkeypatch, *, tenant_id: str, object_id: str, em
         return {"id_token": "fake-id-token", "access_token": "fake-access-token"}
 
     async def _fake_validate(id_token):
-        return {"tid": tenant_id, "oid": object_id, "preferred_username": email, "name": name}
+        return {"tid": tenant_id, "oid": object_id, "preferred_username": email, "name": name, "nonce": "test-nonce"}
 
     monkeypatch.setattr("app.routers.auth.entra_oidc.exchange_code_for_tokens", _fake_exchange)
     monkeypatch.setattr("app.routers.auth.entra_oidc.validate_id_token", _fake_validate)
@@ -325,6 +325,7 @@ async def test_callback_first_user_becomes_org_admin(api, monkeypatch):
     await _mock_entra_success(monkeypatch, tenant_id=tenant_id, object_id="first-object-id", email="first@example.com")
     client.cookies.set("oauth_state", "matching-state")
     client.cookies.set("oauth_verifier", "some-verifier")
+    client.cookies.set("oauth_nonce", "test-nonce")
 
     response = await client.get(
         "/api/auth/callback",
@@ -347,6 +348,7 @@ async def test_callback_creates_returning_org_user_as_member(api, monkeypatch):
 
     client.cookies.set("oauth_state", "matching-state")
     client.cookies.set("oauth_verifier", "some-verifier")
+    client.cookies.set("oauth_nonce", "test-nonce")
 
     response = await client.get(
         "/api/auth/callback",
@@ -368,6 +370,7 @@ async def test_callback_organization_not_provisioned(api, monkeypatch):
     await _mock_entra_success(monkeypatch, tenant_id="00000000-0000-0000-0000-000000000000", object_id="oid", email="a@example.com")
     client.cookies.set("oauth_state", "matching-state")
     client.cookies.set("oauth_verifier", "verifier")
+    client.cookies.set("oauth_nonce", "test-nonce")
 
     response = await client.get(
         "/api/auth/callback",
@@ -399,3 +402,64 @@ async def test_callback_entra_error_param(api):
     response = await client.get("/api/auth/callback", params={"error": "access_denied"}, follow_redirects=False)
     assert response.status_code == 302
     assert "access_denied" in response.headers["location"]
+
+
+async def test_sign_in_lookup_reads_across_orgs_only_for_that_lookup(api, app_sessionmaker):
+    from sqlalchemy import text
+
+    from app.models.user import User
+    from app.routers.auth import _lookup_across_orgs
+
+    _client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    other_org, _other_user = await seed_org_and_user(owner_factory, entra=True)
+    async with app_sessionmaker() as db:
+        found = await _lookup_across_orgs(db, lambda: db.get(User, user.id))
+        found_id = found.id if found else None
+        admin_flag = (await db.execute(text("SELECT current_setting('app.is_platform_admin', true)"))).scalar_one()
+        org_ctx = (await db.execute(text("SELECT current_setting('app.current_org_id', true)"))).scalar_one()
+        visible = (await db.execute(text("SELECT count(*) FROM users WHERE organization_id = :o"), {"o": other_org.id})).scalar_one()
+        await db.rollback()
+
+    assert found_id == user.id
+    assert admin_flag == "false"
+    assert org_ctx == str(org.id)
+    assert visible == 0
+
+
+async def test_callback_refuses_an_id_token_from_another_sign_in(api, monkeypatch):
+    client, _owner_factory = api
+    await _mock_entra_success(monkeypatch, tenant_id="00000000-0000-0000-0000-000000000000", object_id="oid", email="a@example.com")
+    client.cookies.set("oauth_state", "matching-state")
+    client.cookies.set("oauth_verifier", "verifier")
+    client.cookies.set("oauth_nonce", "a-different-nonce")
+
+    response = await client.get(
+        "/api/auth/callback", params={"code": "auth-code", "state": "matching-state"}, follow_redirects=False
+    )
+
+    assert response.status_code == 302
+    assert "dmarc_session" not in response.cookies
+    assert "organization_not_provisioned" not in response.headers["location"]
+
+
+async def test_login_sends_a_nonce(api, monkeypatch):
+    from urllib.parse import parse_qs, urlsplit
+
+    from app.config import settings
+
+    client, _owner_factory = api
+    monkeypatch.setattr(settings, "entra_sso_client_id", "client-id")
+
+    response = await client.get("/api/auth/login", follow_redirects=False)
+
+    nonce = parse_qs(urlsplit(response.headers["location"]).query)["nonce"][0]
+    assert nonce and response.cookies["oauth_nonce"] == nonce
+
+
+async def test_enrollment_refuses_a_secret_the_server_didnt_hand_out(api):
+    client, _owner_factory = api
+
+    for weak in ("AAAA", "a" * 32, "JBSWY3DPEHPK3PXP"):
+        response = await client.post("/api/auth/enroll-otp/confirm", json={"secret": weak, "code": "123456"})
+        assert response.status_code == 422, weak

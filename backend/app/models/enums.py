@@ -71,6 +71,9 @@ class CheckStatus(str, enum.Enum):
     warn = "warn"
     fail = "fail"
     error = "error"
+    # Neither passed nor failed yet (e.g. STARTTLS waiting for TLS-RPT
+    # reports): shown, but left out of the grade.
+    pending = "pending"
 
 
 class Disposition(str, enum.Enum):

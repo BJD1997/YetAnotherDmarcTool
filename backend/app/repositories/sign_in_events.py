@@ -1,5 +1,6 @@
 import uuid
 from collections.abc import Sequence
+from datetime import datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +18,8 @@ async def _list_events(
     before_id: uuid.UUID | None,
     result: SignInResult | None,
     auth_method: AuthMethod | None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
 ) -> Sequence[SignInEvent]:
     """Keyset-paginated on (created_at, id) via keyset_paginate — see
     app/services/pagination.py. has_more is still computed by the router
@@ -26,6 +29,10 @@ async def _list_events(
         query = query.where(SignInEvent.result == result)
     if auth_method is not None:
         query = query.where(SignInEvent.auth_method == auth_method)
+    if created_from is not None:
+        query = query.where(SignInEvent.created_at >= created_from)
+    if created_to is not None:
+        query = query.where(SignInEvent.created_at < created_to)
 
     anchor_query = None
     if before_id is not None:
@@ -46,20 +53,30 @@ async def list_sign_in_events(
     before_id: uuid.UUID | None,
     result: SignInResult | None,
     auth_method: AuthMethod | None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
 ) -> Sequence[SignInEvent]:
     return await _list_events(
         db, SignInEvent.organization_id == organization_id,
         limit=limit, before_id=before_id, result=result, auth_method=auth_method,
+        created_from=created_from, created_to=created_to,
     )
 
 
 async def list_platform_admin_sign_in_events(
-    db: AsyncSession, *, limit: int, before_id: uuid.UUID | None, result: SignInResult | None
+    db: AsyncSession,
+    *,
+    limit: int,
+    before_id: uuid.UUID | None,
+    result: SignInResult | None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
 ) -> Sequence[SignInEvent]:
     """Break-glass admin sign-ins and account changes (no organization)."""
     return await _list_events(
         db, SignInEvent.auth_method == AuthMethod.platform_admin,
         limit=limit, before_id=before_id, result=result, auth_method=None,
+        created_from=created_from, created_to=created_to,
     )
 
 

@@ -12,7 +12,7 @@ from app.models.user import User
 from app.repositories.domains import get_owned_domain, list_domains_for_org
 from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.services.dmarc_analytics import service_breakdown_multi
-from app.services.rating.domain_rating import RATING_WINDOW_DAYS
+from app.services.rating.domain_rating import rating_window_days
 from app.services.action_queue.rules import (
     domain_ready_for_stricter_policy,
     high_volume_failure,
@@ -25,6 +25,7 @@ from app.services.action_queue.rules import (
     rua_destination_broken,
     sender_alignment_issue,
     spf_lookup_limit_risk,
+    trending_down,
     unknown_sender_above_threshold,
 )
 
@@ -58,7 +59,7 @@ async def action_queue(
     # The same 90 days the failing-messages count (and the domain rating)
     # use, and the Senders list's default window, so every number in the
     # queue describes the same mail.
-    since = datetime.now(timezone.utc) - timedelta(days=RATING_WINDOW_DAYS)
+    since = datetime.now(timezone.utc) - timedelta(days=await rating_window_days(db, user.organization_id))
     # Sender items wait until a domain is verified, like its senders list,
     # rating and DNS checks.
     verified = [d for d in domains if d.verification_status == DomainVerificationStatus.verified]
@@ -74,6 +75,7 @@ async def action_queue(
             items += likely_spoofed_sender(domain, services, reviewed_labels)
             items += sender_alignment_issue(domain, services)
             items += await high_volume_failure(db, domain, services)
+            items += await trending_down(db, domain)
         items += await domain_ready_for_stricter_policy(db, domain)
         items += await low_compliance_domain(db, domain)
         items += await spf_lookup_limit_risk(db, domain)

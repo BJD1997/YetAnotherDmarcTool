@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,6 +34,8 @@ async def list_sign_in_events_route(
     before_id: uuid.UUID | None = Query(None),
     result: SignInResult | None = Query(None),
     auth_method: AuthMethod | None = Query(None),
+    created_from: datetime | None = Query(None, alias="from"),
+    created_to: datetime | None = Query(None, alias="to"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_org_admin),
 ) -> dict:
@@ -40,6 +43,7 @@ async def list_sign_in_events_route(
     not just the viewer's own, same admin-only bar Settings.tsx already
     applies to its other sections."""
     events = await list_sign_in_events(
-        db, user.organization_id, limit=limit, before_id=before_id, result=result, auth_method=auth_method
+        db, user.organization_id, limit=limit, before_id=before_id, result=result, auth_method=auth_method,
+        created_from=created_from, created_to=created_to,
     )
     return {"events": [sign_in_event_out(e) for e in events], "has_more": len(events) == limit}

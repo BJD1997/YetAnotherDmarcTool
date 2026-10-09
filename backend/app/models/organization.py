@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Boolean, String
+from sqlalchemy import Boolean, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -57,6 +57,15 @@ class Organization(UUIDPkMixin, TimestampMixin, Base):
     # is always available to them regardless of this flag — see
     # app/routers/domains.py's _hosted_mailbox_available.
     hosted_mailbox_opt_in: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # How far back each domain's grade, failing-message count, readiness and
+    # the Senders list's default look (Settings, org admins): 30/60/90/180.
+    # Ask AI buttons (Settings → General, the onboarding wizard, or a one-time
+    # question for org admins): None = not answered yet (the question shows),
+    # False = declined, True = on. See app/services/ask_ai.
+    ask_ai_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None)
+
+    rating_window_days: Mapped[int] = mapped_column(Integer, nullable=False, default=90, server_default="90")
 
     # Blocks every state-changing request for this org's users — see
     # enforce_demo_read_only in app/main.py. Defaults False so this can

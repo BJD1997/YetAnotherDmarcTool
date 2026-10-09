@@ -41,7 +41,7 @@ from app.db.session import async_session_factory, engine
 from app.models.enums import ConsentStatus, JobStatus, JobType, SyncStatus
 from app.models.job_run import JobRun
 from app.repositories.mailbox_connections import get_org_mailbox_connection
-from app.services.graph.mailbox_poller import fetch_message_raw_mime, fetch_new_message_ids
+from app.services.graph.mailbox_poller import MessageTooLargeError, fetch_message_raw_mime, fetch_new_message_ids
 from app.services.ingestion import report_writer
 from app.services.ingestion.parsedmarc_adapter import UnparseableReportError, parse_report_email
 from app.services.ingestion.sender_auth import authenticate_report_sender
@@ -111,6 +111,10 @@ async def _do_poll(organization_id: uuid.UUID, tenant_id: str) -> None:
                         tenant_id=tenant_id, mailbox=connection.mailbox_address, message_id=message_id
                     )
                     parsed = parse_report_email(raw_mime)
+                except MessageTooLargeError as exc:
+                    logger.warning("skipped message (org %s): %s", organization_id, exc)
+                    stats["errors"] += 1
+                    continue
                 except UnparseableReportError:
                     stats["errors"] += 1
                     continue

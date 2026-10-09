@@ -4,10 +4,11 @@ import type { Domain } from "../../api/types";
 import type { ActionItem } from "../../api/overview";
 import { MailProfileSelect, Stat } from "../../components/domain/shared";
 import DomainRatingCard from "../../components/domain/DomainRatingCard";
+import TrendLine from "../../components/domain/TrendLine";
 import { IssueRow } from "../../components/shared/IssueRow";
 import { useAuth } from "../../auth/AuthContext";
 import { useUpdateDomain } from "../../hooks/useDomains";
-import { useActionQueue, useDmarcSummary, useDomainRating } from "../../hooks/useDomainInsights";
+import { useActionQueue, useDmarcSummary, useDomainRating, useDomainTrend } from "../../hooks/useDomainInsights";
 
 const SEVERITY_ICON: Record<ActionItem["severity"], typeof AlertTriangle> = {
   critical: AlertOctagon,
@@ -24,6 +25,7 @@ export default function OverviewTab() {
   const setMailProfile = useUpdateDomain(domain.id);
   const { data: summary, isLoading: summaryLoading } = useDmarcSummary(domain.id);
   const { data: rating } = useDomainRating(domain.id);
+  const { data: trend } = useDomainTrend(domain.id);
   const { data: fixes } = useActionQueue(domain.id);
 
   const passRate =
@@ -77,6 +79,7 @@ export default function OverviewTab() {
             <Stat label="Failing messages" value={summary.dmarc_fail_count} />
             <Stat label="Current policy" value={summary.current_policy ? `p=${summary.current_policy}` : "—"} />
           </div>
+          {trend && <TrendLine trend={trend} />}
           {topFix && (
             <TopFixAlert topFix={topFix} />
           )}

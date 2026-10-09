@@ -24,8 +24,9 @@ def clean_settings(monkeypatch):
         "hosted_reports_mailbox_address": None, "hosted_reports_tenant_id": None,
         "cloudflare_api_token": None, "cloudflare_zone_id": None,
         "deployment_platform": None,
-        "updater_url": None, "updater_shared_secret": None,
+        "updater_url": None, "updater_shared_secret": None, "starttls_check_mode": "tls_rpt",
         "fernet_key": Fernet.generate_key().decode(),
+        "database_url": "postgresql+asyncpg://dmarc_app:Str0ng-Pw@db:5432/dmarc",
     }.items():
         monkeypatch.setattr(settings, name, value)
     return monkeypatch
@@ -155,3 +156,39 @@ def test_tips_for_optional_integrations(clean_settings):
     clean_settings.setattr(settings, "cloudflare_api_token", "tok")
     clean_settings.setattr(settings, "cloudflare_zone_id", "zone")
     assert setup_checks.config_tips() == []
+
+
+def test_starttls_probe_on_azure(clean_settings):
+    clean_settings.setattr(settings, "starttls_check_enabled", True)
+    clean_settings.setattr(settings, "starttls_check_mode", "probe")
+    clean_settings.setattr(settings, "deployment_platform", "azure-container-apps")
+    assert "STARTTLS_CHECK_MODE=tls_rpt" in problems()
+    clean_settings.setattr(settings, "starttls_check_mode", "tls_rpt")
+    assert setup_checks.config_problems() == []
+
+
+def test_portainer_updates_are_optional(clean_settings):
+    clean_settings.setattr(settings, "deployment_platform", "portainer")
+    clean_settings.setattr(settings, "updater_url", "http://updater:9999")
+    assert setup_checks.config_problems() == []
+    assert "PORTAINER_API_KEY" in "\n".join(setup_checks.config_tips())
+
+    clean_settings.setattr(settings, "updater_shared_secret", "x" * 32)
+    assert not any("PORTAINER" in tip for tip in setup_checks.config_tips())
+
+
+@pytest.mark.parametrize(
+    "url,variable",
+    [
+        ("postgresql+asyncpg://dmarc:dmarc@db:5432/dmarc", "POSTGRES_PASSWORD"),
+        ("postgresql+asyncpg://dmarc_app:dmarc_app@db:5432/dmarc", "DMARC_APP_DB_PASSWORD"),
+    ],
+)
+def test_example_database_passwords_are_flagged(url, variable):
+    problem = setup_checks.example_database_login_problem(url)
+
+    assert problem is not None and variable in problem and "ALTER ROLE" in problem
+
+
+def test_own_database_password_is_fine():
+    assert setup_checks.example_database_login_problem("postgresql+asyncpg://dmarc_app:Str0ng-Pw@db:5432/dmarc") is None

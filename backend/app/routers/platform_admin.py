@@ -733,11 +733,15 @@ async def list_admin_sign_in_events(
     limit: int = Query(50, ge=1, le=200),
     before_id: uuid.UUID | None = Query(None),
     result: SignInResult | None = Query(None),
+    created_from: datetime | None = Query(None, alias="from"),
+    created_to: datetime | None = Query(None, alias="to"),
     db: AsyncSession = Depends(get_db),
     _admin: AdminPrincipal = Depends(get_current_platform_admin),
 ) -> dict:
     """Break-glass admin sign-ins, same shape as an org's /sign-in-events."""
-    events = await list_platform_admin_sign_in_events(db, limit=limit, before_id=before_id, result=result)
+    events = await list_platform_admin_sign_in_events(
+        db, limit=limit, before_id=before_id, result=result, created_from=created_from, created_to=created_to
+    )
     return {"events": [sign_in_event_out(e) for e in events], "has_more": len(events) == limit}
 
 
@@ -749,6 +753,8 @@ async def list_job_runs_route(
     job_type: JobType | None = Query(None),
     status_filter: JobStatus | None = Query(None, alias="status"),
     since_days: int | None = Query(None, ge=1, le=365),
+    created_from: datetime | None = Query(None, alias="from"),
+    created_to: datetime | None = Query(None, alias="to"),
     db: AsyncSession = Depends(get_db),
     _admin: AdminPrincipal = Depends(get_current_platform_admin),
 ) -> dict:
@@ -760,6 +766,8 @@ async def list_job_runs_route(
         job_type=job_type,
         status_filter=status_filter,
         since_days=since_days,
+        created_from=created_from,
+        created_to=created_to,
     )
     return {
         "job_runs": [

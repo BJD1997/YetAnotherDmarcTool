@@ -4,6 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, EmailStr, field_validator
 
 from app.models.enums import ConsentStatus, OrganizationStatus, UserRole
+from app.schemas.auth import TotpSecret
 
 
 class AdminLoginRequest(BaseModel):
@@ -16,7 +17,7 @@ class AdminVerifyOtpRequest(BaseModel):
 
 
 class AdminEnrollOtpConfirmRequest(BaseModel):
-    secret: str
+    secret: TotpSecret
     code: str
 
 

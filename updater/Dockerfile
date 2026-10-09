@@ -11,6 +11,7 @@ COPY server.py /server.py
 # Azure Container Apps has no Docker socket: there the same image runs as a
 # manually started job with azure_update.py as its command instead.
 COPY azure_update.py /azure_update.py
+COPY portainer_update.py /portainer_update.py
 
 EXPOSE 9999
 

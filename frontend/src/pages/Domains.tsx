@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import {
   FileText,
@@ -150,7 +151,41 @@ function DomainRow({
   indent: boolean;
 }) {
   const [showInstructions, setShowInstructions] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
+  // The menu is rendered on <body> at a fixed position: inside the table's
+  // scroll box it got clipped on the last rows.
+  const [menuStyle, setMenuStyle] = useState<CSSProperties | null>(null);
+  const menuOpen = menuStyle !== null;
+  const menuButton = useRef<HTMLButtonElement>(null);
+
+  function setMenuOpen(open: boolean | ((wasOpen: boolean) => boolean)) {
+    const next = typeof open === "function" ? open(menuOpen) : open;
+    const rect = menuButton.current?.getBoundingClientRect();
+    if (!next || !rect) {
+      setMenuStyle(null);
+      return;
+    }
+    const right = document.documentElement.clientWidth - rect.right;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    // Open upwards near the bottom of the window (the menu is ~200px tall);
+    // in a very short window it scrolls rather than running off-screen.
+    setMenuStyle(
+      spaceBelow < 220 && rect.top > spaceBelow
+        ? { position: "fixed", right, top: "auto", bottom: window.innerHeight - rect.top + 4, maxHeight: rect.top - 12, overflowY: "auto" }
+        : { position: "fixed", right, top: rect.bottom + 4, maxHeight: spaceBelow - 12, overflowY: "auto" },
+    );
+  }
+
+  // A fixed menu would stay put while the page scrolls, so close it instead.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = () => setMenuStyle(null);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [menuOpen]);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const verifyDomain = useVerifyDomain(domain.id, (result) => {
@@ -279,14 +314,14 @@ function DomainRow({
               per the review's own suggested direction, rather than
               reflowing/hiding icons at specific breakpoints. */}
           <div className="chip-row" style={{ justifyContent: "flex-end" }}>
-            <div style={{ position: "relative" }}>
-              <button className="icon-btn" onClick={() => setMenuOpen((v) => !v)} title="Actions">
+            <div>
+              <button ref={menuButton} className="icon-btn" onClick={() => setMenuOpen((v) => !v)} title="Actions">
                 <MoreVertical />
               </button>
-              {menuOpen && (
+              {menuOpen && createPortal(
                 <>
                   <div style={{ position: "fixed", inset: 0, zIndex: 19 }} onClick={() => setMenuOpen(false)} />
-                  <div className="dropdown-menu">
+                  <div className="dropdown-menu" style={menuStyle ?? undefined}>
                     {hasReports && (
                       <Link to={`/domains/${domain.id}/reports`} onClick={() => setMenuOpen(false)}>
                         <FileText size={14} />
@@ -314,7 +349,8 @@ function DomainRow({
                       </>
                     )}
                   </div>
-                </>
+                </>,
+                document.body,
               )}
             </div>
           </div>

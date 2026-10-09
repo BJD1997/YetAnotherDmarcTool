@@ -10,10 +10,12 @@ import dataclasses
 import uuid
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.dns_check import DnsCheckResult
 from app.models.domain import Domain
+from app.models.organization import Organization
 from app.models.enums import CheckType, DomainVerificationStatus
 from app.repositories.dmarc_reports import (
     latest_published_policy_for_domain,
@@ -27,19 +29,29 @@ READY_TO_ENFORCE_MIN_VOLUME = 50
 READY_TO_ENFORCE_MIN_PASS_PCT = 98.0
 # How far back the rating (and high_volume_failure, which is meant to stay
 # consistent with it) looks — a rolling window rather than all-time, so a
-# domain isn't scored against traffic from a year ago forever.
+# domain isn't scored against traffic from a year ago forever. The default;
+# each organization picks its own (organizations.rating_window_days).
 RATING_WINDOW_DAYS = 90
 _NEXT_POLICY_RUNG = {"none": "quarantine", "quarantine": "reject"}
 
 
-async def _windowed_totals(db: AsyncSession, domain_id: uuid.UUID) -> tuple[int, int]:
-    """(total_count, dmarc_pass_count) over the last RATING_WINDOW_DAYS days,
+async def rating_window_days(db: AsyncSession, organization_id: uuid.UUID) -> int:
+    """The organization's rating window (Settings → General), or the default."""
+    days = (
+        await db.execute(select(Organization.rating_window_days).where(Organization.id == organization_id))
+    ).scalar_one_or_none()
+    return days or RATING_WINDOW_DAYS
+
+
+async def _windowed_totals(db: AsyncSession, domain: Domain) -> tuple[int, int]:
+    """(total_count, dmarc_pass_count) over the organization's rating window,
     excluding traffic from senders explicitly marked blocked (SenderReview)
     — confirmed spoofing/abuse a domain owner has already dealt with
     shouldn't keep dragging the score down forever. Pending/unreviewed
     traffic still counts normally (only an explicit "blocked" excludes)."""
-    since = datetime.now(timezone.utc) - timedelta(days=RATING_WINDOW_DAYS)
-    return await windowed_totals_excluding_blocked(db, domain_id, since)
+    days = await rating_window_days(db, domain.organization_id)
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    return await windowed_totals_excluding_blocked(db, domain.id, since)
 
 
 async def latest_findings_by_type(db: AsyncSession, domain_id: uuid.UUID) -> dict[CheckType, list[DnsCheckResult]]:
@@ -63,7 +75,7 @@ async def compute_domain_rating(
     `findings_by_type` can be passed in by a caller that already fetched it
     (e.g. for check_status_counts on /domains/ranked) to avoid querying it
     twice."""
-    total_count, pass_count = await _windowed_totals(db, domain.id)
+    total_count, pass_count = await _windowed_totals(db, domain)
 
     if findings_by_type is None:
         findings_by_type = await latest_findings_by_type(db, domain.id)

@@ -20,12 +20,14 @@ from app.middleware.security_headers import add_security_headers
 from app.middleware.spa_static import make_serve_spa
 from app.routers import (
     action_queue,
+    ask_ai,
     admin_updates,
     auth,
     dmarc_reports,
     dns_checks,
     domains,
     mailbox_connections,
+    notifications,
     onboarding,
     organizations,
     platform_admin,
@@ -156,6 +158,8 @@ api_router.include_router(dmarc_reports.router)
 api_router.include_router(selectors.router)
 api_router.include_router(dns_checks.router)
 api_router.include_router(action_queue.router)
+api_router.include_router(ask_ai.router)
+api_router.include_router(notifications.router)
 api_router.include_router(onboarding.router)
 api_router.include_router(sign_in_events.router)
 api_router.include_router(admin_updates.router)
