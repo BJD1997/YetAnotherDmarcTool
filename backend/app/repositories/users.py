@@ -1,9 +1,10 @@
 from collections.abc import Sequence
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.enums import UserRole
 from app.models.user import User
 
 
@@ -25,3 +26,10 @@ async def get_user_by_org_and_email(db: AsyncSession, organization_id: UUID, ema
     cross-org but scoped to local-auth users only."""
     result = await db.execute(select(User).where(User.organization_id == organization_id, User.email == email))
     return result.scalar_one_or_none()
+
+
+async def count_org_admins(db: AsyncSession, organization_id: UUID) -> int:
+    result = await db.execute(
+        select(func.count()).select_from(User).where(User.organization_id == organization_id, User.role == UserRole.org_admin)
+    )
+    return result.scalar_one()

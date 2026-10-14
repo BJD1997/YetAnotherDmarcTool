@@ -177,9 +177,8 @@ export default function Team() {
         <div>
           <h1>Team</h1>
           <p className="page-subtitle">
-            The first person to sign in to a new organization automatically becomes an org admin. Everyone after
-            that starts as a member — promote them here if they need to manage domains, the mailbox connection, or
-            other team members.
+            New people start as members, except the admin named when the organization was set up. Promote them here
+            if they need to manage domains, the mailbox connection, or other team members.
           </p>
         </div>
       </div>

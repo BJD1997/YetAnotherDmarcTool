@@ -10,6 +10,9 @@ export interface AdminOrganization {
   entra_tenant_id: string | null;
   status: "active" | "suspended";
   is_operator: boolean;
+  // Becomes org admin on first sign-in; everyone else becomes a member.
+  expected_admin_email: string | null;
+  has_org_admin: boolean;
   created_at: string;
   mailbox_connection: {
     id: string;
@@ -149,7 +152,8 @@ function useInvalidateAdminOrganizations() {
 export function useCreateAdminOrganization(onSuccess?: () => void, onError?: (error: Error) => void) {
   const invalidate = useInvalidateAdminOrganizations();
   return useMutation({
-    mutationFn: (body: { name: string; entra_tenant_id: string | null }) => api.post<AdminOrganization>("/admin/organizations", body),
+    mutationFn: (body: { name: string; entra_tenant_id: string | null; expected_admin_email: string | null }) =>
+      api.post<AdminOrganization>("/admin/organizations", body),
     onSuccess: () => { invalidate(); onSuccess?.(); },
     onError,
   });
@@ -158,7 +162,7 @@ export function useCreateAdminOrganization(onSuccess?: () => void, onError?: (er
 export function useUpdateAdminOrganization(orgId: string) {
   const invalidate = useInvalidateAdminOrganizations();
   return useMutation({
-    mutationFn: (body: Partial<Pick<AdminOrganization, "entra_tenant_id" | "status" | "is_operator">>) => api.patch<AdminOrganization>(`/admin/organizations/${orgId}`, body),
+    mutationFn: (body: Partial<Pick<AdminOrganization, "entra_tenant_id" | "status" | "is_operator" | "expected_admin_email">>) => api.patch<AdminOrganization>(`/admin/organizations/${orgId}`, body),
     onSuccess: invalidate,
   });
 }
@@ -198,7 +202,15 @@ export function useAdminResetUser(orgId: string) {
     mutationFn: (userId: string) => api.post<void>(`/admin/organizations/${orgId}/users/${userId}/reset-mfa`),
     onSuccess: invalidate,
   });
-  return { resetPassword, resetMfa };
+  const invalidateOrgs = useInvalidateAdminOrganizations();
+  const makeOrgAdmin = useMutation({
+    mutationFn: (userId: string) => api.post<AdminOrgUser>(`/admin/organizations/${orgId}/users/${userId}/make-org-admin`),
+    onSuccess: () => {
+      invalidate();
+      invalidateOrgs();
+    },
+  });
+  return { resetPassword, resetMfa, makeOrgAdmin };
 }
 
 export function useDeleteAdminOrganization(orgId: string) {

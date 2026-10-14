@@ -313,34 +313,48 @@ async def _mock_entra_success(monkeypatch, *, tenant_id: str, object_id: str, em
     monkeypatch.setattr("app.routers.auth.entra_oidc.validate_id_token", _fake_validate)
 
 
-async def test_callback_first_user_becomes_org_admin(api, monkeypatch):
-    client, owner_factory = api
-    from app.models.organization import Organization
-    from app.models.enums import OrganizationStatus
-    import uuid
-
-    tenant_id = str(uuid.uuid4())
-    async with owner_factory() as db:
-        org = Organization(name="Fresh Org", entra_tenant_id=tenant_id, status=OrganizationStatus.active)
-        db.add(org)
-        await db.commit()
-
-    await _mock_entra_success(monkeypatch, tenant_id=tenant_id, object_id="first-object-id", email="first@example.com")
+async def _sign_in_with_microsoft(client, monkeypatch, *, tenant_id: str, object_id: str, email: str) -> str:
+    await _mock_entra_success(monkeypatch, tenant_id=tenant_id, object_id=object_id, email=email)
+    client.cookies.clear()
     client.cookies.set("oauth_state", "matching-state")
     client.cookies.set("oauth_verifier", "some-verifier")
     client.cookies.set("oauth_nonce", "test-nonce")
-
     response = await client.get(
-        "/api/auth/callback",
-        params={"code": "auth-code", "state": "matching-state"},
-        follow_redirects=False,
+        "/api/auth/callback", params={"code": "auth-code", "state": "matching-state"}, follow_redirects=False
     )
-    assert response.status_code == 302
-    assert "dmarc_session" in response.cookies
+    assert response.status_code == 302 and "dmarc_session" in response.cookies
+    return (await client.get("/api/auth/me")).json()["role"]
 
-    me_response = await client.get("/api/auth/me")
-    assert me_response.status_code == 200
-    assert me_response.json()["role"] == "org_admin"
+
+async def _fresh_entra_org(owner_factory, expected_admin_email: str | None) -> str:
+    import uuid
+
+    from app.models.enums import OrganizationStatus
+    from app.models.organization import Organization
+
+    tenant_id = str(uuid.uuid4())
+    async with owner_factory() as db:
+        db.add(Organization(
+            name="Fresh Org", entra_tenant_id=tenant_id, status=OrganizationStatus.active,
+            expected_admin_email=expected_admin_email,
+        ))
+        await db.commit()
+    return tenant_id
+
+
+async def test_without_an_expected_admin_the_first_sign_in_is_a_member(api, monkeypatch):
+    client, owner_factory = api
+    tenant_id = await _fresh_entra_org(owner_factory, None)
+
+    assert await _sign_in_with_microsoft(client, monkeypatch, tenant_id=tenant_id, object_id="o1", email="first@example.com") == "member"
+
+
+async def test_only_the_expected_admin_becomes_org_admin_whatever_the_order(api, monkeypatch):
+    client, owner_factory = api
+    tenant_id = await _fresh_entra_org(owner_factory, "boss@example.com")
+
+    assert await _sign_in_with_microsoft(client, monkeypatch, tenant_id=tenant_id, object_id="o1", email="intern@example.com") == "member"
+    assert await _sign_in_with_microsoft(client, monkeypatch, tenant_id=tenant_id, object_id="o2", email="Boss@Example.com") == "org_admin"
 
 
 async def test_callback_creates_returning_org_user_as_member(api, monkeypatch):

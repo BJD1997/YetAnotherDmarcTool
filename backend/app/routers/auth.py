@@ -15,7 +15,6 @@ from app.models.mfa_pending_challenge import MfaPendingChallenge
 from app.models.user import User
 from app.models.user_recovery_code import UserRecoveryCode
 from app.repositories.auth import (
-    count_users_for_org,
     get_local_user_by_email,
     get_mfa_pending_challenge,
     get_organization_by_entra_tenant_id,
@@ -151,13 +150,17 @@ async def callback(request: Request, db: AsyncSession = Depends(get_db)) -> Redi
     user = await get_user_by_org_and_entra_object_id(db, org.id, object_id)
 
     if user is None:
-        is_first_user = await count_users_for_org(db, org.id) == 0
+        # Only the expected admin becomes org admin, whichever order people
+        # sign in; without one set, nobody does (the platform admin then
+        # sets it or makes someone admin).
+        expected = (org.expected_admin_email or "").strip().lower()
+        is_expected_admin = bool(expected) and email.strip().lower() == expected
         user = User(
             organization_id=org.id,
             entra_object_id=object_id,
             email=email,
             display_name=display_name,
-            role=UserRole.org_admin if is_first_user else UserRole.member,
+            role=UserRole.org_admin if is_expected_admin else UserRole.member,
         )
         db.add(user)
         await db.flush()

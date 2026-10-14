@@ -26,6 +26,7 @@ function org(name: string, overrides: Partial<Record<string, unknown>> = {}) {
   return {
     id: name, name, entra_tenant_id: null, status: "active", is_operator: false, created_at: "2026-01-01T00:00:00Z",
     mailbox_connection: null, entra_consent_urls: null, domain_count: 0, job_error_count_7d: 0, last_report_at: null,
+    expected_admin_email: null, has_org_admin: true,
     ...overrides,
   };
 }
@@ -203,3 +204,33 @@ describe("AdminOrganizations", () => {
   });
 });
 
+
+describe("AdminOrganizations expected admin", () => {
+  it("asks for the admin email when a tenant ID is filled in", async () => {
+    getMock.mockResolvedValue({ organizations: [], has_more: false, summary: { total: 0, active: 0, suspended: 0, orgs_with_job_errors_7d: 0 } });
+    renderWithAppProviders(<AdminOrganizations />);
+
+    const adminEmail = await screen.findByPlaceholderText("Admin email");
+    expect(adminEmail).not.toBeRequired();
+    fireEvent.change(screen.getByPlaceholderText("Entra tenant ID (optional)"), { target: { value: "t-1" } });
+    expect(screen.getByPlaceholderText("Admin email (required)")).toBeRequired();
+  });
+
+  it("flags an organization without an org admin and offers Make org admin", async () => {
+    getMock.mockImplementation(async (url: string) =>
+      url.includes("/users")
+        ? [{ id: "u1", email: "member@client.com", display_name: null, role: "member", auth_method: "entra", status: "active", mfa_enrolled: false, last_login_at: null }]
+        : {
+            organizations: [org("Microsoft Org", { entra_tenant_id: "t-1", has_org_admin: false, expected_admin_email: "it-admin@client.com" })],
+            has_more: false,
+            summary: { total: 1, active: 1, suspended: 0, orgs_with_job_errors_7d: 0 },
+          },
+    );
+    renderWithAppProviders(<AdminOrganizations />);
+
+    expect(await screen.findByText("no org admin")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Microsoft Org"));
+    expect(await screen.findByDisplayValue("it-admin@client.com")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Make org admin" })).toBeInTheDocument();
+  });
+});

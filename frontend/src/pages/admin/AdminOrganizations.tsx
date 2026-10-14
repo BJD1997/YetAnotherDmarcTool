@@ -40,10 +40,11 @@ export default function AdminOrganizations() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [tenantId, setTenantId] = useState("");
+  const [adminEmail, setAdminEmail] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
 
   const createOrg = useCreateAdminOrganization(
-    () => { setName(""); setTenantId(""); setCreateError(null); },
+    () => { setName(""); setTenantId(""); setAdminEmail(""); setCreateError(null); },
     (err) => setCreateError(err instanceof ApiError ? err.message : "failed to create organization"),
   );
 
@@ -59,7 +60,7 @@ export default function AdminOrganizations() {
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            createOrg.mutate({ name, entra_tenant_id: tenantId || null });
+            createOrg.mutate({ name, entra_tenant_id: tenantId || null, expected_admin_email: adminEmail || null });
           }}
           className="field-row"
         >
@@ -71,6 +72,15 @@ export default function AdminOrganizations() {
             placeholder="Entra tenant ID (optional)"
             style={{ width: "260px" }}
           />
+          <input
+            className="input"
+            type="email"
+            value={adminEmail}
+            onChange={(e) => setAdminEmail(e.target.value)}
+            placeholder={tenantId ? "Admin email (required)" : "Admin email"}
+            required={!!tenantId}
+            style={{ width: "220px" }}
+          />
           <button type="submit" className="btn btn--primary" disabled={createOrg.isPending}>
             <Plus />
             Create organization
@@ -78,7 +88,8 @@ export default function AdminOrganizations() {
         </form>
         <p className="section-hint" style={{ marginBottom: 0 }}>
           Providing the tenant ID now activates the org immediately — the client can then sign in, approve consent,
-          and set their own mailbox from inside their dashboard, no further steps needed here.
+          and set their own mailbox from inside their dashboard, no further steps needed here. With a tenant ID, only
+          the person with the admin email becomes org admin when they first sign in; everyone else becomes a member.
         </p>
         {createError && (
           <div className="alert alert--critical" style={{ marginTop: "0.75rem", marginBottom: 0 }}>
@@ -154,6 +165,11 @@ function OrgRow({ org, expanded, onToggle }: { org: AdminOrganization; expanded:
           <strong style={{ fontSize: "0.92rem" }}>{org.name}</strong>
           <span className={`badge badge--${STATUS_ROLE[org.status]}`}>{org.status}</span>
           {org.is_operator && <span className="badge badge--neutral">operator</span>}
+          {!org.has_org_admin && org.status === "active" && (
+            <span className="badge badge--warning" title="Nobody in this organization is org admin yet">
+              no org admin
+            </span>
+          )}
         </div>
         <div className="chip-row" style={{ fontSize: "0.8rem" }}>
           <span className="muted">
@@ -216,6 +232,7 @@ function OrgDetail({ org }: { org: AdminOrganization }) {
       </div>
 
       <div style={{ display: "flex", gap: "3rem", marginTop: "1rem", flexWrap: "wrap" }}>
+        {org.entra_tenant_id && <ExpectedAdminField org={org} />}
         <div>
           <div className="muted" style={{ fontSize: "0.78rem" }}>
             Entra tenant ID
@@ -296,9 +313,40 @@ function OrgDetail({ org }: { org: AdminOrganization }) {
   );
 }
 
+// Who becomes org admin on their first sign-in with Microsoft (later also
+// Google or another provider). Members are promoted with "Make org admin".
+function ExpectedAdminField({ org }: { org: AdminOrganization }) {
+  const [email, setEmail] = useState(org.expected_admin_email ?? "");
+  const updateOrg = useUpdateAdminOrganization(org.id);
+  return (
+    <div>
+      <div className="muted" style={{ fontSize: "0.78rem" }}>
+        Admin email (becomes org admin on first sign-in)
+      </div>
+      <div className="field-row" style={{ marginTop: "0.3rem" }}>
+        <input
+          className="input"
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="it-admin@client.com"
+          style={{ width: "220px" }}
+        />
+        <button
+          className="btn btn--secondary btn--sm"
+          onClick={() => updateOrg.mutate({ expected_admin_email: email.trim() || null })}
+          disabled={updateOrg.isPending}
+        >
+          Save
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function OrgUsersSection({ orgId }: { orgId: string }) {
   const { data: users, isPending } = useAdminOrgUsers(orgId);
-  const { resetPassword, resetMfa } = useAdminResetUser(orgId);
+  const { resetPassword, resetMfa, makeOrgAdmin } = useAdminResetUser(orgId);
   const { copied, copy } = useClipboardFeedback();
   const [resetLink, setResetLink] = useState<{ email: string; link: string } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -312,6 +360,16 @@ function OrgUsersSection({ orgId }: { orgId: string }) {
     setMessage(null);
     resetPassword.mutate(user.id, {
       onSuccess: (result) => setResetLink({ email: user.email, link: result.setup_link }),
+      onError,
+    });
+  }
+
+  function handleMakeOrgAdmin(user: AdminOrgUser) {
+    if (!window.confirm(`Make ${user.email} org admin? They can then manage domains, the mailbox, settings and the team.`)) return;
+    setError(null);
+    setResetLink(null);
+    makeOrgAdmin.mutate(user.id, {
+      onSuccess: () => setMessage(`${user.email} is now org admin.`),
       onError,
     });
   }
@@ -347,8 +405,14 @@ function OrgUsersSection({ orgId }: { orgId: string }) {
                     {user.auth_method === "local" && !user.mfa_enrolled && <span className="muted"> · no MFA yet</span>}
                   </td>
                   <td style={{ textAlign: "right" }}>
+                    <div className="chip-row" style={{ justifyContent: "flex-end" }}>
+                    {user.role === "member" && (
+                      <button className="btn btn--ghost btn--sm" onClick={() => handleMakeOrgAdmin(user)} disabled={makeOrgAdmin.isPending}>
+                        Make org admin
+                      </button>
+                    )}
                     {user.auth_method === "local" && (
-                      <div className="chip-row" style={{ justifyContent: "flex-end" }}>
+                      <>
                         <button className="btn btn--ghost btn--sm" onClick={() => handleResetPassword(user)} disabled={resetPassword.isPending}>
                           Reset password
                         </button>
@@ -357,8 +421,9 @@ function OrgUsersSection({ orgId }: { orgId: string }) {
                             Reset MFA
                           </button>
                         )}
-                      </div>
+                      </>
                     )}
+                    </div>
                   </td>
                 </tr>
               ))}

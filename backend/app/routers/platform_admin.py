@@ -15,7 +15,7 @@ from app.middleware.tenant_context import (
     get_current_platform_admin,
     get_current_platform_admin_local,
 )
-from app.models.enums import AuthMethod, ConsentStatus, JobStatus, JobType, OrganizationStatus, SignInResult
+from app.models.enums import AuthMethod, ConsentStatus, JobStatus, JobType, OrganizationStatus, SignInResult, UserRole
 from app.models.mailbox_connection import MailboxConnection
 from app.models.organization import Organization
 from app.models.platform_admin import PlatformAdmin
@@ -37,7 +37,7 @@ from app.repositories.platform_admin import (
     org_summary_stats,
 )
 from app.repositories.sign_in_events import list_platform_admin_sign_in_events
-from app.repositories.users import get_user_in_org, list_users_for_org
+from app.repositories.users import count_org_admins, get_user_in_org, list_users_for_org
 from app.schemas.platform_admin import (
     AdminEnrollOtpConfirmRequest,
     AdminLoginRequest,
@@ -89,6 +89,8 @@ async def _org_out(db: AsyncSession, org: Organization, aggregates: dict | None 
         "entra_tenant_id": str(org.entra_tenant_id) if org.entra_tenant_id else None,
         "status": org.status.value,
         "is_operator": org.is_operator,
+        "expected_admin_email": org.expected_admin_email,
+        "has_org_admin": await count_org_admins(db, org.id) > 0,
         "created_at": org.created_at.isoformat(),
         "mailbox_connection": await _mailbox_out(db, org.id),
         "entra_consent_urls": entra_consent_urls(org),
@@ -467,7 +469,12 @@ async def create_organization(
     db: AsyncSession = Depends(get_db),
     _admin: AdminPrincipal = Depends(get_current_platform_admin),
 ) -> dict:
-    org = Organization(name=body.name, entra_tenant_id=body.entra_tenant_id, status=OrganizationStatus.active)
+    org = Organization(
+        name=body.name,
+        entra_tenant_id=body.entra_tenant_id,
+        expected_admin_email=str(body.expected_admin_email).lower() if body.expected_admin_email else None,
+        status=OrganizationStatus.active,
+    )
     db.add(org)
     await _commit_org(db)
     await db.refresh(org)
@@ -529,6 +536,8 @@ async def update_organization(
         org.entra_tenant_id = body.entra_tenant_id
     if body.status is not None:
         org.status = body.status
+    if "expected_admin_email" in body.model_fields_set:
+        org.expected_admin_email = str(body.expected_admin_email).lower() if body.expected_admin_email else None
     await _commit_org(db)
     await db.refresh(org)
     return await _org_out(db, org)
@@ -644,6 +653,29 @@ async def admin_reset_user_mfa(
     await session_manager.revoke_user_sessions(db, target.id)
     await account_reset.log_account_change(db, request, target, "mfa_reset_by_platform_admin", actor_email=admin.email)
     await db.commit()
+
+
+@router.post("/organizations/{org_id}/users/{user_id}/make-org-admin")
+async def admin_make_org_admin(
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin: AdminPrincipal = Depends(get_current_platform_admin),
+) -> dict:
+    """For an organization without an admin, or when the wrong person signed
+    in first: makes a member org admin. Logged in the organization's
+    Sign-in activity. Demoting stays with the organization's own admins."""
+    target = await get_user_in_org(db, user_id, org_id)
+    if target is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
+    if target.role != UserRole.org_admin:
+        target.role = UserRole.org_admin
+        await account_reset.log_account_change(
+            db, request, target, "made_org_admin_by_platform_admin", actor_email=admin.email
+        )
+    await db.commit()
+    return {**_local_user_out(target), "status": target.status.value}
 
 
 @router.post("/organizations/{org_id}/users", status_code=status.HTTP_201_CREATED)

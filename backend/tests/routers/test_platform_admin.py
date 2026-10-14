@@ -299,7 +299,7 @@ async def test_create_local_user_rejects_entra_org(api):
     await login_as_platform_admin(client, owner_factory)
     entra_tenant_id = str(uuid.uuid4())
     org_id = (
-        await client.post("/api/admin/organizations", json={"name": "Entra Org", "entra_tenant_id": entra_tenant_id})
+        await client.post("/api/admin/organizations", json={"name": "Entra Org", "entra_tenant_id": entra_tenant_id, "expected_admin_email": "admin@example.com"})
     ).json()["id"]
 
     response = await client.post(f"/api/admin/organizations/{org_id}/users", json={"email": "someone@example.com"})
@@ -709,3 +709,38 @@ async def test_admin_sign_in_events_filter_by_date_range(api):
 
     assert response.status_code == 200
     assert [e["email"] for e in response.json()["events"]] == ["inside@example.com"]
+
+
+async def test_microsoft_organizations_need_an_admin_email(api):
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+    tenant = str(uuid.uuid4())
+
+    missing = await client.post("/api/admin/organizations", json={"name": "No Admin Org", "entra_tenant_id": tenant})
+    assert missing.status_code == 422
+
+    created = await client.post(
+        "/api/admin/organizations",
+        json={"name": "Admin Org", "entra_tenant_id": tenant, "expected_admin_email": "Boss@Example.com"},
+    )
+    assert created.status_code == 201
+    assert created.json()["expected_admin_email"] == "boss@example.com"
+    assert created.json()["has_org_admin"] is False
+
+    org_id = created.json()["id"]
+    changed = await client.patch(f"/api/admin/organizations/{org_id}", json={"expected_admin_email": "new@example.com"})
+    assert changed.json()["expected_admin_email"] == "new@example.com"
+
+
+async def test_platform_admin_can_make_a_member_org_admin(api):
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+    org, member = await seed_org_and_user(owner_factory, role=UserRole.member, entra=True)
+
+    org_before = (await client.get(f"/api/admin/organizations/{org.id}")).json()
+    assert org_before["has_org_admin"] is False
+
+    response = await client.post(f"/api/admin/organizations/{org.id}/users/{member.id}/make-org-admin")
+
+    assert response.status_code == 200 and response.json()["role"] == "org_admin"
+    assert (await client.get(f"/api/admin/organizations/{org.id}")).json()["has_org_admin"] is True

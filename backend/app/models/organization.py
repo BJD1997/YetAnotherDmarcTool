@@ -68,6 +68,11 @@ class Organization(UUIDPkMixin, TimestampMixin, Base):
 
     rating_window_days: Mapped[int] = mapped_column(Integer, nullable=False, default=90, server_default="90")
 
+    # The person who becomes org admin on their first sign-in with Microsoft
+    # (and later Google or another provider); everyone else becomes a
+    # member. Set by the platform admin. See 0041.
+    expected_admin_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+
     # When an org admin reached the setup wizard's last step. Until then the
     # Overview sends org admins back to the wizard (see 0039).
     onboarding_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

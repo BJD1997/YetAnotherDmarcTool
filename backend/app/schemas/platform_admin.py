@@ -1,7 +1,7 @@
 import uuid
 from typing import Literal
 
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr, field_validator, model_validator
 
 from app.models.enums import ConsentStatus, OrganizationStatus, UserRole
 from app.schemas.auth import TotpSecret
@@ -24,6 +24,14 @@ class AdminEnrollOtpConfirmRequest(BaseModel):
 class OrganizationCreateRequest(BaseModel):
     name: str
     entra_tenant_id: uuid.UUID | None = None
+    # Required with Microsoft sign-in: the one person who becomes org admin.
+    expected_admin_email: EmailStr | None = None
+
+    @model_validator(mode="after")
+    def admin_email_with_microsoft(self) -> "OrganizationCreateRequest":
+        if self.entra_tenant_id is not None and self.expected_admin_email is None:
+            raise ValueError("enter the admin's email address: with Microsoft sign-in, only they become org admin")
+        return self
 
 
 class OrganizationUpdateRequest(BaseModel):
@@ -31,6 +39,7 @@ class OrganizationUpdateRequest(BaseModel):
     entra_tenant_id: uuid.UUID | None = None
     status: OrganizationStatus | None = None
     is_operator: bool | None = None
+    expected_admin_email: EmailStr | None = None
 
 
 class MailboxConnectionRequest(BaseModel):
