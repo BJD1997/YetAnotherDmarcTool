@@ -12,18 +12,22 @@ vi.mock("../api/client", () => ({
 vi.mock("../auth/AuthContext", () => ({ useAuth: () => ({ user: { role: "org_admin" } }) }));
 const getMock = vi.mocked(api.get);
 
-function server({ hostedMailboxReady, baselineDone = false }: { hostedMailboxReady: boolean; baselineDone?: boolean }) {
+function server({
+  hostedMailboxReady,
+  baselineDone = false,
+  verified = baselineDone,
+}: { hostedMailboxReady: boolean; baselineDone?: boolean; verified?: boolean }) {
   getMock.mockImplementation(async (url: string) => {
     if (url === "/onboarding/status")
       return {
         org_name: "Local Org", user_role: "org_admin", has_mailbox: true, mailbox_consent_granted: false,
-        mailbox_last_sync_status: null, has_domain: baselineDone, has_verified_domain: baselineDone,
+        mailbox_last_sync_status: null, has_domain: verified, has_verified_domain: verified,
         has_dns_baseline: baselineDone, has_any_report: false, hosted_mailbox_ready: hostedMailboxReady,
         wizard_completed: false,
       };
     if (url === "/organizations/current") return { name: "Local Org", entra_tenant_id: null, ask_ai_enabled: null };
     if (url === "/domains")
-      return baselineDone
+      return verified
         ? [{ id: "d1", name: "example.com", parent_domain_id: null, created_at: "2026-10-01T00:00:00Z", verification_status: "verified", hosted_report_address: null }]
         : [];
     return null;
@@ -69,5 +73,24 @@ describe("Onboarding after leaving it halfway", () => {
 
     expect(await screen.findByRole("heading", { name: /Waiting for your first report/ })).toBeInTheDocument();
     await waitFor(() => expect(vi.mocked(api.post)).toHaveBeenCalledWith("/onboarding/complete"));
+  });
+});
+
+
+describe("Onboarding DNS baseline", () => {
+  it("shows the results in the wizard, problems first, without a link out of it", async () => {
+    server({ hostedMailboxReady: true, verified: true });
+    vi.mocked(api.post).mockResolvedValueOnce([
+      { id: "c1", check_type: "spf", subject: null, status: "pass", summary: "SPF record is valid", details: {}, rule_version: null, checked_at: "" },
+      { id: "c2", check_type: "mta_sts", subject: null, status: "warn", summary: "No MTA-STS policy", details: {}, rule_version: null, checked_at: "" },
+    ]);
+    renderWithAppProviders(<Onboarding />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Run baseline check/ }));
+
+    const items = await screen.findAllByRole("listitem");
+    expect(items[0]).toHaveTextContent("MTA-STS");
+    expect(items[1]).toHaveTextContent("SPF");
+    expect(screen.queryByRole("link", { name: /full breakdown/ })).not.toBeInTheDocument();
   });
 });

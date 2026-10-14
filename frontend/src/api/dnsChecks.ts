@@ -1,6 +1,18 @@
 export type CheckType = "spf" | "dkim" | "dmarc" | "dmarcbis" | "mta_sts" | "tls_rpt" | "dane" | "mx" | "starttls";
 export type CheckStatus = "pass" | "warn" | "fail" | "error" | "pending";
 
+export const CHECK_LABELS: Record<CheckType, string> = {
+  spf: "SPF",
+  dkim: "DKIM",
+  dmarc: "DMARC",
+  dmarcbis: "DMARCbis",
+  mta_sts: "MTA-STS",
+  tls_rpt: "TLS-RPT",
+  dane: "DANE",
+  mx: "MX",
+  starttls: "STARTTLS",
+};
+
 export interface CheckResult {
   id: string;
   check_type: CheckType;

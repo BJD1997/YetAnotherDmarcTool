@@ -4,7 +4,7 @@ import AskAiButton from "../../components/shared/AskAiButton";
 import { RefreshCw, Trash2, Plus, Wand2, ChevronDown, ChevronRight, Copy, Check } from "lucide-react";
 import { ApiError } from "../../api/client";
 import type { Domain } from "../../api/types";
-import type { CheckResult, CheckStatus, CheckType } from "../../api/dnsChecks";
+import { CHECK_LABELS, type CheckResult, type CheckStatus, type CheckType } from "../../api/dnsChecks";
 import { useAuth } from "../../auth/AuthContext";
 import { StatusBadge } from "../../components/domain/shared";
 import PolicyBuilder from "../../components/policy-builder/PolicyBuilder";
@@ -14,17 +14,6 @@ import { useMailboxConnection } from "../../hooks/useMailboxConnection";
 import { useClipboardFeedback } from "../../hooks/useClipboardFeedback";
 import { useAddDkimSelector, useDeleteDkimSelector, useDetectedDkimSelectors, useDkimSelectors, useDnsChecks, useRecheckDns } from "../../hooks/useDnsChecks";
 
-const CHECK_LABELS: Record<CheckType, string> = {
-  spf: "SPF",
-  dkim: "DKIM",
-  dmarc: "DMARC",
-  dmarcbis: "DMARCbis",
-  mta_sts: "MTA-STS",
-  tls_rpt: "TLS-RPT",
-  dane: "DANE",
-  mx: "MX",
-  starttls: "STARTTLS",
-};
 
 const CHECK_ORDER: CheckType[] = ["spf", "dkim", "dmarc", "mx", "starttls", "mta_sts", "dane", "dmarcbis", "tls_rpt"];
 

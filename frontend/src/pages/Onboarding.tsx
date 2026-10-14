@@ -17,6 +17,7 @@ import { useRuaCheck } from "../hooks/useDomainInsights";
 import { ASK_AI_EXPLANATION, AskAiToggle } from "../components/settings/AskAiToggle";
 import { useAuth } from "../auth/AuthContext";
 import type { Organization } from "../api/types";
+import { CHECK_LABELS, type CheckResult } from "../api/dnsChecks";
 
 const STEP_LABELS = ["Welcome", "Mailbox", "Domain", "Verify", "DNS baseline", "Reporting", "AI help", "Waiting room"];
 
@@ -428,8 +429,7 @@ function BaselineStep({ domain, onBack, onNext }: { domain: Domain | undefined; 
     <div>
       <h2 style={{ marginTop: 0 }}>Run a DNS baseline for {domain.name}</h2>
       <p className="section-hint">
-        Checks SPF, DKIM, DMARC, MX, STARTTLS, MTA-STS, TLS-RPT, and DANE. Individual warnings don't block setup —
-        you'll see the full breakdown on the domain page.
+        Checks SPF, DKIM, DMARC, MX, STARTTLS, MTA-STS, TLS-RPT, and DANE. Individual warnings don't block setup.
       </p>
 
       {!ranOnce && (
@@ -440,10 +440,13 @@ function BaselineStep({ domain, onBack, onNext }: { domain: Domain | undefined; 
       )}
 
       {ranOnce && (
-        <div className="alert alert--good">
-          Baseline created — {counts.pass} passing, {counts.warn} warnings, {counts.fail} failing, {counts.error} couldn't be checked.{" "}
-          <Link to={`/domains/${domain.id}`}>See the full breakdown</Link>.
-        </div>
+        <>
+          <div className="alert alert--good">
+            Baseline created — {counts.pass} passing, {counts.warn} warnings, {counts.fail} failing, {counts.error} couldn't be
+            checked. After setup, the domain's DNS checks page explains each result and how to fix it.
+          </div>
+          <BaselineResults results={results} />
+        </>
       )}
       {recheck.isError && (
         <div className="alert alert--warning">
@@ -453,6 +456,41 @@ function BaselineStep({ domain, onBack, onNext }: { domain: Domain | undefined; 
 
       <StepNav onBack={onBack} onNext={ranOnce ? onNext : undefined} />
     </div>
+  );
+}
+
+// The results right here in the step, rather than a link to the domain
+// page: leaving the wizard halfway used to skip its remaining steps.
+const RESULT_ORDER: Record<string, number> = { fail: 0, error: 1, warn: 2, pass: 3 };
+const RESULT_BADGE: Record<string, { className: string; label: string }> = {
+  fail: { className: "badge--critical", label: "failing" },
+  error: { className: "badge--neutral", label: "couldn't check" },
+  warn: { className: "badge--warning", label: "warning" },
+  pass: { className: "badge--good", label: "passing" },
+};
+
+function BaselineResults({ results }: { results: CheckResult[] }) {
+  const sorted = [...results].sort((a, b) => (RESULT_ORDER[a.status] ?? 9) - (RESULT_ORDER[b.status] ?? 9));
+  return (
+    <ul style={{ listStyle: "none", padding: 0, margin: "0.75rem 0 0", display: "grid", gap: "0.45rem" }}>
+      {sorted.map((r) => {
+        const badge = RESULT_BADGE[r.status] ?? { className: "badge--neutral", label: r.status };
+        return (
+          <li key={r.id} style={{ display: "flex", gap: "0.6rem", alignItems: "baseline", flexWrap: "wrap" }}>
+            <span className={`badge ${badge.className}`} style={{ minWidth: "6.5rem", justifyContent: "center" }}>
+              {badge.label}
+            </span>
+            <strong style={{ fontSize: "0.9rem" }}>
+              {CHECK_LABELS[r.check_type] ?? r.check_type}
+              {r.subject ? ` (${r.subject})` : ""}
+            </strong>
+            <span className="muted" style={{ fontSize: "0.88rem", minWidth: 0, flex: "1 1 18rem" }}>
+              {r.summary}
+            </span>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
