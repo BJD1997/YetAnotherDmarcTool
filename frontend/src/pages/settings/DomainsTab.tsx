@@ -2,7 +2,12 @@ import { useState } from "react";
 import { X } from "lucide-react";
 import { ApiError } from "../../api/client";
 import AddDomainForm from "../../components/settings/AddDomainForm";
-import { useAddDetectedDomain, useDetectedDomains, useDismissDetectedDomain } from "../../hooks/useDetectedDomains";
+import {
+  type DetectedDomainAdded,
+  useAddDetectedDomain,
+  useDetectedDomains,
+  useDismissDetectedDomain,
+} from "../../hooks/useDetectedDomains";
 
 export default function DomainsTab() {
   return (
@@ -18,9 +23,13 @@ export default function DomainsTab() {
 function DetectedDomains() {
   const { data: detected, isLoading } = useDetectedDomains();
   const [error, setError] = useState<string | null>(null);
+  const [added, setAdded] = useState<DetectedDomainAdded | null>(null);
 
   const addDetected = useAddDetectedDomain(
-    () => setError(null),
+    (result) => {
+      setError(null);
+      setAdded(result);
+    },
     (err) => setError(err instanceof ApiError ? err.message : "failed to add domain"),
   );
 
@@ -29,7 +38,7 @@ function DetectedDomains() {
     (err) => setError(err instanceof ApiError ? err.message : "failed to dismiss"),
   );
 
-  if (isLoading || !detected || detected.length === 0) return null;
+  if (isLoading || !detected || (detected.length === 0 && !added)) return null;
 
   return (
     <div style={{ marginTop: "1.25rem" }}>
@@ -38,6 +47,8 @@ function DetectedDomains() {
       </div>
       <p className="section-hint">Your mailbox is receiving DMARC/TLS reports for these domains, but none of them are added yet.</p>
       {error && <div className="alert alert--critical">{error}</div>}
+      {added && <AddedNotice result={added} />}
+      {detected.length > 0 && (
       <div className="card" style={{ padding: 0 }}>
         {detected.map((item, i) => (
           <div
@@ -64,14 +75,14 @@ function DetectedDomains() {
               )}
               {item.relationship === "subdomain_of_detected" && (
                 <div className="section-hint" style={{ margin: "0.15rem 0 0" }}>
-                  looks like a subdomain of {item.suggested_parent_name}, which is also detected but not yet added —
-                  consider adding that one first
+                  subdomain of {item.suggested_parent_name}, also detected: both are added, and verifying{" "}
+                  {item.suggested_parent_name} verifies this one too
                 </div>
               )}
             </div>
             <div style={{ display: "flex", gap: "0.4rem", flexShrink: 0 }}>
               <button className="btn btn--secondary btn--sm" onClick={() => addDetected.mutate(item)} disabled={addDetected.isPending}>
-                Add &amp; verify
+                {item.relationship === "subdomain_of_detected" ? `Add with ${item.suggested_parent_name}` : "Add & verify"}
               </button>
               <button
                 className="btn btn--ghost btn--sm"
@@ -85,6 +96,19 @@ function DetectedDomains() {
           </div>
         ))}
       </div>
+      )}
+    </div>
+  );
+}
+
+function AddedNotice({ result }: { result: DetectedDomainAdded }) {
+  const others = result.added.filter((name) => name !== result.root);
+  return (
+    <div className="alert alert--good">
+      Added {result.root}
+      {others.length > 0 && <> with {others.join(", ")}</>}
+      {result.moved.length > 0 && <>; moved {result.moved.join(", ")} under it</>}. Verify {result.root} on the Domains
+      page{others.length + result.moved.length > 0 ? ": its subdomains are verified together with it." : "."}
     </div>
   );
 }

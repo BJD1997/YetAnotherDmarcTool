@@ -361,7 +361,6 @@ function DomainRow({
           <td colSpan={colSpan} style={{ paddingTop: 0 }}>
             <div className="alert alert--critical" style={{ marginTop: "0.4rem", marginBottom: 0 }}>
               {actionError}
-              {actionError.includes("report history") && " (use Archive instead)"}
             </div>
           </td>
         </tr>
