@@ -31,6 +31,25 @@ export function useAddDetectedDomain(onSuccess?: (result: DetectedDomainAdded) =
   });
 }
 
+// A detected subdomain on its own, without its root domain: verified
+// separately with its own TXT record. Adding the root later moves it under
+// the root, keeping its verification.
+export function useAddDetectedDomainAlone(onSuccess?: () => void, onError?: (error: Error) => void) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (item: DetectedDomain) =>
+      api.post("/domains", { name: item.name, parent_domain_id: null, mail_profile: "sends_mail" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.domains.all });
+      queryClient.invalidateQueries({ queryKey: queryKeys.domains.ranked });
+      queryClient.invalidateQueries({ queryKey: queryKeys.detectedDomains });
+      queryClient.invalidateQueries({ queryKey: queryKeys.notifications });
+      onSuccess?.();
+    },
+    onError,
+  });
+}
+
 export function useDismissDetectedDomain(onSuccess?: () => void, onError?: (error: Error) => void) {
   const queryClient = useQueryClient();
   return useMutation({
