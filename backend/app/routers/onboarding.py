@@ -1,9 +1,11 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db.session import get_db
-from app.middleware.tenant_context import get_current_user
+from app.middleware.tenant_context import get_current_user, require_org_admin
 from app.repositories.dmarc_reports import count_reports_for_org
 from app.repositories.dns_checks import count_dns_checks_for_org
 from app.repositories.domains import count_domains_for_org, count_verified_domains_for_org
@@ -16,11 +18,10 @@ router = APIRouter(prefix="/onboarding", tags=["onboarding"])
 
 @router.get("/status")
 async def onboarding_status(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)) -> dict:
-    """Stateless setup-completeness snapshot, recomputed from existing data
-    on every call — no separate "has this org finished onboarding" flag is
-    stored anywhere, the same "no dismiss/acknowledge state" philosophy the
-    action queue already uses. Drives both the onboarding wizard (which
-    step to resume at) and Overview's onboarding-aware rendering."""
+    """Setup-completeness snapshot, recomputed from existing data on every
+    call, plus whether an org admin finished the wizard. Drives both the
+    onboarding wizard (which step to resume at) and Overview's
+    onboarding-aware rendering."""
     org = await get_organization(db, user.organization_id)
     connection = await get_org_mailbox_connection(db, user.organization_id)
 
@@ -52,4 +53,15 @@ async def onboarding_status(db: AsyncSession = Depends(get_db), user: User = Dep
         # through the server's hosted mailbox: the wizard says so plainly
         # when this server doesn't have one.
         "hosted_mailbox_ready": settings.hosted_mailbox_ready,
+        "wizard_completed": org is not None and org.onboarding_completed_at is not None,
     }
+
+
+@router.post("/complete")
+async def complete_onboarding(db: AsyncSession = Depends(get_db), user: User = Depends(require_org_admin)) -> dict:
+    """An org admin reached the wizard's last step. Idempotent."""
+    org = await get_organization(db, user.organization_id)
+    if org.onboarding_completed_at is None:
+        org.onboarding_completed_at = datetime.now(timezone.utc)
+        await db.commit()
+    return {"wizard_completed": True}

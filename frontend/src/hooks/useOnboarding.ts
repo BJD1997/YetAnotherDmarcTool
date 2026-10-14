@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "../api/client";
 import type { OnboardingStatus } from "../api/onboarding";
@@ -8,6 +8,14 @@ export function useOnboardingStatus() {
   return useQuery({
     queryKey: queryKeys.onboarding.status,
     queryFn: () => api.get<OnboardingStatus>("/onboarding/status"),
+  });
+}
+
+export function useCompleteOnboarding() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<{ wizard_completed: boolean }>("/onboarding/complete"),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.onboarding.status }),
   });
 }
 

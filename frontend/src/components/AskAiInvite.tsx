@@ -19,7 +19,8 @@ export default function AskAiInvite() {
   const { data: onboarding } = useOnboardingStatus();
 
   if (!org || user?.role !== "org_admin" || org.ask_ai_enabled !== null || org.is_demo_read_only) return null;
-  const setupDone = !!onboarding && onboarding.has_mailbox && onboarding.has_verified_domain;
+  // The wizard asks this itself, so only once it's finished.
+  const setupDone = !!onboarding && onboarding.has_mailbox && onboarding.has_verified_domain && onboarding.wizard_completed;
   if (!setupDone || location.pathname.startsWith("/onboarding")) return null;
 
   const choose = (enabled: boolean) => answer.mutate({ name: org.name, ask_ai_enabled: enabled });

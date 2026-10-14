@@ -83,7 +83,13 @@ export default function Overview() {
     return <p className="muted" style={{ padding: "2rem" }}>Loading…</p>;
   }
 
-  if (!onboarding.has_mailbox || !onboarding.has_verified_domain) {
+  // Org admins finish the whole wizard (reporting address, Ask AI) even
+  // when they left it after verifying a domain; it resumes where they were.
+  if (
+    !onboarding.has_mailbox ||
+    !onboarding.has_verified_domain ||
+    (onboarding.user_role === "org_admin" && !onboarding.wizard_completed)
+  ) {
     return <Navigate to="/onboarding" replace />;
   }
 

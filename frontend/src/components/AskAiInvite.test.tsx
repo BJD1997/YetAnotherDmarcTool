@@ -19,7 +19,7 @@ const setup = vi.hoisted(() => ({ done: true }));
 function org(ask_ai_enabled: boolean | null) {
   getMock.mockImplementation(async (url: string) =>
     url === "/onboarding/status"
-      ? { has_mailbox: setup.done, has_verified_domain: setup.done }
+      ? { has_mailbox: setup.done, has_verified_domain: setup.done, wizard_completed: setup.done }
       : { name: "Org", ask_ai_enabled, is_demo_read_only: false },
   );
 }

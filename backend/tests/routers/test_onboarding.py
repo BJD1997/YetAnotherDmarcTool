@@ -63,3 +63,27 @@ async def test_onboarding_status_says_whether_the_server_has_a_hosted_mailbox(ap
 
     monkeypatch.setattr(settings, "entra_mail_client_secret", "secret")
     assert (await client.get("/api/onboarding/status")).json()["hosted_mailbox_ready"] is True
+
+
+async def test_wizard_is_finished_once_an_admin_reaches_the_last_step(api):
+    client, owner_factory = api
+    _org, user = await seed_org_and_user(owner_factory, entra=False)
+    await login_as(client, owner_factory, user)
+
+    assert (await client.get("/api/onboarding/status")).json()["wizard_completed"] is False
+
+    first = await client.post("/api/onboarding/complete")
+    again = await client.post("/api/onboarding/complete")
+
+    assert first.status_code == again.status_code == 200
+    assert (await client.get("/api/onboarding/status")).json()["wizard_completed"] is True
+
+
+async def test_members_cant_finish_the_wizard(api):
+    from app.models.enums import UserRole
+
+    client, owner_factory = api
+    _org, user = await seed_org_and_user(owner_factory, role=UserRole.member)
+    await login_as(client, owner_factory, user)
+
+    assert (await client.post("/api/onboarding/complete")).status_code == 403

@@ -1,6 +1,7 @@
 import uuid
+from datetime import datetime
 
-from sqlalchemy import Boolean, Integer, String
+from sqlalchemy import Boolean, DateTime, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -66,6 +67,10 @@ class Organization(UUIDPkMixin, TimestampMixin, Base):
     ask_ai_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None)
 
     rating_window_days: Mapped[int] = mapped_column(Integer, nullable=False, default=90, server_default="90")
+
+    # When an org admin reached the setup wizard's last step. Until then the
+    # Overview sends org admins back to the wizard (see 0039).
+    onboarding_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Blocks every state-changing request for this org's users — see
     # enforce_demo_read_only in app/main.py. Defaults False so this can

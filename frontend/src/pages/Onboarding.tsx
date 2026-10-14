@@ -10,7 +10,7 @@ import PolicyBuilder from "../components/policy-builder/PolicyBuilder";
 import { MailboxHealthWidget } from "../components/overview/widgets";
 import { useDomains, useVerifyDomain } from "../hooks/useDomains";
 import { useMailboxConnection } from "../hooks/useMailboxConnection";
-import { useGenerateHostedReportAddress, useOnboardingStatus } from "../hooks/useOnboarding";
+import { useCompleteOnboarding, useGenerateHostedReportAddress, useOnboardingStatus } from "../hooks/useOnboarding";
 import { useCurrentOrganization, useUpdateOrganization } from "../hooks/useOrganization";
 import { useRecheckDns } from "../hooks/useDnsChecks";
 import { useRuaCheck } from "../hooks/useDomainInsights";
@@ -511,6 +511,14 @@ function ReportingStep({ domain, onBack, onNext }: { domain: Domain | undefined;
 function WaitingRoomStep({ domain, onBack }: { domain: Domain | undefined; onBack: () => void }) {
   const { data: connection, isLoading: mailboxLoading } = useMailboxConnection();
   const noReportMailbox = useNoReportMailbox();
+  const { data: status } = useOnboardingStatus();
+  const complete = useCompleteOnboarding();
+
+  // Reaching this last step finishes the wizard: the Overview stops sending
+  // org admins back here.
+  useEffect(() => {
+    if (status?.user_role === "org_admin" && !status.wizard_completed && complete.isIdle) complete.mutate();
+  }, [status, complete]);
 
   return (
     <div>
