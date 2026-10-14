@@ -23,10 +23,12 @@ password: lantern-maple-falcon-willow-989
 - ✅ SPF · DKIM · DMARC · DMARCbis · MX · MTA-STS · DANE · STARTTLS · TLS-RPT, checked continuously
 - 📊 One 0–100 rating synthesizing every check + observed pass rate
 - 🧭 Guided policy builder — only recommends tightening `p=` once it's safe
-- 🕵️ Surfaces unregistered subdomains & DKIM selectors seen in real traffic
+- 🕵️ Surfaces unregistered subdomains & DKIM selectors seen in real traffic, with a notifications bell
+- 📈 A trend per domain that flags a falling pass rate before the grade drops
+- 🤖 Ask AI (opt-in): a ready-made question about an issue for Claude, ChatGPT or any assistant, shown before anything is sent
 - 🏢 Multi-tenant enforced at the database layer (Postgres RLS)
 - 🔑 Microsoft Entra SSO or local email + password + TOTP, chosen per organization
-- ⬆️ Updates itself from the admin console, on Docker Compose and Azure
+- ⬆️ Updates itself from the admin console, on Docker Compose, Portainer and Azure
 
 → **[Core Concepts](https://github.com/BJD1997/YetAnotherDmarcTool/wiki/Core-Concepts)** for how each of these works.
 
