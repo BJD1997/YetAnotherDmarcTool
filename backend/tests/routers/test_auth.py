@@ -106,6 +106,7 @@ async def test_local_login_invalid_credentials_wrong_password(api):
     )
 
     assert response.status_code == 401
+    assert response.json()["detail"] == "Wrong email or password."
 
 
 async def test_local_login_unknown_email(api):
@@ -117,6 +118,8 @@ async def test_local_login_unknown_email(api):
     )
 
     assert response.status_code == 401
+    # Same text as a wrong password, so the page doesn't reveal which emails exist.
+    assert response.json()["detail"] == "Wrong email or password."
 
 
 async def test_local_login_needs_enrollment_when_no_totp(api):

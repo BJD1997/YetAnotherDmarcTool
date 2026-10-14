@@ -226,7 +226,7 @@ async def admin_login(body: AdminLoginRequest, request: Request, db: AsyncSessio
     if not password_ok or not admin.is_active:
         await _log_admin_sign_in(db, request, SignInResult.failure, body.email, "invalid_credentials")
         await db.commit()
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Wrong email or password.")
 
     response = JSONResponse({"needs_enrollment": admin.otp_enrolled_at is None})
     await _set_admin_mfa_pending(db, response, admin.id)

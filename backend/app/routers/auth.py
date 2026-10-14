@@ -303,7 +303,7 @@ async def local_login(body: LocalLoginRequest, request: Request, db: AsyncSessio
             ip_address=ip_address, user_agent=user_agent,
         )
         await db.commit()
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Wrong email or password.")
 
     password_ok = user.password_hash is not None and verify_password(body.password, user.password_hash)
     if user.password_hash is None:
@@ -321,7 +321,7 @@ async def local_login(body: LocalLoginRequest, request: Request, db: AsyncSessio
             failure_reason="invalid_credentials", ip_address=ip_address, user_agent=user_agent,
         )
         await db.commit()
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Wrong email or password.")
 
     org = await get_organization(db, user.organization_id)
     if org is None or org.status == OrganizationStatus.suspended:
