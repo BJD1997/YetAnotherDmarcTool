@@ -29,3 +29,9 @@ class DomainUpdateRequest(BaseModel):
     notes: str | None = None
     is_active: bool | None = None
     mail_profile: DomainMailProfile | None = None
+
+
+class DetectedDomainAddRequest(BaseModel):
+    name: str
+
+    validate_name = field_validator("name")(DomainCreateRequest.validate_name.__func__)

@@ -30,7 +30,14 @@ class DnsLookupError(Exception):
 def _get_resolver() -> dns.asyncresolver.Resolver:
     global _resolver
     if _resolver is None:
-        resolver_ip = socket.gethostbyname(settings.dns_resolver_host)
+        try:
+            resolver_ip = socket.gethostbyname(settings.dns_resolver_host)
+        except OSError as exc:
+            # The resolver container is down or misnamed: a failed lookup
+            # like any other, which every caller already handles (and the
+            # startup SETUP PROBLEM line explains), not a crash. Not cached,
+            # so the next lookup tries again.
+            raise DnsLookupError(f"DNS resolver {settings.dns_resolver_host!r} not reachable: {exc}") from exc
         r = dns.asyncresolver.Resolver(configure=False)
         r.nameservers = [resolver_ip]
         r.timeout = 5

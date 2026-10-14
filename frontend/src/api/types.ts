@@ -16,6 +16,8 @@ export type SpfAllQualifierMode = "strict" | "conditional";
 
 export type ReportSenderCheck = "standard" | "strict" | "off";
 
+export type RatingWindowDays = 30 | 60 | 90 | 180;
+
 export interface Organization {
   id: string;
   name: string;
@@ -25,6 +27,9 @@ export interface Organization {
   spf_all_qualifier_mode: SpfAllQualifierMode;
   hosted_mailbox_opt_in: boolean;
   report_sender_check: ReportSenderCheck;
+  rating_window_days: RatingWindowDays;
+  // null = not answered yet (org admins get asked once).
+  ask_ai_enabled: boolean | null;
   is_demo_read_only: boolean;
   entra_consent_urls: EntraConsentUrls | null;
 }

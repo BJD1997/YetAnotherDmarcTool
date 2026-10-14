@@ -8,4 +8,8 @@ export interface OnboardingStatus {
   has_verified_domain: boolean;
   has_dns_baseline: boolean;
   has_any_report: boolean;
+  hosted_mailbox_ready: boolean;
+  // An org admin reached the wizard's last step; until then the Overview
+  // sends org admins back to the wizard.
+  wizard_completed: boolean;
 }

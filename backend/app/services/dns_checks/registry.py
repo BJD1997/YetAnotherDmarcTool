@@ -37,8 +37,9 @@ async def run_all(
         CheckType.mta_sts: await mta_sts.check(domain_name),
         CheckType.dane: await dane.check(domain_name),
         CheckType.tls_rpt: await tls_rpt_check.check(domain_name, mailbox_address),
-        # Off where outbound port 25 is blocked (Azure, most clouds): every
-        # probe would fail and cost the domain points for the host's network,
-        # not its mail setup. No findings means the grade leaves it out.
-        CheckType.starttls: await starttls.check(domain_name) if settings.starttls_check_enabled else [],
+        # Only the port-25 probe runs here. Where port 25 is blocked (Azure,
+        # most clouds) it would fail for every domain; "tls_rpt" mode reads
+        # TLS-RPT reports instead, in run_and_persist_checks, which has a DB
+        # session. No findings means the grade leaves it out.
+        CheckType.starttls: await starttls.check(domain_name) if settings.effective_starttls_mode == "probe" else [],
     }

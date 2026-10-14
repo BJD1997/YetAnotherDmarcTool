@@ -42,6 +42,12 @@ COPY backend/alembic.ini ./alembic.ini
 # Built SPA static assets, served by FastAPI (see app/main.py)
 COPY --from=frontend-build /frontend/dist ./static
 
+# Run as an unprivileged user, not root: code that gets in through an app
+# bug or a dependency has no root inside the container to build on. A fixed
+# numeric UID so platforms that check for non-root (runAsNonRoot) can.
+RUN useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin yadt
+USER 10001
+
 EXPOSE 8000
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

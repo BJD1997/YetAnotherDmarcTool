@@ -31,6 +31,12 @@ class ParsedReport(TypedDict):
     report: dict
 
 
+# parsedmarc refuses to unpack a report past this size (zip and gzip); its
+# own default is 100 MB, far beyond any real report. Read on every call.
+MAX_DECOMPRESSED_REPORT_BYTES = 25 * 1024 * 1024
+parsedmarc.MAX_DECOMPRESSED_REPORT_SIZE = MAX_DECOMPRESSED_REPORT_BYTES
+
+
 class UnparseableReportError(Exception):
     """Wraps any of parsedmarc's parser exceptions (InvalidAggregateReport,
     InvalidForensicReport, InvalidSMTPTLSReport, InvalidDMARCReport,

@@ -49,3 +49,18 @@ def test_a_check_without_findings_is_left_out_of_the_grade():
     graded = lambda f: compute_rating(findings_by_type=f, dmarc_pass_count=10, total_message_count=10).score  # noqa: E731
     assert graded(switched_off) > graded(with_error)
     assert "starttls" not in {x.factor for x in compute_rating(findings_by_type=switched_off, dmarc_pass_count=10, total_message_count=10).factors}
+
+
+@pytest.mark.parametrize(
+    "mode, enabled, expected",
+    [("probe", True, "probe"), ("tls_rpt", True, "tls_rpt"), ("off", True, "off"), ("probe", False, "off"), ("tls_rpt", False, "off")],
+)
+def test_effective_mode(monkeypatch, mode, enabled, expected):
+    monkeypatch.setattr(settings, "starttls_check_mode", mode)
+    monkeypatch.setattr(settings, "starttls_check_enabled", enabled)
+    assert settings.effective_starttls_mode == expected
+
+
+async def test_tls_rpt_mode_does_not_probe(stubbed_checks, monkeypatch):
+    monkeypatch.setattr(settings, "starttls_check_mode", "tls_rpt")
+    assert (await registry.run_all("example.com", []))[CheckType.starttls] == []

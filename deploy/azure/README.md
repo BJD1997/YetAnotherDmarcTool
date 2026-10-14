@@ -77,7 +77,8 @@ button uses.
 | `hostedReportsTenantId` / `hostedReportsMailboxAddress` | optional | One mailbox in your own Microsoft 365 tenant that gives each domain its own `mailbox+tag@<mailbox's domain>` reporting address. Needs the Entra Mail client. Both or neither. |
 | `cloudflareZoneId` / `cloudflareApiToken` | optional | Needs the hosted mailbox. Creates and removes the DMARC authorization record for each hosted address in that domain's Cloudflare zone. Without it, you add those records by hand. Use a token limited to DNS edit on that zone. |
 | `enableTestUpdate` | optional (default `false`) | Shows **Run test update** in the admin console (see [Updating](#updating)). Not in the portal wizard; set it in a parameters file, or set `UPDATE_REHEARSAL_ENABLED` on the api app. |
-| `enableStarttlsCheck` | optional (default `false`) | Runs the STARTTLS check, which connects to each MX host on port 25. Azure blocks outbound port 25 for every subscription type except Enterprise Agreement, so it's off by default: otherwise every domain gets a STARTTLS error and a lower grade. Not in the portal wizard. |
+| `starttlsCheckMode` | optional (default `tls_rpt`) | Where the STARTTLS result comes from. `tls_rpt`: the TLS-RPT reports senders like Google and Microsoft send. `probe`: connect to each MX host on port 25, which Azure blocks for every subscription type except Enterprise Agreement. `off`: no STARTTLS check. Not in the portal wizard. See [Notes & trade-offs](#notes--trade-offs). |
+| `enableStarttlsCheck` | deprecated | From v0.1.7. `true` still means `starttlsCheckMode=probe`; otherwise ignored. |
 | `publicBaseUrlOverride` | optional | A custom domain URL; leave blank to use the default ACA URL. |
 | `postgresSkuNameOverride` / `postgresSkuTierOverride` / `postgresStorageGBOverride` | optional | Override the tier-derived Postgres SKU/storage. Empty/`0` = use the `deploymentSize` default. |
 | `apiMaxReplicasOverride` / `workerMaxReplicasOverride` | optional | Override the tier-derived autoscale ceilings. `0` = use the `deploymentSize` default. |
@@ -156,17 +157,26 @@ This path deploys directly from `main.bicep`, no compiled ARM template needed, a
   on `Burstable` (`test`/`small`'s default SKU) at all — and it requires a
   region with Availability Zone support; an incompatible region surfaces as an
   Azure deployment-time validation error, not a pre-flight warning.
-- **No STARTTLS check by default.** The STARTTLS check connects to each MX
-  host on port 25, and Azure blocks outbound port 25 for every subscription
-  type except Enterprise Agreement (and MCA-E); Microsoft no longer grants
-  exceptions, and a NAT gateway or firewall doesn't get around it. So on Azure
-  the check is off (`enableStarttlsCheck=false`) and left out of each domain's
-  grade, rather than failing for every domain. The other inbound checks (MX,
-  MTA-STS, DANE, TLS-RPT) only use DNS and HTTPS and work as usual. Only turn
-  it on if your subscription allows port 25 out. v0.2.0 is planned to get
-  STARTTLS results from the TLS-RPT reports senders like Google and Microsoft
-  send instead, for domains whose TLS-RPT record points at the app's mailbox
-  (see the [Roadmap](https://github.com/BJD1997/YetAnotherDmarcTool/wiki/Roadmap)).
+- **STARTTLS comes from TLS-RPT reports, not a port-25 test.** The usual
+  STARTTLS check connects to each MX host on port 25, and Azure blocks
+  outbound port 25 for every subscription type except Enterprise Agreement
+  (and MCA-E); Microsoft no longer grants exceptions, and a NAT gateway or
+  firewall doesn't get around it. So on Azure (`starttlsCheckMode=tls_rpt`)
+  the result comes from the TLS-RPT reports that senders like Google and
+  Microsoft send about their TLS connections to your MX hosts, over the last
+  14 days. The trade-offs:
+  - It only works for domains whose TLS-RPT record (`_smtp._tls`) sends
+    reports to the app (the domain's hosted reporting address or the
+    connected mailbox). Other domains get no STARTTLS result, and it's left
+    out of their grade; the TLS-RPT check shows what to add.
+  - Until the first reports arrive (usually within a day or two) the result
+    is **pending**: neither passed nor failed, and left out of the grade.
+  - It reflects what real senders saw, which is a better signal than one
+    test connection, but a domain that gets little mail from big senders may
+    see few reports.
+  - The other inbound checks (MX, MTA-STS, DANE, TLS-RPT) only use DNS and
+    HTTPS and work as usual. Use `probe` only if your subscription allows
+    port 25 out.
 - **Redeploying into a resource group you deleted can collide on the Key Vault
   name.** The vault's name is derived from `uniqueString(resourceGroup().id)`,
   which is stable for the same resource-group name/subscription, and soft-delete

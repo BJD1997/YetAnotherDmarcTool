@@ -111,3 +111,35 @@ def test_failed_update_leaves_tag_and_updater_alone(tmp_path, monkeypatch):
 
     assert len(calls) == 2  # pull, then the failing migrate — nothing after
     assert (tmp_path / ".env").read_text() == "IMAGE_TAG=v0.1.4\n"
+
+
+def test_portainer_mode_without_its_settings_says_what_is_missing(monkeypatch):
+    import json
+    import threading
+    import urllib.error
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+
+    import server
+
+    monkeypatch.setattr(server, "SHARED_SECRET", "s" * 32)
+    monkeypatch.setenv("PORTAINER_URL", "https://portainer.example:9443")
+    monkeypatch.delenv("PORTAINER_API_KEY", raising=False)
+    monkeypatch.delenv("PORTAINER_STACK_ID", raising=False)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{httpd.server_address[1]}/trigger",
+            data=json.dumps({"version": "v9.9.9"}).encode(),
+            headers={"X-Updater-Token": "s" * 32},
+            method="POST",
+        )
+        try:
+            urllib.request.urlopen(request, timeout=10)
+            raise AssertionError("expected 503")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 503
+            assert "PORTAINER_API_KEY" in json.loads(exc.read())["error"]
+    finally:
+        httpd.shutdown()

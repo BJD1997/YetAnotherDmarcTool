@@ -10,6 +10,7 @@ import logging
 from urllib.parse import urlsplit
 
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 from app.config import settings
@@ -51,11 +52,32 @@ def _together(*pairs: tuple[str, object]) -> bool:
     return all(present) or not any(present)
 
 
+def example_database_login_problem(database_url: str) -> str | None:
+    """The database user's password is still one of the compose files'
+    examples: a stack started without its own still runs, so it gets a
+    SETUP PROBLEM line instead of a refusal. The message is fixed text
+    only: nothing from the URL gets logged."""
+    given = make_url(database_url).password
+    if given == "dmarc":
+        variable, role = "POSTGRES_PASSWORD", "the database owner (POSTGRES_USER)"
+    elif given == "dmarc_app":
+        variable, role = "DMARC_APP_DB_PASSWORD", "dmarc_app"
+    else:
+        return None
+    return (
+        f"The database password for {role} is still the example default from the compose file. Change it in "
+        f"the database first (ALTER ROLE ... PASSWORD '...'), then set {variable} to the same value {_ENV_HINT}."
+    )
+
+
 def config_problems() -> list[str]:
     found: list[str] = []
     fernet_problem = fernet_key_problem()
     if fernet_problem:
         found.append(fernet_problem)
+    db_login_problem = example_database_login_problem(settings.database_url)
+    if db_login_problem:
+        found.append(db_login_problem)
 
     url = settings.public_base_url.rstrip("/")
     host = urlsplit(url).netloc
@@ -110,10 +132,18 @@ def config_problems() -> list[str]:
                 "Cloudflare settings are only used with the hosted reporting mailbox "
                 "(HOSTED_REPORTS_MAILBOX_ADDRESS), which isn't set, so they do nothing."
             )
+    if settings.deployment_platform == "azure-container-apps" and settings.effective_starttls_mode == "probe":
+        found.append(
+            "The STARTTLS check is set to probe port 25, which Azure blocks, so it fails for every domain. "
+            "Set STARTTLS_CHECK_MODE=tls_rpt (results from TLS-RPT reports) or off on the api and worker, "
+            "or redeploy with starttlsCheckMode=tls_rpt."
+        )
     # The Docker Compose files always point the api at the updater; it only
     # accepts requests carrying this secret. (Portainer and Azure update
     # another way and don't set UPDATER_URL.)
-    if settings.updater_url and not settings.updater_shared_secret:
+    if settings.updater_url and not settings.updater_shared_secret and settings.deployment_platform == "portainer":
+        pass  # optional on Portainer: a tip, see config_tips()
+    elif settings.updater_url and not settings.updater_shared_secret:
         found.append(
             "UPDATER_SHARED_SECRET isn't set, so Update now in the admin console can't work: the updater "
             "rejects every request without it. Generate one with: openssl rand -hex 32 — and set it "
@@ -134,6 +164,13 @@ def config_tips() -> list[str]:
     """Optional integrations that aren't set up, with what they'd add. Not
     problems: a setup without them works."""
     tips: list[str] = []
+    if settings.deployment_platform == "portainer" and not settings.updater_shared_secret:
+        tips.append(
+            "Update now isn't set up, so updates mean changing IMAGE_TAG and redeploying the stack by hand. To "
+            "update from the admin console instead, set UPDATER_SHARED_SECRET (openssl rand -hex 32), "
+            "PORTAINER_URL, PORTAINER_API_KEY (a Portainer access token) and PORTAINER_STACK_ID (the id= in "
+            "the stack's Portainer address). See https://github.com/BJD1997/YetAnotherDmarcTool/wiki/Deploying-with-Portainer"
+        )
     if not settings.entra_sso_client_id:
         tips.append(
             "Microsoft sign-in isn't set up, so organizations sign in with local accounts only. To let them "

@@ -21,7 +21,8 @@ services:
       - internal
 
   resolver:
-    image: mvance/unbound:latest
+    # Pinned: the same version the Azure resolver image is built on.
+    image: mvance/unbound:1.22.0
     restart: unless-stopped
     volumes:
       # forward-records.conf is one of the few files the base image's
@@ -51,6 +52,11 @@ services:
     # same name baked in at build/publish time (see .env.example), which
     # must stay authoritative and can't be shadowed by a stale .env value.
     image: ghcr.io/bjd1997/yetanotherdmarctool:${IMAGE_TAG:-latest}
+    # Nothing in the app writes to disk at runtime: a read-only filesystem
+    # means code that gets in can't drop files or change the app.
+    read_only: true
+    tmpfs:
+      - /tmp
     command: sh -c "alembic upgrade head && python -m app.scripts.bootstrap_platform_admin"
     env_file:
       - .env
@@ -67,6 +73,11 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     image: ghcr.io/bjd1997/yetanotherdmarctool:${IMAGE_TAG:-latest}
+    # Nothing in the app writes to disk at runtime: a read-only filesystem
+    # means code that gets in can't drop files or change the app.
+    read_only: true
+    tmpfs:
+      - /tmp
     restart: unless-stopped
     # --forwarded-allow-ips: without this, request.client.host (used for
     # session/sign-in-event ip_address) is the reverse proxy's own IP, not
@@ -87,11 +98,11 @@ services:
       UPDATER_URL: http://updater:9999
       UPDATER_SHARED_SECRET: ${UPDATER_SHARED_SECRET:-}
     ports:
-      # Published on this host so the NPM VM (separate host, no shared Docker
-      # network) can reverse-proxy to <this-host-ip>:8000. Bind to a specific
-      # interface here instead of 0.0.0.0 if this host has a public NIC that
-      # should NOT expose the API directly.
-      - "8000:8000"
+      # Published on this host so a reverse proxy on another machine can reach
+      # it. API_BIND_ADDRESS limits that to one interface (the address the
+      # proxy connects to): Docker's published ports bypass host firewalls
+      # such as UFW, so 0.0.0.0 means every interface, public ones included.
+      - "${API_BIND_ADDRESS:-0.0.0.0}:8000:8000"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -111,6 +122,14 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     image: ghcr.io/bjd1997/yetanotherdmarctool:${IMAGE_TAG:-latest}
+    # Nothing in the app writes to disk at runtime: a read-only filesystem
+    # means code that gets in can't drop files or change the app.
+    read_only: true
+    # Reports come from public mailboxes: a report built to eat memory
+    # restarts the worker, not the whole server.
+    mem_limit: ${WORKER_MEMORY_LIMIT:-1g}
+    tmpfs:
+      - /tmp
     restart: unless-stopped
     command: python -m app.workers.scheduler
     env_file:

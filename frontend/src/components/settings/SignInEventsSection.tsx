@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useSignInEvents, type SignInEvent } from "../../hooks/useSignInEvents";
 import { LoadMoreButton } from "../shared/LoadMoreButton";
+import { DateRangeFilter, EMPTY_DATE_RANGE, setDateRangeParams } from "../shared/DateRangeFilter";
 
 const ACCOUNT_CHANGES: Record<string, string> = {
   password_changed: "Changed their password",
@@ -36,6 +37,7 @@ const METHOD_LABELS: Record<SignInEvent["auth_method"], string> = {
 export default function SignInEventsSection({ endpoint = "/sign-in-events" }: { endpoint?: string }) {
   const [resultFilter, setResultFilter] = useState("");
   const [authMethodFilter, setAuthMethodFilter] = useState("");
+  const [dateRange, setDateRange] = useState(EMPTY_DATE_RANGE);
   const showMethodFilter = endpoint === "/sign-in-events";
 
   // No explicit limit param — the backend's own default (50, see
@@ -45,6 +47,7 @@ export default function SignInEventsSection({ endpoint = "/sign-in-events" }: { 
   const params = new URLSearchParams();
   if (resultFilter) params.set("result", resultFilter);
   if (authMethodFilter) params.set("auth_method", authMethodFilter);
+  setDateRangeParams(params, dateRange);
   const filterQS = params.toString();
 
   const query = useSignInEvents(filterQS, endpoint);
@@ -54,6 +57,7 @@ export default function SignInEventsSection({ endpoint = "/sign-in-events" }: { 
   return (
     <div>
       <div className="field-row" style={{ justifyContent: "flex-end", marginBottom: "0.6rem" }}>
+        <DateRangeFilter value={dateRange} onChange={setDateRange} />
         <select className="input" value={resultFilter} onChange={(e) => setResultFilter(e.target.value)}>
           <option value="">Any result</option>
           <option value="success">Success</option>

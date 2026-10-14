@@ -17,7 +17,7 @@ export function useCurrentOrganization(options: CurrentOrganizationOptions = {})
 export function useUpdateOrganization(onSuccess?: () => void, onError?: (error: Error) => void) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (body: Pick<Organization, "name"> & Partial<Pick<Organization, "spf_all_qualifier_mode" | "hosted_mailbox_opt_in" | "report_sender_check">>) =>
+    mutationFn: (body: Pick<Organization, "name"> & Partial<Pick<Organization, "spf_all_qualifier_mode" | "hosted_mailbox_opt_in" | "report_sender_check" | "rating_window_days" | "ask_ai_enabled">>) =>
       api.patch<Organization>("/organizations/current", body),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.organization.current });

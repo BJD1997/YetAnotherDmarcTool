@@ -35,7 +35,7 @@ async def _get_discovery_document(tenant_id: str) -> dict:
     return doc
 
 
-def build_authorization_url(*, state: str, code_challenge: str, redirect_uri: str) -> str:
+def build_authorization_url(*, state: str, nonce: str, code_challenge: str, redirect_uri: str) -> str:
     # Multi-tenant entry point ("organizations", not a specific tenant) —
     # we don't know which org a first-time visitor belongs to until the ID
     # token comes back with its `tid` claim.
@@ -46,6 +46,9 @@ def build_authorization_url(*, state: str, code_challenge: str, redirect_uri: st
         "response_mode": "query",
         "scope": "openid profile email",
         "state": state,
+        # Comes back inside the signed ID token: ties the token to this
+        # browser's sign-in, on top of PKCE.
+        "nonce": nonce,
         "code_challenge": code_challenge,
         "code_challenge_method": "S256",
     }

@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { MailboxConnectionStatus } from "../../api/dmarc";
+import { useOnboardingStatus } from "../../hooks/useOnboarding";
 import { useCurrentOrganization } from "../../hooks/useOrganization";
 
 const POLICY_RUNGS = ["none", "quarantine", "reject"];
@@ -56,6 +57,7 @@ export function MailboxHealthWidget({
   // than adding a new request, so every call site of this widget gets
   // hosted-mailbox awareness for free without threading org through props.
   const { data: org } = useCurrentOrganization();
+  const { data: onboarding } = useOnboardingStatus();
 
   // Distinct from "not configured": the query hasn't resolved yet, so
   // `connection` being undefined doesn't yet mean anything — showing "not
@@ -70,6 +72,9 @@ export function MailboxHealthWidget({
     // address per domain instead (see Settings), so this isn't a real
     // problem worth a warning badge.
     if (org && (!org.entra_tenant_id || org.hosted_mailbox_opt_in)) {
+      if (onboarding && !onboarding.hosted_mailbox_ready) {
+        return <span className="badge badge--critical">No report mailbox on this server</span>;
+      }
       return <span className="badge badge--good">Using hosted mailbox</span>;
     }
     return <span className="badge badge--warning">Mailbox not configured</span>;

@@ -43,3 +43,47 @@ async def test_onboarding_status_with_verified_domain(api):
     body = response.json()
     assert body["has_domain"] is True
     assert body["has_verified_domain"] is True
+
+
+async def test_onboarding_status_says_whether_the_server_has_a_hosted_mailbox(api, monkeypatch):
+    from app.config import settings
+
+    client, owner_factory = api
+    _org, user = await seed_org_and_user(owner_factory, entra=False)
+    await login_as(client, owner_factory, user)
+    for name in ("hosted_reports_mailbox_address", "hosted_reports_tenant_id", "entra_mail_client_id", "entra_mail_client_secret"):
+        monkeypatch.setattr(settings, name, None)
+
+    assert (await client.get("/api/onboarding/status")).json()["hosted_mailbox_ready"] is False
+
+    monkeypatch.setattr(settings, "hosted_reports_mailbox_address", "reports@hosted.example")
+    monkeypatch.setattr(settings, "hosted_reports_tenant_id", "00000000-0000-0000-0000-000000000001")
+    monkeypatch.setattr(settings, "entra_mail_client_id", "client")
+    assert (await client.get("/api/onboarding/status")).json()["hosted_mailbox_ready"] is False  # no secret yet
+
+    monkeypatch.setattr(settings, "entra_mail_client_secret", "secret")
+    assert (await client.get("/api/onboarding/status")).json()["hosted_mailbox_ready"] is True
+
+
+async def test_wizard_is_finished_once_an_admin_reaches_the_last_step(api):
+    client, owner_factory = api
+    _org, user = await seed_org_and_user(owner_factory, entra=False)
+    await login_as(client, owner_factory, user)
+
+    assert (await client.get("/api/onboarding/status")).json()["wizard_completed"] is False
+
+    first = await client.post("/api/onboarding/complete")
+    again = await client.post("/api/onboarding/complete")
+
+    assert first.status_code == again.status_code == 200
+    assert (await client.get("/api/onboarding/status")).json()["wizard_completed"] is True
+
+
+async def test_members_cant_finish_the_wizard(api):
+    from app.models.enums import UserRole
+
+    client, owner_factory = api
+    _org, user = await seed_org_and_user(owner_factory, role=UserRole.member)
+    await login_as(client, owner_factory, user)
+
+    assert (await client.post("/api/onboarding/complete")).status_code == 403

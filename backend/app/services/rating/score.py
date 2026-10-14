@@ -59,6 +59,8 @@ def worst_status(statuses: list[CheckStatus]) -> CheckStatus:
         return CheckStatus.error
     if CheckStatus.warn in statuses:
         return CheckStatus.warn
+    if CheckStatus.pending in statuses and CheckStatus.pass_ not in statuses:
+        return CheckStatus.pending
     return CheckStatus.pass_
 
 
@@ -102,7 +104,8 @@ def compute_rating(
     factors: list[RatingFactor] = []
 
     for check_type, weight_key in _DIRECT_CHECK_FACTORS:
-        findings = findings_by_type.get(check_type) or []
+        # Pending findings (no result yet) don't count either way.
+        findings = [f for f in findings_by_type.get(check_type) or [] if f.status != CheckStatus.pending]
         if not findings:
             continue
         status = worst_status([f.status for f in findings])
@@ -110,7 +113,7 @@ def compute_rating(
             RatingFactor(factor=weight_key, weight=WEIGHTS[weight_key], score_pct=_STATUS_SCORE[status], detail=status.value)
         )
 
-    dmarc_findings = findings_by_type.get(CheckType.dmarc) or []
+    dmarc_findings = [f for f in findings_by_type.get(CheckType.dmarc) or [] if f.status != CheckStatus.pending]
     if dmarc_findings:
         policy_status = worst_status([f.status for f in dmarc_findings])
         factors.append(

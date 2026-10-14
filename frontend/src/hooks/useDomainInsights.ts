@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { api } from "../api/client";
 import type { DmarcSummary, DomainRating, InboundHostRow } from "../api/dmarc";
-import type { ActionItem } from "../api/overview";
+import type { ActionItem, DomainTrend } from "../api/overview";
 import { queryKeys } from "./queryKeys";
 
 export function useDmarcSummary(domainId: string) {
@@ -27,4 +27,8 @@ export function useRuaCheck(domainId: string | undefined) {
     queryFn: () => api.get<{ status: string; org_mailbox_address: string | null }>(`/domains/${domainId}/dmarc/rua-check`),
     enabled: !!domainId,
   });
+}
+
+export function useDomainTrend(domainId: string) {
+  return useQuery({ queryKey: queryKeys.domainTrend(domainId), queryFn: () => api.get<DomainTrend>(`/domains/${domainId}/trend`) });
 }

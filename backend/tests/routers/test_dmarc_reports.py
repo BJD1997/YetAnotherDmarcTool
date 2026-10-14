@@ -408,6 +408,25 @@ async def test_dmarc_posture_compliance_follows_selected_range(api):
     assert (quarter["compliance_pct"], quarter["failed_volume"]) == (50.0, 10)
 
 
+async def test_dmarc_posture_policies_across_domains_and_for_one(api):
+    """Locks in the policy tiles before dmarc_posture moved into a service."""
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    await login_as(client, owner_factory, user)
+    reject = await _add_domain(owner_factory, org, name="a.example", verification_status=DomainVerificationStatus.verified)
+    none_ = await _add_domain(owner_factory, org, name="b.example", verification_status=DomainVerificationStatus.verified)
+    for domain, policy in ((reject, "reject"), (none_, "none")):
+        report = await _add_aggregate_report(owner_factory, org, domain, policy_p=policy)
+        await _add_aggregate_record(owner_factory, org, domain, report, count=5)
+
+    everything = (await client.get("/api/dmarc/posture")).json()
+    assert (everything["policy_distribution"], everything["current_policy"]) == ({"reject": 1, "none": 1}, None)
+    assert everything["ready_to_enforce_count"] == 0  # 5 messages is below the readiness minimum
+
+    one = (await client.get(f"/api/dmarc/posture?domain_id={none_.id}")).json()
+    assert (one["policy_distribution"], one["current_policy"]) == (None, "none")
+
+
 async def test_dmarc_reports_by_day_groups_and_paginates(api):
     client, owner_factory = api
     org, user = await seed_org_and_user(owner_factory)

@@ -120,3 +120,25 @@ async def test_list_sign_in_events_pagination(api):
     assert len(page2_body["events"]) == 1
     assert page2_body["events"][0]["email"] == "user0@example.com"
     assert page2_body["has_more"] is False
+
+
+async def test_list_sign_in_events_filters_by_date_range(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin)
+    async with owner_factory() as db:
+        for email, day in (("before@example.com", 1), ("inside@example.com", 5), ("after@example.com", 9)):
+            db.add(
+                SignInEvent(
+                    organization_id=org.id, attempted_email=email, auth_method=AuthMethod.local,
+                    result=SignInResult.success, created_at=datetime(2026, 9, day, 12, tzinfo=timezone.utc),
+                )
+            )
+        await db.commit()
+    await login_as(client, owner_factory, user)
+
+    response = await client.get(
+        "/api/sign-in-events", params={"from": "2026-09-03T00:00:00Z", "to": "2026-09-08T00:00:00Z"}
+    )
+
+    assert response.status_code == 200
+    assert [e["email"] for e in response.json()["events"]] == ["inside@example.com"]

@@ -173,6 +173,24 @@ export default function AdminUpdates() {
 // Azure Container Apps (no Docker socket) and Portainer stacks.
 function ManualUpdateSteps({ status }: { status: UpdateStatus }) {
   const version = status.latest_version ?? "";
+  if (status.deployment_platform === "portainer") {
+    return (
+      <div style={{ marginTop: "0.75rem" }}>
+        <p className="section-hint" style={{ marginBottom: "0.5rem" }}>
+          In Portainer: open this stack, change <code>IMAGE_TAG</code> to <strong>{version}</strong> under Environment
+          variables, and click <strong>Update the stack</strong> with <strong>Re-pull image</strong> on. That runs the
+          database migrations and restarts the app.
+        </p>
+        <p className="section-hint" style={{ marginBottom: 0 }}>
+          To update from here instead, set up Update now for Portainer: see{" "}
+          <a href="https://github.com/BJD1997/YetAnotherDmarcTool/wiki/Deploying-with-Portainer" target="_blank" rel="noreferrer">
+            Deploying with Portainer
+          </a>
+          .
+        </p>
+      </div>
+    );
+  }
   const azure = status.deployment_platform === "azure-container-apps";
   const command = azure
     ? [
@@ -207,11 +225,6 @@ function ManualUpdateSteps({ status }: { status: UpdateStatus }) {
       >
         {command}
       </pre>
-      {!azure && (
-        <p className="section-hint" style={{ marginTop: "0.5rem", marginBottom: 0 }}>
-          On Portainer: change IMAGE_TAG to {version} in the stack's environment variables and redeploy the stack.
-        </p>
-      )}
     </div>
   );
 }

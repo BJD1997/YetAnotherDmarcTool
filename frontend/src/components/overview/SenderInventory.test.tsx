@@ -96,7 +96,9 @@ describe("SenderInventory ?highlight=", () => {
     renderInventory("/domains/domain-1/senders?highlight=recent-sender");
 
     await waitFor(() => expect(screen.getByText("recent-sender")).toBeInTheDocument());
-    expect(getMock.mock.calls.every(([url]) => String(url).includes("days=90"))).toBe(true);
+    const inventoryCalls = getMock.mock.calls.filter(([url]) => String(url).includes("sender-inventory"));
+    expect(inventoryCalls.length).toBeGreaterThan(0);
+    expect(inventoryCalls.every(([url]) => String(url).includes("days=90"))).toBe(true);
   });
 
   it("widens to all time when the highlighted sender isn't in the 90-day window", async () => {
@@ -116,7 +118,7 @@ describe("SenderInventory ?highlight=", () => {
     renderInventory("/domains/domain-1/senders");
 
     await waitFor(() => expect(screen.getByText("normal-sender")).toBeInTheDocument());
-    const [url] = getMock.mock.calls[0];
+    const [url] = getMock.mock.calls.find(([u]) => String(u).includes("sender-inventory"))!;
     expect(url).toContain("days=90");
   });
 });
@@ -150,5 +152,75 @@ describe("SenderInventory filter correctness", () => {
     renderInventory("/domains/domain-1/senders");
 
     expect(await screen.findByRole("button", { name: "Failing (1)" })).toBeInTheDocument();
+  });
+});
+
+describe("SenderInventory window", () => {
+  it("defaults to the organization's rating period", async () => {
+    getMock.mockImplementation(async (url: string) =>
+      url.startsWith("/organizations/current") ? { rating_window_days: 30 } : { [DOMAIN.id]: [row({ service_label: "s" })] },
+    );
+
+    renderInventory("/domains/domain-1/senders");
+
+    await waitFor(() =>
+      expect(getMock.mock.calls.some(([url]) => String(url).includes("days=30"))).toBe(true),
+    );
+  });
+});
+
+describe("SenderInventory Ask AI", () => {
+  function mockApi(rows: SenderInventoryRow[]) {
+    getMock.mockImplementation(async (url: string) => {
+      if (url === "/organizations/current") return { ask_ai_enabled: true, rating_window_days: 90 };
+      if (url.startsWith("/ask-ai/prompt")) return { prompt: "the prompt" };
+      return { [DOMAIN.id]: rows };
+    });
+  }
+
+  it("isn't offered for blocked senders", async () => {
+    mockApi([
+      row({ service_label: "failing-sender", dmarc_pass_pct: 10, volume: 500 }),
+      row({ service_label: "blocked-sender", dmarc_pass_pct: 0, volume: 500, status: "blocked" }),
+    ]);
+
+    renderInventory("/domains/domain-1/senders");
+
+    await waitFor(() => expect(screen.getByText("blocked-sender")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByRole("button", { name: /Ask AI/ })).toHaveLength(1));
+  });
+
+  it("asks about the period picked in the list", async () => {
+    mockApi([row({ service_label: "failing-sender", dmarc_pass_pct: 10, volume: 500 })]);
+
+    renderInventory("/domains/domain-1/senders");
+    fireEvent.change(await screen.findByDisplayValue("Last 90 days"), { target: { value: "all" } });
+    fireEvent.click(await screen.findByRole("button", { name: /Ask AI/ }));
+
+    await waitFor(() =>
+      expect(getMock.mock.calls.some(([url]) => String(url).startsWith("/ask-ai/prompt") && String(url).includes("period=all"))).toBe(true),
+    );
+  });
+});
+
+describe("SenderInventory period change", () => {
+  it("keeps the current list on screen while another period loads", async () => {
+    let releaseAllTime: (rows: unknown) => void = () => {};
+    getMock.mockImplementation(async (url: string) => {
+      if (url === "/organizations/current") return { ask_ai_enabled: false, rating_window_days: 90 };
+      if (url.includes("days=90")) return { [DOMAIN.id]: [row({ service_label: "recent-sender" })] };
+      return new Promise((resolve) => { releaseAllTime = resolve; });
+    });
+
+    renderInventory("/domains/domain-1/senders");
+    fireEvent.change(await screen.findByDisplayValue("Last 90 days"), { target: { value: "all" } });
+
+    expect(await screen.findByText("Updating…")).toBeInTheDocument();
+    expect(screen.getByText("recent-sender")).toBeInTheDocument();
+    expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+
+    releaseAllTime({ [DOMAIN.id]: [row({ service_label: "old-sender" })] });
+    expect(await screen.findByText("old-sender")).toBeInTheDocument();
+    expect(screen.queryByText("Updating…")).not.toBeInTheDocument();
   });
 });

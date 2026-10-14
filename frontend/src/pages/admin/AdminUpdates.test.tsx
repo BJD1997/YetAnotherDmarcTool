@@ -39,7 +39,15 @@ describe("AdminUpdates", () => {
     renderWithAppProviders(<AdminUpdates />);
 
     expect(screen.getByText(/IMAGE_TAG=v0.1.5-rc1/)).toBeInTheDocument();
-    expect(screen.getByText(/On Portainer/)).toBeInTheDocument();
+  });
+
+  it("shows Portainer steps on a Portainer stack without Update now", () => {
+    status.value = { ...BASE, self_update_available: false, deployment_platform: "portainer", azure_resource_group: null };
+    renderWithAppProviders(<AdminUpdates />);
+
+    expect(screen.getByText(/Update the stack/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Deploying with Portainer" })).toBeInTheDocument();
+    expect(screen.queryByText(/docker compose pull/)).not.toBeInTheDocument();
   });
 
   it("keeps Update now where an updater is configured", () => {

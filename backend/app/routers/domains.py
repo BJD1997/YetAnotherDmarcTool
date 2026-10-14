@@ -17,11 +17,11 @@ from app.repositories.dmarc_reports import count_reports_for_domain, last_report
 from app.repositories.domains import count_subdomains, get_owned_domain, list_domains_for_org
 from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.repositories.organizations import get_organization
-from app.schemas.domains import DomainCreateRequest, DomainUpdateRequest
+from app.schemas.domains import DetectedDomainAddRequest, DomainCreateRequest, DomainUpdateRequest
 from app.services.cloudflare.dns_provisioner import ensure_authorization_record, release_authorization_records
 from app.services.dns_checks.dmarc_record import check_rua_destination
 from app.services.dns_checks.domain_verification import apply_domain_verification, verification_record_name
-from app.services.ingestion.report_writer import resweep_domain_records, resweep_unmatched_reports
+from app.services.domain_setup import add_detected_domain, add_domain, attribute_reports
 from app.services.rating.domain_rating import compute_domain_rating, domain_policy_readiness, latest_findings_by_type
 from app.services.rating.score import tally_worst_status
 
@@ -75,51 +75,43 @@ async def create_domain(
                 status.HTTP_400_BAD_REQUEST, f"{body.name!r} is not a subdomain of {parent.name!r}"
             )
 
-    domain = Domain(
-        organization_id=user.organization_id,
-        parent_domain_id=body.parent_domain_id,
-        name=body.name,
-        notes=body.notes,
-        mail_profile=body.mail_profile or DomainMailProfile.sends_mail,
-    )
-    if parent is not None and parent.verification_status == DomainVerificationStatus.verified:
-        # Proving control of the apex zone's DNS implies control of
-        # everything under it — a subdomain of an already-verified apex
-        # doesn't need its own separate TXT challenge.
-        domain.verification_status = DomainVerificationStatus.verified
-        domain.verified_at = datetime.now(timezone.utc)
-
-    db.add(domain)
     try:
-        # flush (not commit) so the row is visible to the refresh() SELECT
-        # below within the SAME transaction — the RLS context set by
-        # require_org_admin/get_current_user via SET LOCAL only lasts for
-        # that one transaction, so a commit here would make a subsequent
-        # refresh() run in a new, unscoped transaction and find nothing.
-        await db.flush()
+        domain = await add_domain(
+            db, user.organization_id, body.name, parent=parent, notes=body.notes, mail_profile=body.mail_profile
+        )
     except IntegrityError:
         await db.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, "this domain is already registered")
 
-    # Reports that arrived before this domain was registered are stuck with
-    # domain_id=NULL in the unmatched bucket — re-check them now that a
-    # domain exists to match against, rather than leaving them stranded
-    # until the next unrelated write happens to touch them.
-    resweep_counts = await resweep_unmatched_reports(db, user.organization_id)
-    # Separately, records may have already been attributed to a less-specific
-    # ancestor (e.g. this subdomain's mail counted under its parent, since
-    # nothing more specific existed to match yet) — re-resolve those by their
-    # own header_from now that this domain exists to match against too. Also
-    # doubles as a backfill when called for an already-registered domain.
-    reattributed_records = await resweep_domain_records(db, user.organization_id, domain)
+    # Reports that arrived before this domain was added sit unmatched, and
+    # this subdomain's mail may be counted under its parent: both move to it.
+    attributed = await attribute_reports(db, user.organization_id, domain.name)
 
     await db.refresh(domain)
     await db.commit()
     return {
         **_domain_out(domain),
-        "reattributed_reports": resweep_counts["aggregate_reports"],
-        "reattributed_records": reattributed_records,
+        "reattributed_reports": attributed["reports"],
+        "reattributed_records": attributed["records"],
     }
+
+
+@router.post("/detected", status_code=status.HTTP_201_CREATED)
+async def add_detected(
+    body: DetectedDomainAddRequest, db: AsyncSession = Depends(get_db), user: User = Depends(require_org_admin)
+) -> dict:
+    """Adds a domain from Detected domains with its family: its root domain
+    first if needed, the root's other detected subdomains under it, and
+    root-level domains that are really its subdomains moved under it."""
+    try:
+        result = await add_detected_domain(db, user.organization_id, body.name)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, "this domain is already registered")
+    await db.commit()
+    return result
 
 
 @router.get("/ranked")
@@ -278,15 +270,22 @@ async def delete_domain(
     domain = await get_owned_domain(db, domain_id, user.organization_id)
 
     if await count_subdomains(db, domain_id) > 0:
-        raise HTTPException(status.HTTP_409_CONFLICT, "remove or reassign subdomains first")
+        raise HTTPException(status.HTTP_409_CONFLICT, "This domain has subdomains. Remove those first.")
 
-    if await count_reports_for_domain(db, domain_id) > 0:
+    # A verified domain's reports are its history: keep them, archive it. One
+    # that was never verified never owned them: they go back to its parent,
+    # or to Detected domains (the report tables set domain_id to NULL).
+    verified = domain.verification_status == DomainVerificationStatus.verified
+    if verified and await count_reports_for_domain(db, domain_id) > 0:
         raise HTTPException(
-            status.HTTP_409_CONFLICT, "domain has report history — archive it instead (PATCH is_active=false)"
+            status.HTTP_409_CONFLICT, "This domain has report history, so it can't be removed. Archive it instead."
         )
 
     had_hosted_address = domain.hosted_report_address is not None
+    name = domain.name
     await db.delete(domain)
+    await db.flush()
+    await attribute_reports(db, user.organization_id, name)
     await db.commit()
     if had_hosted_address:
         await release_authorization_records({domain.name})

@@ -163,7 +163,7 @@ def _mock_entra(monkeypatch, *, tenant_id: str, object_id: str, exchange_error: 
         return {"id_token": "fake"}
 
     async def _validate(_token):
-        return {"tid": tenant_id, "oid": object_id, "preferred_username": "sso@test.example", "name": "SSO User"}
+        return {"tid": tenant_id, "oid": object_id, "preferred_username": "sso@test.example", "name": "SSO User", "nonce": "nonce123"}
 
     monkeypatch.setattr(entra_oidc, "exchange_code_for_tokens", _exchange)
     monkeypatch.setattr(entra_oidc, "validate_id_token", _validate)
@@ -172,6 +172,7 @@ def _mock_entra(monkeypatch, *, tenant_id: str, object_id: str, exchange_error: 
 async def _callback(client):
     client.cookies.set("oauth_state", "state123")
     client.cookies.set("oauth_verifier", "verifier123")
+    client.cookies.set("oauth_nonce", "nonce123")
     return await client.get("/api/auth/callback?code=abc&state=state123", follow_redirects=False)
 
 

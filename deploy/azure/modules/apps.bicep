@@ -55,13 +55,19 @@ param triggerIdentityId string
 param triggerClientId string
 @description('Show "Run test update" in the admin console.')
 param enableTestUpdate bool = false
-@description('Run the STARTTLS check (needs outbound port 25).')
-param enableStarttlsCheck bool = false
+@description('Where the STARTTLS result comes from: tls_rpt, probe (needs outbound port 25) or off.')
+param starttlsCheckMode string = 'tls_rpt'
 
+// STARTTLS_CHECK_ENABLED is set to true explicitly so a v0.1.7 "false" left
+// on the app can't override the mode.
 var starttlsEnv = [
   {
+    name: 'STARTTLS_CHECK_MODE'
+    value: starttlsCheckMode
+  }
+  {
     name: 'STARTTLS_CHECK_ENABLED'
-    value: enableStarttlsCheck ? 'true' : 'false'
+    value: 'true'
   }
 ]
 

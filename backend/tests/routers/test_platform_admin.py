@@ -659,3 +659,53 @@ async def test_enrollment_without_a_usable_fernet_key_says_so(api, monkeypatch, 
     assert response.status_code == 503
     assert expected in response.json()["detail"]
     assert "openssl rand -base64 32" in response.json()["detail"]
+
+
+async def test_job_runs_filter_by_date_range(api):
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+    org, _user = await seed_org_and_user(owner_factory)
+    async with owner_factory() as db:
+        from app.db.rls import set_platform_admin_context
+        from app.models.enums import JobStatus, JobType
+        from app.models.job_run import JobRun
+        await set_platform_admin_context(db, is_admin=True)
+        for day in (1, 5, 9):
+            started = datetime(2026, 9, day, 12, tzinfo=timezone.utc)
+            db.add(
+                JobRun(
+                    organization_id=org.id, job_type=JobType.mailbox_poll, status=JobStatus.success,
+                    started_at=started, finished_at=started + timedelta(minutes=1),
+                )
+            )
+        await db.commit()
+
+    response = await client.get(
+        "/api/admin/job-runs", params={"from": "2026-09-03T00:00:00Z", "to": "2026-09-08T00:00:00Z"}
+    )
+
+    assert response.status_code == 200
+    assert [r["started_at"][:10] for r in response.json()["job_runs"]] == ["2026-09-05"]
+
+
+async def test_admin_sign_in_events_filter_by_date_range(api):
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+    async with owner_factory() as db:
+        from app.models.enums import AuthMethod, SignInResult
+        from app.models.sign_in_event import SignInEvent
+        for email, day in (("before@example.com", 1), ("inside@example.com", 5)):
+            db.add(
+                SignInEvent(
+                    attempted_email=email, auth_method=AuthMethod.platform_admin,
+                    result=SignInResult.failure, created_at=datetime(2026, 9, day, 12, tzinfo=timezone.utc),
+                )
+            )
+        await db.commit()
+
+    response = await client.get(
+        "/api/admin/sign-in-events", params={"from": "2026-09-03T00:00:00Z", "to": "2026-09-08T00:00:00Z"}
+    )
+
+    assert response.status_code == 200
+    assert [e["email"] for e in response.json()["events"]] == ["inside@example.com"]

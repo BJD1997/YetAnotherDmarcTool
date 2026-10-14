@@ -34,6 +34,8 @@ export const queryKeys = {
   health: ["health"] as const,
   actionQueue: (domainId: string | null) => ["action-queue", domainId] as const,
   detectedDomains: ["detected-domains"] as const,
+  notifications: ["notifications"] as const,
+  notificationsCount: ["notifications", "count"] as const,
   dnsChecks: (domainId: string) => ["dns-checks", domainId] as const,
   dkimSelectors: (domainId: string) => ["dkim-selectors", domainId] as const,
   detectedDkimSelectors: (domainId: string) => ["dkim-selectors-detected", domainId] as const,
@@ -45,6 +47,7 @@ export const queryKeys = {
   posture: (domainId: string | null, days: number) => ["dmarc-posture", domainId, days] as const,
   dmarcSummary: (domainId: string) => ["dmarc-summary", domainId] as const,
   domainRating: (domainId: string) => ["domain-rating", domainId] as const,
+  domainTrend: (domainId: string) => ["domain-trend", domainId] as const,
   inboundHosts: (domainId: string) => ["dmarc-inbound", domainId] as const,
   ruaCheck: (domainId: string) => ["rua-check", domainId] as const,
   dmarcReports: {
