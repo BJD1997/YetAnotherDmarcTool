@@ -366,7 +366,11 @@ async def dmarc_posture(
     if domain_id is not None:
         domains = [await get_owned_domain(db, domain_id, user.organization_id)]
     else:
-        domains = await list_domains_for_org(db, user.organization_id)
+        # "All domains" is the verified ones, as in the domain picker.
+        domains = [
+            d for d in await list_domains_for_org(db, user.organization_id)
+            if d.verification_status == DomainVerificationStatus.verified
+        ]
     return await compute_posture(db, user.organization_id, domains, domain_id, days)
 
 

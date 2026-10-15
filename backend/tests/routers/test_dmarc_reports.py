@@ -343,7 +343,10 @@ async def test_dmarc_trend_buckets_by_day(api):
     client, owner_factory = api
     org, user = await seed_org_and_user(owner_factory)
     await login_as(client, owner_factory, user)
-    domain = await _add_domain(owner_factory, org)
+    # "All domains" counts verified domains only.
+    domain = await _add_domain(
+        owner_factory, org, verification_status=DomainVerificationStatus.verified, verified_at=datetime.now(timezone.utc)
+    )
     day = datetime.now(timezone.utc) - timedelta(days=2)
     report = await _add_aggregate_report(owner_factory, org, domain, date_range_begin=day)
     await _add_aggregate_record(owner_factory, org, domain, report, count=6, spf_result=AuthResult.pass_, dkim_result=AuthResult.pass_)

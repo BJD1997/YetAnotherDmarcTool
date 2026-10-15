@@ -59,7 +59,7 @@ async def compute_posture(
     if domain_id is not None:
         last_received_at = await dmarc_reports_repo.last_report_received_at_for_domain(db, domain_id)
     else:
-        last_received_at = await dmarc_reports_repo.last_report_received_at_for_org(db, organization_id)
+        last_received_at = await dmarc_reports_repo.last_report_received_at_for_verified_domains(db, organization_id)
     new_senders = await dmarc_reports_repo.count_new_pending_senders_since(db, organization_id, since, domain_id=domain_id)
 
     return {
