@@ -730,7 +730,10 @@ select.input {
   align-items: stretch;
 }
 .kpi-band-policy {
-  flex-shrink: 0;
+  /* A fixed width: its content differs between "All domains" and one
+     domain, and the tiles beside it mustn't change size when switching. */
+  flex: 0 0 22rem;
+  max-width: 100%;
   display: flex;
   flex-direction: column;
   justify-content: center;

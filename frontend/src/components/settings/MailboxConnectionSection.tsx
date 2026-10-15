@@ -306,6 +306,18 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
               >
                 Change mailbox
               </button>
+              {canUseMicrosoft && (
+                <button
+                  className="btn btn--ghost btn--sm"
+                  onClick={() => {
+                    setMailbox("");
+                    setChoice(isImap ? "microsoft" : "imap");
+                    setEditing(true);
+                  }}
+                >
+                  {isImap ? "Use Microsoft 365 instead" : "Use IMAP instead"}
+                </button>
+              )}
               <button className="btn btn--ghost btn--sm" onClick={() => setShowHistory((v) => !v)}>
                 <History />
                 {showHistory ? "Hide" : "Recent syncs"}
