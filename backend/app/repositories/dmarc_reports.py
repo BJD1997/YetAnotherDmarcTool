@@ -12,7 +12,7 @@ from app.models.dismissed_detected_domain import DismissedDetectedDomain
 from app.models.dmarc_aggregate import DmarcAggregateRecord, DmarcAggregateReport
 from app.models.dmarc_forensic import DmarcForensicReport
 from app.models.domain import Domain
-from app.models.enums import AuthResult, Disposition, ReportSenderCheck, SenderReviewStatus
+from app.models.enums import AuthResult, Disposition, DomainVerificationStatus, ReportSenderCheck, SenderReviewStatus
 from app.models.sender_review import SenderReview
 from app.models.source_ip_identity import SourceIpIdentity
 from app.models.tls_rpt import TlsRptReport
@@ -171,6 +171,26 @@ async def count_reports_for_domain(db: AsyncSession, domain_id: UUID) -> int:
 async def last_report_received_at_for_domain(db: AsyncSession, domain_id: UUID) -> datetime | None:
     result = await db.execute(
         select(func.max(DmarcAggregateReport.received_at)).where(DmarcAggregateReport.domain_id == domain_id)
+    )
+    return result.scalar_one_or_none()
+
+
+def verified_domain_ids(organization_id: UUID):
+    """The organization's verified domains: what the Overview's "All
+    domains" means, the same list as its domain picker. Reports for domains
+    that aren't added (they share the mailbox) or aren't verified yet don't
+    count there."""
+    return select(Domain.id).where(
+        Domain.organization_id == organization_id, Domain.verification_status == DomainVerificationStatus.verified
+    )
+
+
+async def last_report_received_at_for_verified_domains(db: AsyncSession, organization_id: UUID) -> datetime | None:
+    result = await db.execute(
+        select(func.max(DmarcAggregateReport.received_at)).where(
+            DmarcAggregateReport.organization_id == organization_id,
+            DmarcAggregateReport.domain_id.in_(verified_domain_ids(organization_id)),
+        )
     )
     return result.scalar_one_or_none()
 
@@ -551,6 +571,8 @@ async def dmarc_trend_by_day(
     )
     if domain_id is not None:
         query = query.where(DmarcAggregateRecord.domain_id == domain_id)
+    else:
+        query = query.where(DmarcAggregateRecord.domain_id.in_(verified_domain_ids(organization_id)))
     return (await db.execute(query)).all()
 
 
@@ -574,6 +596,8 @@ async def message_volume_for_org_since(
     )
     if domain_id is not None:
         query = query.where(DmarcAggregateRecord.domain_id == domain_id)
+    else:
+        query = query.where(DmarcAggregateRecord.domain_id.in_(verified_domain_ids(organization_id)))
     total, failed = (await db.execute(query)).one()
     return int(total), int(failed)
 
@@ -588,6 +612,8 @@ async def count_new_pending_senders_since(
     )
     if domain_id is not None:
         query = query.where(SenderReview.domain_id == domain_id)
+    else:
+        query = query.where(SenderReview.domain_id.in_(verified_domain_ids(organization_id)))
     return (await db.execute(query)).scalar_one()
 
 
