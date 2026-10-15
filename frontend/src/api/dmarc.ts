@@ -235,8 +235,36 @@ export interface MailboxSyncStats {
   errors: number;
 }
 
+export interface ImapSettingsOut {
+  host: string;
+  port: number;
+  security: "ssl" | "starttls";
+  username: string;
+  folder: string;
+  processed_folder: string;
+  // The mail server's Authentication-Results ID the sender check trusts;
+  // null until confirmed. detected: what the newest message carried.
+  authserv_id: string | null;
+  detected_authserv_id: string | null;
+  password_set: boolean;
+}
+
+export interface ImapSettingsIn {
+  host: string;
+  port: number;
+  security: "ssl" | "starttls";
+  username: string;
+  // Left out: keep the stored password (same server and user only).
+  password?: string;
+  folder: string;
+  processed_folder: string;
+  authserv_id: string | null;
+}
+
 export interface MailboxConnectionStatus {
   id: string;
+  kind: "microsoft" | "imap";
+  imap: ImapSettingsOut | null;
   mailbox_address: string;
   consent_status: "pending" | "granted" | "revoked";
   consent_granted_at: string | null;

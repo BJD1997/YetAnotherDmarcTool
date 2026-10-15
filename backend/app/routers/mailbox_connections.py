@@ -5,21 +5,39 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user, require_org_admin
-from app.models.enums import ConsentStatus
+from app.models.enums import ConsentStatus, MailboxKind
 from app.models.mailbox_connection import MailboxConnection
 from app.models.user import User
 from app.repositories.dmarc_reports import last_report_received_at_for_org
 from app.repositories.mailbox_connections import get_org_mailbox_connection, list_mailbox_job_runs
 from app.repositories.organizations import get_organization
-from app.schemas.mailbox_connections import MailboxConnectionSetRequest
+from app.schemas.mailbox_connections import ImapConnectionRequest, MailboxConnectionSetRequest
+from app.services.imap.client import ImapError, ImapSettings
+from app.services.imap.poll import test_connection
 from app.services.jobs import queue
 
 router = APIRouter(prefix="/mailbox-connection", tags=["mailbox-connection"])
 
 
 def _connection_out(connection: MailboxConnection) -> dict:
+    imap = None
+    if connection.kind == MailboxKind.imap:
+        imap = {
+            "host": connection.imap_host,
+            "port": connection.imap_port,
+            "security": connection.imap_security.value if connection.imap_security else None,
+            "username": connection.imap_username,
+            "folder": connection.imap_folder,
+            "processed_folder": connection.imap_processed_folder,
+            "authserv_id": connection.imap_authserv_id,
+            "detected_authserv_id": connection.imap_detected_authserv_id,
+            # The password itself is never sent back.
+            "password_set": bool(connection.imap_password),
+        }
     return {
         "id": str(connection.id),
+        "kind": connection.kind.value,
+        "imap": imap,
         "mailbox_address": connection.mailbox_address,
         "consent_status": connection.consent_status.value,
         "consent_granted_at": connection.consent_granted_at.isoformat() if connection.consent_granted_at else None,
@@ -81,7 +99,7 @@ async def mailbox_job_runs(
     ]
 
 
-async def _queue_sync(db: AsyncSession, organization_id, tenant_id) -> None:
+async def _queue_sync(db: AsyncSession, organization_id, tenant_id=None) -> None:
     """Queues a sync for the worker rather than running it here: the worker
     holds the Graph app's secret, and on Azure the api doesn't (the sync
     failed there with AADSTS7000216). Same job and dedupe key the worker's
@@ -89,7 +107,7 @@ async def _queue_sync(db: AsyncSession, organization_id, tenant_id) -> None:
     await queue.enqueue(
         db,
         "mailbox_poll",
-        {"org_id": str(organization_id), "tenant_id": str(tenant_id)},
+        {"org_id": str(organization_id), "tenant_id": str(tenant_id) if tenant_id else None},
         dedupe_key=f"mailbox_poll:{organization_id}",
     )
 
@@ -119,6 +137,11 @@ async def set_mailbox_connection(
     if connection is None:
         connection = MailboxConnection(organization_id=user.organization_id, mailbox_address=body.mailbox_address)
         db.add(connection)
+    elif connection.kind != MailboxKind.microsoft:
+        # One mailbox per organization: switching replaces the IMAP one.
+        _clear_imap(connection)
+        connection.mailbox_address = body.mailbox_address
+        connection.delta_link = None
     elif connection.mailbox_address != body.mailbox_address:
         # delta_link is an opaque Graph URL bound to the *previous* mailbox's
         # /users/{mailbox}/... context — reusing it against a different
@@ -150,8 +173,93 @@ async def resync_mailbox_connection(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no mailbox connection configured for your organization yet")
 
     org = await get_organization(db, user.organization_id)
-    if org.entra_tenant_id is None:
+    if connection.kind == MailboxKind.microsoft and org.entra_tenant_id is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "organization has no Entra tenant ID set")
 
     await _queue_sync(db, org.id, org.entra_tenant_id)
     return {"status": "resync started"}
+
+
+def _clear_imap(connection: MailboxConnection) -> None:
+    connection.kind = MailboxKind.microsoft
+    for field in (
+        "imap_host", "imap_port", "imap_security", "imap_username", "imap_password", "imap_folder",
+        "imap_processed_folder", "imap_authserv_id", "imap_detected_authserv_id",
+    ):
+        setattr(connection, field, None)
+
+
+async def _imap_settings(db: AsyncSession, organization_id, body: ImapConnectionRequest) -> ImapSettings:
+    """The settings to test or save. Without a new password, the stored one
+    is reused, but only for the same server and username: otherwise a
+    changed server could be sent the old password."""
+    password = body.password
+    if password is None:
+        current = await get_org_mailbox_connection(db, organization_id)
+        same = (
+            current is not None
+            and current.kind == MailboxKind.imap
+            and current.imap_host == body.host
+            and current.imap_username == body.username
+        )
+        if not same or not current.imap_password:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "enter the password")
+        password = current.imap_password
+    return ImapSettings(
+        host=body.host, port=body.port, security=body.security, username=body.username, password=password,
+        folder=body.folder, processed_folder=body.processed_folder,
+    )
+
+
+async def _tested(settings: ImapSettings) -> tuple[int, str | None]:
+    try:
+        return await test_connection(settings)
+    except ImapError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Couldn't use this mailbox: {exc}") from exc
+
+
+@router.post("/imap/test")
+async def test_imap_connection(
+    body: ImapConnectionRequest, db: AsyncSession = Depends(get_db), user: User = Depends(require_org_admin)
+) -> dict:
+    """Connects, signs in and opens the folder without changing anything."""
+    messages, detected = await _tested(await _imap_settings(db, user.organization_id, body))
+    return {"ok": True, "messages": messages, "detected_authserv_id": detected}
+
+
+@router.put("/imap")
+async def set_imap_connection(
+    body: ImapConnectionRequest, db: AsyncSession = Depends(get_db), user: User = Depends(require_org_admin)
+) -> dict:
+    """Saves an IMAP mailbox as the organization's one mailbox, replacing a
+    Microsoft 365 one. Only after a successful connection test, so a typo
+    doesn't leave the organization with a mailbox that never syncs."""
+    settings = await _imap_settings(db, user.organization_id, body)
+    _messages, detected = await _tested(settings)
+
+    connection = await get_org_mailbox_connection(db, user.organization_id)
+    if connection is None:
+        connection = MailboxConnection(organization_id=user.organization_id, mailbox_address=body.username)
+        db.add(connection)
+    connection.kind = MailboxKind.imap
+    connection.mailbox_address = body.username
+    connection.imap_host = settings.host
+    connection.imap_port = settings.port
+    connection.imap_security = settings.security
+    connection.imap_username = settings.username
+    connection.imap_password = settings.password
+    connection.imap_folder = settings.folder
+    connection.imap_processed_folder = settings.processed_folder
+    connection.imap_authserv_id = body.authserv_id
+    connection.imap_detected_authserv_id = detected
+    connection.delta_link = None
+    connection.consent_status = ConsentStatus.granted
+    connection.consent_granted_at = datetime.now(timezone.utc)
+    connection.last_sync_status = None
+    connection.last_sync_error = None
+
+    await db.flush()
+    await db.refresh(connection)
+    await db.commit()
+    await _queue_sync(db, user.organization_id)
+    return _connection_out(connection)

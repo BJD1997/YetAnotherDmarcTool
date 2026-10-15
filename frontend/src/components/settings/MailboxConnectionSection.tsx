@@ -3,7 +3,14 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Mail, RefreshCw, ChevronDown, ChevronUp, History } from "lucide-react";
 import { ApiError } from "../../api/client";
 import { ReportFreshnessValue } from "../overview/widgets";
-import { useMailboxConnection, useMailboxJobRuns, useResyncMailbox, useSetMailboxConnection } from "../../hooks/useMailboxConnection";
+import {
+  useMailboxConnection,
+  useMailboxJobRuns,
+  useResyncMailbox,
+  useSetImapConnection,
+  useSetMailboxConnection,
+} from "../../hooks/useMailboxConnection";
+import ImapMailboxForm from "./ImapMailboxForm";
 import { useCurrentOrganization } from "../../hooks/useOrganization";
 import { queryKeys } from "../../hooks/queryKeys";
 
@@ -47,6 +54,13 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
   const [saveError, setSaveError] = useState<string | null>(null);
   const [showLinks, setShowLinks] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  // Organizations that sign in with Microsoft choose between their Microsoft
+  // 365 mailbox and any IMAP mailbox; others can only use IMAP.
+  const canUseMicrosoft = !!org?.entra_tenant_id;
+  const [choice, setChoice] = useState<"microsoft" | "imap">("microsoft");
+  const confirmId = useSetImapConnection(startWaiting, (err) =>
+    setSaveError(err instanceof ApiError ? err.message : "couldn't save the mail server ID"),
+  );
 
   const setConnection = useSetMailboxConnection(
     () => {
@@ -106,6 +120,7 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
         </div>
       );
     }
+    const imapOnly = !canUseMicrosoft || choice === "imap";
     return (
       <div className="alert alert--warning">
         <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
@@ -113,6 +128,14 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
           No mailbox connection configured yet.
         </div>
 
+        {canUseMicrosoft && <MailboxChoice choice={choice} onChange={setChoice} />}
+
+        {imapOnly ? (
+          <div style={{ marginTop: "0.75rem" }}>
+            <ImapMailboxForm onSaved={startWaiting} />
+          </div>
+        ) : (
+        <>
         <div style={{ marginTop: "0.75rem" }}>
           <div className="stat-tile-label">Step 1 — grant access</div>
           {consentCta}
@@ -142,16 +165,34 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
             </button>
           </form>
         </div>
+        </>
+        )}
         {saveError && <div style={{ marginTop: "0.5rem" }}>{saveError}</div>}
       </div>
     );
   }
   if (!connection) return null;
 
-  const ok = connection.consent_status === "granted" && connection.last_sync_status !== "error";
+  const isImap = connection.kind === "imap";
+  const imap = connection.imap;
+  const idUnconfirmed = isImap && !!imap && !imap.authserv_id;
+  const ok = connection.consent_status === "granted" && connection.last_sync_status !== "error" && !idUnconfirmed;
+  const editingImap = editing && (!canUseMicrosoft || choice === "imap");
   return (
     <div className={`alert ${ok ? "alert--good" : "alert--warning"}`}>
-      {editing ? (
+      {editing && canUseMicrosoft && <MailboxChoice choice={choice} onChange={setChoice} />}
+      {editingImap ? (
+        <div style={{ marginTop: canUseMicrosoft ? "0.75rem" : 0 }}>
+          <ImapMailboxForm
+            current={imap}
+            onSaved={() => {
+              setEditing(false);
+              startWaiting();
+            }}
+            onCancel={() => setEditing(false)}
+          />
+        </div>
+      ) : editing ? (
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -171,14 +212,51 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
         <>
           <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}>
             <Mail size={15} />
-            Mailbox: <strong>{connection.mailbox_address}</strong>
-            <span className="muted">— consent {connection.consent_status}</span>
+            {isImap && imap ? (
+              <>
+                IMAP mailbox: <strong>{imap.username}</strong>
+                <span className="muted">{`on ${imap.host}, ${imap.folder} → ${imap.processed_folder}`}</span>
+              </>
+            ) : (
+              <>
+                Mailbox: <strong>{connection.mailbox_address}</strong>
+                <span className="muted">— consent {connection.consent_status}</span>
+              </>
+            )}
             {connection.last_sync_at && (
               <span className="muted">, last synced {new Date(connection.last_sync_at).toLocaleString()}</span>
             )}
           </div>
-          {connection.last_sync_status === "error" && connection.last_sync_error && (
+          {connection.last_sync_status === "error" && connection.last_sync_error && !idUnconfirmed && (
             <div style={{ marginTop: "0.35rem" }}>— error: {connection.last_sync_error}</div>
+          )}
+          {idUnconfirmed && imap && (
+            <div style={{ marginTop: "0.5rem" }}>
+              <strong>Confirm your mail server's ID before reports are read.</strong>{" "}
+              {imap.detected_authserv_id ? (
+                <>
+                  Your mail server signs its checks as <code>{imap.detected_authserv_id}</code>.{" "}
+                  {canManage && (
+                    <button
+                      type="button"
+                      className="btn btn--secondary btn--sm"
+                      disabled={confirmId.isPending}
+                      onClick={() =>
+                        confirmId.mutate({
+                          host: imap.host, port: imap.port, security: imap.security, username: imap.username,
+                          folder: imap.folder, processed_folder: imap.processed_folder,
+                          authserv_id: imap.detected_authserv_id,
+                        })
+                      }
+                    >
+                      Use this
+                    </button>
+                  )}
+                </>
+              ) : (
+                "It's detected from the first report that arrives; check back after the next sync."
+              )}
+            </div>
           )}
 
           <div className="chip-row" style={{ marginTop: "0.5rem", fontSize: "0.85rem" }}>
@@ -211,7 +289,7 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
               actually completed, so the links that matter for fixing that
               need to stay reachable here too, not just before the mailbox
               was first configured. */}
-          {canManage && connection.last_sync_status === "error" && consentCta}
+          {canManage && !isImap && connection.last_sync_status === "error" && consentCta}
           {canManage && (
             <div className="chip-row" style={{ marginTop: "0.6rem" }}>
               <button className="btn btn--secondary btn--sm" onClick={() => resync.mutate()} disabled={resync.isPending || syncing}>
@@ -221,7 +299,8 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
               <button
                 className="btn btn--ghost btn--sm"
                 onClick={() => {
-                  setMailbox(connection.mailbox_address);
+                  setMailbox(isImap ? "" : connection.mailbox_address);
+                  setChoice(isImap ? "imap" : "microsoft");
                   setEditing(true);
                 }}
               >
@@ -231,7 +310,7 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
                 <History />
                 {showHistory ? "Hide" : "Recent syncs"}
               </button>
-              {connection.last_sync_status !== "error" && (
+              {!isImap && connection.last_sync_status !== "error" && (
                 <button className="btn btn--ghost btn--sm" onClick={() => setShowLinks((v) => !v)}>
                   {showLinks ? <ChevronUp /> : <ChevronDown />}
                   Entra links
@@ -244,6 +323,24 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
         </>
       )}
       {saveError && <div style={{ marginTop: "0.5rem" }}>{saveError}</div>}
+    </div>
+  );
+}
+
+function MailboxChoice({ choice, onChange }: { choice: "microsoft" | "imap"; onChange: (c: "microsoft" | "imap") => void }) {
+  return (
+    <div className="chip-row" role="radiogroup" aria-label="Report mailbox" style={{ marginTop: "0.6rem" }}>
+      {(
+        [
+          ["microsoft", "Microsoft 365 mailbox"],
+          ["imap", "Another mailbox (IMAP)"],
+        ] as const
+      ).map(([value, label]) => (
+        <label key={value} className="chip-row" style={{ gap: "0.3rem", cursor: "pointer" }}>
+          <input type="radio" name="mailbox-kind" checked={choice === value} onChange={() => onChange(value)} />
+          {label}
+        </label>
+      ))}
     </div>
   );
 }

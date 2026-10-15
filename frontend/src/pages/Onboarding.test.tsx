@@ -1,13 +1,19 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
 import { renderWithAppProviders } from "../test/render";
 import Onboarding from "./Onboarding";
 
 vi.mock("../api/client", () => ({
   api: { get: vi.fn(), post: vi.fn().mockResolvedValue({}), patch: vi.fn().mockResolvedValue({}) },
-  ApiError: class ApiError extends Error {},
+  ApiError: class ApiError extends Error {
+    status: number;
+    constructor(status: number, message: string) {
+      super(message);
+      this.status = status;
+    }
+  },
 }));
 vi.mock("../auth/AuthContext", () => ({ useAuth: () => ({ user: { role: "org_admin" } }) }));
 const getMock = vi.mocked(api.get);
@@ -26,6 +32,7 @@ function server({
         wizard_completed: false,
       };
     if (url === "/organizations/current") return { name: "Local Org", entra_tenant_id: null, ask_ai_enabled: null };
+    if (url === "/mailbox-connection") throw new ApiError(404, "no mailbox connection configured for your organization yet");
     if (url === "/domains")
       return verified
         ? [{ id: "d1", name: "example.com", parent_domain_id: null, created_at: "2026-10-01T00:00:00Z", verification_status: "verified", hosted_report_address: null }]
@@ -37,13 +44,14 @@ function server({
 beforeEach(() => getMock.mockReset());
 
 describe("Onboarding without Microsoft sign-in", () => {
-  it("says plainly when this server has no report mailbox", async () => {
+  it("asks for the organization's own mailbox when this server has no hosted one", async () => {
     server({ hostedMailboxReady: false });
     renderWithAppProviders(<Onboarding />);
 
     fireEvent.click(await screen.findByRole("button", { name: /Get started/ }));
 
-    expect(await screen.findByText(/This server can't receive DMARC reports yet/)).toBeInTheDocument();
+    expect(await screen.findByText(/Connect the mailbox your DMARC reports arrive at/)).toBeInTheDocument();
+    expect(await screen.findByPlaceholderText("imap.example.com")).toBeInTheDocument();
     expect(screen.queryByText(/generate a dedicated YetAnotherDmarcTool-hosted reporting address/)).not.toBeInTheDocument();
   });
 

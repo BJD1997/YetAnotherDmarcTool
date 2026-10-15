@@ -1,10 +1,10 @@
 from collections.abc import Sequence
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.enums import ConsentStatus, JobType
+from app.models.enums import ConsentStatus, JobType, MailboxKind
 from app.models.hosted_reports_poll_state import HostedReportsPollState
 from app.models.job_run import JobRun
 from app.models.mailbox_connection import MailboxConnection
@@ -29,13 +29,14 @@ async def list_mailbox_job_runs(db: AsyncSession, organization_id: UUID, *, limi
 async def list_orgs_with_granted_mailbox_connections(db: AsyncSession) -> Sequence:
     """(organization_id, entra_tenant_id) for every org with a granted
     mailbox connection — the worker's own job-registration list, cross-org
-    by design (see app/workers/scheduler.py's _enqueue_mailbox_polls)."""
+    by design (see app/workers/scheduler.py's _enqueue_mailbox_polls). An
+    IMAP mailbox needs no tenant; a Microsoft 365 one does."""
     result = await db.execute(
         select(Organization.id, Organization.entra_tenant_id)
         .join(MailboxConnection, MailboxConnection.organization_id == Organization.id)
         .where(
             MailboxConnection.consent_status == ConsentStatus.granted,
-            Organization.entra_tenant_id.is_not(None),
+            or_(MailboxConnection.kind == MailboxKind.imap, Organization.entra_tenant_id.is_not(None)),
         )
     )
     return result.all()

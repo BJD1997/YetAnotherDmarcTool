@@ -676,6 +676,19 @@ select.input {
   flex-wrap: wrap;
 }
 
+/* A labelled input: the label text above, the field below. */
+.field-label {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+  font-size: 0.8rem;
+  color: var(--ink-muted);
+}
+
+.field-label .input {
+  width: 100%;
+}
+
 /* ---------- Stat tiles ---------- */
 
 .stat-row {

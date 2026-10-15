@@ -49,6 +49,16 @@ class SpfAllQualifierMode(str, enum.Enum):
     conditional = "conditional"
 
 
+class MailboxKind(str, enum.Enum):
+    microsoft = "microsoft"
+    imap = "imap"
+
+
+class ImapSecurity(str, enum.Enum):
+    ssl = "ssl"  # TLS from the first byte, usually port 993
+    starttls = "starttls"  # plain connection upgraded to TLS, usually port 143
+
+
 class SyncStatus(str, enum.Enum):
     success = "success"
     error = "error"

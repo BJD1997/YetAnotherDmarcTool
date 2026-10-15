@@ -20,7 +20,7 @@ def fernet_key_problem() -> str | None:
     """Why FERNET_KEY can't be used, or None when it's fine."""
     keys = [key.strip() for key in (settings.fernet_key or "").split(",") if key.strip()]
     if not keys:
-        return "FERNET_KEY is not set. It encrypts two-factor secrets, so sign-in setup can't finish. " + _HOW_TO_FIX
+        return "FERNET_KEY is not set. It encrypts two-factor secrets and mailbox passwords, so sign-in setup and IMAP mailboxes can't work. " + _HOW_TO_FIX
     for key in keys:
         try:
             Fernet(key)

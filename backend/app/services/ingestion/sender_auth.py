@@ -114,6 +114,8 @@ def decide(mode: ReportSenderCheck, sender: SenderAuth, trusted: frozenset[str] 
 def left_out_reason(sender: SenderAuth, trusted: frozenset[str] = frozenset()) -> str:
     """Why a report was left out, in the words the review list shows."""
     who = sender.domain or "an unknown sender"
+    if sender.origin == "unrecognized":
+        return "Not checked by your IMAP mail server (its Authentication-Results ID didn't match the one in Settings)"
     if sender.origin != "external":
         return "Sent from inside your Microsoft 365 organization"
     if sender.matches_reporter is False:
@@ -178,10 +180,34 @@ def claimed_domain(value: str | None) -> str | None:
     return value if "." in value and " " not in value else None
 
 
-def authenticate_report_sender(raw_mime: bytes) -> SenderAuth:
+_AUTHSERV_ID_RE = re.compile(r"\s*([^\s;]+)")
+
+
+def authserv_id(header_value: str) -> str | None:
+    """The authserv-id an Authentication-Results header starts with (RFC 8601
+    section 2.2): who did the checks, for example mx.google.com."""
+    match = _AUTHSERV_ID_RE.match(header_value or "")
+    return match.group(1).lower() if match else None
+
+
+def top_authserv_id(raw_mime: bytes) -> str | None:
+    results = email.message_from_bytes(raw_mime).get_all("Authentication-Results") or []
+    return authserv_id(str(results[0])) if results else None
+
+
+def authenticate_report_sender(raw_mime: bytes, *, imap_authserv_id: str | None = None) -> SenderAuth:
+    """imap_authserv_id: for a message read over IMAP, the ID of the
+    mailbox's own mail server. Only the top Authentication-Results header
+    with that ID is believed: a sender can put fake ones in their message,
+    but the receiving server adds its own on top (RFC 8601 section 5)."""
     msg = email.message_from_bytes(raw_mime)
     results = msg.get_all("Authentication-Results") or []
     first = str(results[0]) if results else ""
+
+    if imap_authserv_id is not None:
+        trusted = bool(imap_authserv_id) and authserv_id(first) == imap_authserv_id.lower()
+        if not trusted:
+            first = ""
 
     header_from = _HEADER_FROM_RE.search(first)
     if header_from:
@@ -190,11 +216,14 @@ def authenticate_report_sender(raw_mime: bytes) -> SenderAuth:
         address = email.utils.parseaddr(msg.get("From", ""))[1]
         domain = address.rpartition("@")[2].lower() or None
 
-    # Required, not just "not internal": its absence means the email didn't
-    # arrive through Exchange Online's inbound path at all. (A future
-    # non-Exchange connector, e.g. IMAP, needs its own trust source here.)
-    auth_as = (msg.get("X-MS-Exchange-Organization-AuthAs") or "").strip().lower()
-    origin = "external" if auth_as == "anonymous" else "internal"
+    if imap_authserv_id is not None:
+        # IMAP: the mailbox's own server vouched for the result, or nobody did.
+        origin = "external" if first else "unrecognized"
+    else:
+        # Required, not just "not internal": its absence means the email
+        # didn't arrive through Exchange Online's inbound path at all.
+        auth_as = (msg.get("X-MS-Exchange-Organization-AuthAs") or "").strip().lower()
+        origin = "external" if auth_as == "anonymous" else "internal"
 
     dmarc = _DMARC_RE.search(first)
     return SenderAuth(origin=origin, dmarc=dmarc.group(1).lower() if dmarc else "missing", domain=domain)

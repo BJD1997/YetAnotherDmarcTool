@@ -54,25 +54,15 @@ export default function GeneralTab() {
 
   return (
     <section>
-      {/* Local-auth orgs (no entra_tenant_id) have no Entra tenant to grant
-          Mail Access consent from, so this section is never functional for
-          them — "grant access" has no links to show, and the mailbox-address
-          form is a dead end. They get a hosted address per domain instead
-          (see the "Hosted reporting mailbox" section below), which already
-          explains their situation — no need to also show this. */}
-      {org.entra_tenant_id && (
-        <>
-          <h3 className="section-title">Mailbox connection</h3>
-          <p className="section-hint">The shared mailbox this organization's DMARC/TLS-RPT reports arrive at.</p>
-          <MailboxConnectionSection canManage={canManage} />
-        </>
-      )}
+      {/* Every organization connects one mailbox of its own: Microsoft 365
+          (only with Microsoft sign-in) or any IMAP mailbox. */}
+      <h3 className="section-title">Mailbox connection</h3>
+      <p className="section-hint">The shared mailbox this organization's DMARC/TLS-RPT reports arrive at.</p>
+      <MailboxConnectionSection canManage={canManage} />
 
       {canManage && (
         <>
-          {/* Only between sections: without the mailbox section above, a
-              leading divider pushed this tab's content below the others'. */}
-          {org.entra_tenant_id && <hr className="divider" />}
+          <hr className="divider" />
           <h3 className="section-title">SPF "all" recommendation</h3>
           <p className="section-hint">How the SPF check scores a record ending in -all (hardfail) vs ~all (softfail).</p>
           <SpfModeSection org={org} />
@@ -260,16 +250,15 @@ function HostedMailboxSection({ org }: { org: Organization }) {
     (err) => setError(err instanceof ApiError ? err.message : "failed to save"),
   );
 
-  // Local-auth orgs have no Entra tenant to grant Mail Access consent from
-  // — a hosted mailbox is their only way to receive reports at all, so
-  // there's nothing to toggle for them (see _hosted_mailbox_available in
-  // app/routers/domains.py).
+  // Organizations without Microsoft sign-in can always use the hosted
+  // mailbox, so there's nothing to toggle for them (see
+  // _hosted_mailbox_available in app/routers/domains.py).
   if (!org.entra_tenant_id) {
     return (
       <div className="card" style={{ padding: "1rem" }}>
         <p className="section-hint" style={{ margin: 0 }}>
-          Always available — your organization signs in without Microsoft Entra, so a YetAnotherDmarcTool-hosted mailbox is your only
-          reporting option.
+          Always available on servers that offer one: each domain can get a YetAnotherDmarcTool-hosted reporting address,
+          as well as or instead of your own mailbox above.
         </p>
       </div>
     );
