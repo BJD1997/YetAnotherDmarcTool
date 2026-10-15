@@ -3,11 +3,8 @@ import type { MailboxConnectionStatus } from "../../api/dmarc";
 import { useOnboardingStatus } from "../../hooks/useOnboarding";
 import { useCurrentOrganization } from "../../hooks/useOrganization";
 
+// Least to most strict, the way towards enforcement.
 const POLICY_RUNGS = ["none", "quarantine", "reject"];
-// Strictest first for the distribution pills — matches how you'd scan "how
-// enforced are we" at a glance, distinct from the ladder below which reads
-// least-to-most-strict to visualize progress toward enforcement.
-const POLICY_RUNGS_DESC = ["reject", "quarantine", "none"];
 
 export function PolicyLadder({
   currentPolicy,
@@ -19,11 +16,13 @@ export function PolicyLadder({
   if (distribution) {
     const total = Object.values(distribution).reduce((a, b) => a + b, 0);
     if (total === 0) return <span className="muted">No policy data yet</span>;
+    // Same order and notation as one domain's ladder below, so switching
+    // between "All domains" and one domain doesn't reshape the band.
     return (
       <div className="chip-row">
-        {POLICY_RUNGS_DESC.map((rung) => (
+        {POLICY_RUNGS.map((rung) => (
           <span key={rung} className="badge badge--neutral" style={!distribution[rung] ? { opacity: 0.5 } : undefined}>
-            {rung}: {distribution[rung] ?? 0}
+            p={rung} · {distribution[rung] ?? 0}
           </span>
         ))}
       </div>
