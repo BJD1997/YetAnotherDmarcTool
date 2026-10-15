@@ -1,13 +1,15 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user, require_org_admin
 from app.models.organization import Organization
+from app.models.trusted_reporter import TrustedReporter
 from app.models.user import User
-from app.repositories.dmarc_reports import apply_report_sender_check
+from app.repositories.dmarc_reports import apply_report_sender_check, trust_reporter, untrust_reporter
 from app.repositories.organizations import get_organization
-from app.schemas.organizations import OrganizationUpdateRequest
+from app.schemas.organizations import OrganizationUpdateRequest, TrustedReporterRequest
 from app.services.auth.entra_links import entra_consent_urls
 
 router = APIRouter(prefix="/organizations", tags=["organizations"])
@@ -63,3 +65,43 @@ async def update_current_organization(
     await db.commit()
     await db.refresh(org)
     return _org_out(org)
+
+
+async def _trusted_reporters_out(db: AsyncSession, organization_id) -> list[dict]:
+    rows = await db.execute(
+        select(TrustedReporter).where(TrustedReporter.organization_id == organization_id).order_by(TrustedReporter.domain)
+    )
+    return [{"domain": r.domain, "created_at": r.created_at.isoformat()} for r in rows.scalars()]
+
+
+@router.get("/current/trusted-reporters")
+async def list_trusted_reporters(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)) -> list[dict]:
+    """Report senders the organization has chosen to believe, on top of the
+    built-in known reporters (sender_auth.KNOWN_REPORTERS)."""
+    return await _trusted_reporters_out(db, user.organization_id)
+
+
+@router.post("/current/trusted-reporters")
+async def add_trusted_reporter(
+    body: TrustedReporterRequest, db: AsyncSession = Depends(get_db), user: User = Depends(require_org_admin)
+) -> list[dict]:
+    org = await get_organization(db, user.organization_id)
+    await trust_reporter(db, org.id, body.domain, user.id)
+    # Counts its reports already received too, not just new ones.
+    await apply_report_sender_check(db, org.id, org.report_sender_check)
+    out = await _trusted_reporters_out(db, org.id)
+    await db.commit()
+    return out
+
+
+@router.delete("/current/trusted-reporters/{domain}")
+async def remove_trusted_reporter(
+    domain: str, db: AsyncSession = Depends(get_db), user: User = Depends(require_org_admin)
+) -> list[dict]:
+    org = await get_organization(db, user.organization_id)
+    if not await untrust_reporter(db, org.id, domain.strip().lower().rstrip(".")):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "not a trusted reporter")
+    await apply_report_sender_check(db, org.id, org.report_sender_check)
+    out = await _trusted_reporters_out(db, org.id)
+    await db.commit()
+    return out

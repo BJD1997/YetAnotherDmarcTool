@@ -16,6 +16,7 @@ from app.models.enums import AuthResult, Disposition, ReportSenderCheck, SenderR
 from app.models.sender_review import SenderReview
 from app.models.source_ip_identity import SourceIpIdentity
 from app.models.tls_rpt import TlsRptReport
+from app.models.trusted_reporter import TrustedReporter
 from app.services.ingestion.sender_auth import decide_sql
 from app.services.pagination import keyset_paginate
 
@@ -1042,6 +1043,28 @@ async def apply_report_sender_check(db: AsyncSession, organization_id: UUID, mod
             .scalar_subquery()
         )
     )
+
+
+async def trusted_reporter_domains(db: AsyncSession, organization_id: UUID) -> frozenset[str]:
+    rows = await db.execute(select(TrustedReporter.domain).where(TrustedReporter.organization_id == organization_id))
+    return frozenset(rows.scalars())
+
+
+async def trust_reporter(db: AsyncSession, organization_id: UUID, domain: str, user_id: UUID | None) -> None:
+    """Idempotent. Callers re-evaluate stored reports afterwards
+    (apply_report_sender_check)."""
+    await db.execute(
+        pg_insert(TrustedReporter)
+        .values(id=uuid4(), organization_id=organization_id, domain=domain, trusted_by=user_id)
+        .on_conflict_do_nothing(constraint="uq_trusted_reporters_org_domain")
+    )
+
+
+async def untrust_reporter(db: AsyncSession, organization_id: UUID, domain: str) -> bool:
+    result = await db.execute(
+        delete(TrustedReporter).where(TrustedReporter.organization_id == organization_id, TrustedReporter.domain == domain)
+    )
+    return result.rowcount > 0
 
 
 async def delete_unverified_aggregate_duplicate(db: AsyncSession, report: DmarcAggregateReport) -> None:

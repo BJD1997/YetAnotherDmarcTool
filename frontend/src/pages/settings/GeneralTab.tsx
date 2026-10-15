@@ -7,6 +7,7 @@ import { useAuth } from "../../auth/AuthContext";
 import { ASK_AI_EXPLANATION, AskAiToggle } from "../../components/settings/AskAiToggle";
 import MailboxConnectionSection from "../../components/settings/MailboxConnectionSection";
 import { useUpdateOrganization } from "../../hooks/useOrganization";
+import { useRemoveTrustedReporter, useTrustedReporters } from "../../hooks/useTrustedReporters";
 
 const SPF_MODES: { key: SpfAllQualifierMode; label: string; description: string }[] = [
   {
@@ -28,15 +29,16 @@ const SENDER_CHECKS: { key: ReportSenderCheck; label: string; description: strin
     key: "standard",
     label: "Standard (recommended)",
     description:
-      "Leaves out reports that failed DMARC, came from someone other than the reporter they name, or were sent from inside " +
-      "your Microsoft 365 organization. Genuine reports only drop out if they fail DMARC, which is rare.",
+      "Counts reports from known mail providers (Google, Microsoft, Yahoo, Mail.ru) and reporters you trust. Leaves out " +
+      "reports that failed DMARC, came from someone other than the reporter they name, or were sent from inside your " +
+      "Microsoft 365 organization.",
   },
   {
     key: "strict",
     label: "Strict",
     description:
-      "Counts only reports whose sender passed DMARC. Best protection against fake reports, but also drops genuine " +
-      "reports from senders that have no DMARC record.",
+      "Like Standard, but the sender must also have passed DMARC. Drops genuine reports from senders that have no " +
+      "DMARC record.",
   },
   {
     key: "off",
@@ -96,6 +98,7 @@ export default function GeneralTab() {
             applies to reports you've already received.
           </p>
           <SenderCheckSection org={org} />
+          <TrustedReportersSection />
 
           <hr className="divider" />
           <h3 className="section-title">Hosted reporting mailbox</h3>
@@ -176,6 +179,44 @@ function SenderCheckSection({ org }: { org: Organization }) {
         </label>
       ))}
       {error && <div className="alert alert--critical" style={{ margin: 0 }}>{error}</div>}
+    </div>
+  );
+}
+
+function TrustedReportersSection() {
+  const [error, setError] = useState<string | null>(null);
+  const { data } = useTrustedReporters();
+  const remove = useRemoveTrustedReporter((err) => setError(err instanceof ApiError ? err.message : "failed to remove"));
+  if (!data) return null;
+
+  return (
+    <div style={{ marginTop: "0.8rem" }}>
+      <strong style={{ fontWeight: 600 }}>Reporters you trust</strong>
+      <p className="section-hint" style={{ margin: "0.2rem 0 0.5rem" }}>
+        Reports can claim anything, so only reports from known mail providers count by default. Trust another reporter
+        from a domain's left-out reports list.
+      </p>
+      {data.length === 0 ? (
+        <p className="section-hint" style={{ margin: 0 }}>None yet.</p>
+      ) : (
+        <div className="chip-row">
+          {data.map((r) => (
+            <span key={r.domain} className="badge">
+              {r.domain}
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                aria-label={`Stop trusting ${r.domain}`}
+                disabled={remove.isPending}
+                onClick={() => remove.mutate(r.domain)}
+              >
+                Remove
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      {error && <div className="alert alert--critical" style={{ marginTop: "0.5rem" }}>{error}</div>}
     </div>
   );
 }

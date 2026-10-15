@@ -9,6 +9,7 @@ export const queryKeys = {
   },
   organization: {
     current: ["organization", "current"] as const,
+    trustedReporters: ["organization", "trusted-reporters"] as const,
   },
   mailboxConnection: {
     current: ["mailbox-connection"] as const,

@@ -16,9 +16,18 @@ per report:
   reporter the report names (reporter_matches); None when the report names
   none (forensic reports).
 
+Those prove who sent a report, not that the sender is a mail receiver that
+ever saw the domain's mail: anyone can register a domain, pass DMARC for it
+and name it as the reporter. So a report also only counts when its sending
+domain is a known reporter — KNOWN_REPORTERS, or one the organization trusts
+(TrustedReporter). Both match the exact sending domain, never its
+organizational domain: yahoo.com or mail.ru are also free-mailbox domains
+anyone can pass DMARC for, their report systems' dmarc.yahoo.com or
+corp.mail.ru aren't.
+
 decide() turns those into counted / left out under the organization's
 report_sender_check setting; decide_sql() is the same rule for re-evaluating
-stored reports when the setting changes.
+stored reports when the setting or the trusted reporters change.
 """
 
 import email
@@ -27,9 +36,10 @@ import re
 from dataclasses import dataclass, replace
 
 from parsedmarc.utils import get_base_domain
-from sqlalchemy import and_, case, false, null, true
+from sqlalchemy import and_, case, exists, false, null, or_, select, true
 
 from app.models.enums import ReportSenderCheck
+from app.models.trusted_reporter import TrustedReporter
 
 # bestguesspass: Microsoft's verdict when the sender publishes no DMARC
 # record but SPF/DKIM would have passed with alignment.
@@ -37,6 +47,25 @@ _PASSING = {"pass", "bestguesspass"}
 _DMARC_RE = re.compile(r"\bdmarc=([a-z]+)", re.IGNORECASE)
 _HEADER_FROM_RE = re.compile(r"\bheader\.from=([^\s;]+)", re.IGNORECASE)
 
+
+# Sending domains of the large reporters' report systems, counted without
+# the organization having to trust them first. Only domains nobody outside
+# the provider can send from (no consumer mailboxes); the migration that
+# introduced this (0040_trusted_reporters) froze a copy of this set.
+KNOWN_REPORTERS = frozenset({"google.com", "microsoft.com", "dmarc.yahoo.com", "corp.mail.ru"})
+
+# Domains anyone can get a mailbox on and pass DMARC for: trusting one would
+# let anybody add reports again, so they can never be trusted. Exact domains
+# only: a provider's report system on a subdomain (dmarc.zoho.com) can be.
+FREE_MAILBOX_DOMAINS = frozenset({
+    "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com", "msn.com", "yahoo.com",
+    "ymail.com", "aol.com", "icloud.com", "me.com", "mac.com", "gmx.com", "gmx.net", "gmx.de", "web.de",
+    "mail.com", "mail.ru", "yandex.ru", "yandex.com", "proton.me", "protonmail.com", "zoho.com", "hey.com",
+})
+
+
+def can_be_trusted(domain: str) -> bool:
+    return domain.strip().lower().rstrip(".") not in FREE_MAILBOX_DOMAINS
 
 # Large reporters that legitimately send from a different organizational
 # domain than the one in their report's contact address:
@@ -64,19 +93,25 @@ class SenderAuth:
 UNCHECKED = SenderAuth(origin=None, dmarc=None, domain=None)
 
 
-def decide(mode: ReportSenderCheck, sender: SenderAuth) -> bool | None:
-    """Counted (True), left out (False), or not checked (None)."""
+def is_known_reporter(sender: SenderAuth, trusted: frozenset[str] = frozenset()) -> bool:
+    return sender.domain is not None and (sender.domain in KNOWN_REPORTERS or sender.domain in trusted)
+
+
+def decide(mode: ReportSenderCheck, sender: SenderAuth, trusted: frozenset[str] = frozenset()) -> bool | None:
+    """Counted (True), left out (False), or not checked (None). trusted: the
+    organization's TrustedReporter domains."""
     if sender.origin is None:
         return None
     if mode == ReportSenderCheck.off:
         return True
     external = sender.origin == "external"
+    known = is_known_reporter(sender, trusted)
     if mode == ReportSenderCheck.strict:
-        return external and sender.dmarc in _PASSING and sender.matches_reporter is not False
-    return external and sender.dmarc != "fail" and sender.matches_reporter is not False
+        return external and sender.dmarc in _PASSING and sender.matches_reporter is not False and known
+    return external and sender.dmarc != "fail" and sender.matches_reporter is not False and known
 
 
-def left_out_reason(sender: SenderAuth) -> str:
+def left_out_reason(sender: SenderAuth, trusted: frozenset[str] = frozenset()) -> str:
     """Why a report was left out, in the words the review list shows."""
     who = sender.domain or "an unknown sender"
     if sender.origin != "external":
@@ -85,20 +120,32 @@ def left_out_reason(sender: SenderAuth) -> str:
         return f"Sent by {who}, not by the reporter it names"
     if sender.dmarc == "fail":
         return f"Failed DMARC for {who}"
+    if not is_known_reporter(sender, trusted):
+        return f"Sent by {who}, a reporter you haven't trusted yet"
     return f"Didn't pass DMARC for {who} (result: {sender.dmarc})"
 
 
 def decide_sql(mode: ReportSenderCheck, model):
-    """decide() as a SQL expression over a report table's sender_* columns."""
+    """decide() as a SQL expression over a report table's sender_* columns,
+    with the organization's trusted reporters looked up per row."""
     if mode == ReportSenderCheck.off:
         counted = true()
     else:
         external = model.sender_origin == "external"
         matches = model.sender_matches_reporter.is_not(False)
+        known = or_(
+            model.sender_domain.in_(sorted(KNOWN_REPORTERS)),
+            exists(
+                select(TrustedReporter.id).where(
+                    TrustedReporter.organization_id == model.organization_id,
+                    TrustedReporter.domain == model.sender_domain,
+                )
+            ),
+        )
         if mode == ReportSenderCheck.strict:
-            counted = and_(external, model.sender_dmarc.in_(sorted(_PASSING)), matches)
+            counted = and_(external, model.sender_dmarc.in_(sorted(_PASSING)), matches, known)
         else:
-            counted = and_(external, model.sender_dmarc.is_distinct_from("fail"), matches)
+            counted = and_(external, model.sender_dmarc.is_distinct_from("fail"), matches, known)
     return case((model.sender_origin.is_(None), null()), (counted, true()), else_=false())
 
 

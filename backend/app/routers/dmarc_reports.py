@@ -17,11 +17,12 @@ from app.models.user import User
 from app.repositories import dmarc_reports as dmarc_reports_repo
 from app.repositories.domains import get_owned_domain, list_domains_for_org
 from app.repositories.mailbox_connections import get_org_mailbox_connection
+from app.repositories.organizations import get_organization
 from app.repositories.trends import get_trend
 from app.schemas.dmarc_reports import SenderReviewUpdateRequest
 from app.services.action_queue.rules import reviewed_service_labels, unreviewed_high_volume_senders
 from app.services.dmarc_analytics import service_breakdown, service_breakdown_multi
-from app.services.ingestion.sender_auth import SenderAuth, left_out_reason
+from app.services.ingestion.sender_auth import SenderAuth, can_be_trusted, decide, left_out_reason
 from app.services.dmarc_narrative import dkim_narratives, spf_narratives
 from app.services.dns_checks.dmarc_record import DmarcRecordInfo, check_rua_destination, fetch_current_dmarc_record
 from app.services.dns_checks.resolver import DnsLookupError
@@ -91,11 +92,19 @@ async def left_out_reports(
     """Reports the organization's sender check leaves out of every view, with
     why — so they can be reviewed instead of silently disappearing."""
     await get_owned_domain(db, domain_id, user.organization_id)
+    mode = (await get_organization(db, user.organization_id)).report_sender_check
+    trusted = await dmarc_reports_repo.trusted_reporter_domains(db, user.organization_id)
     out = []
     for report in await dmarc_reports_repo.list_left_out_reports(db, domain_id):
         sender = SenderAuth(
             origin=report.sender_origin, dmarc=report.sender_dmarc, domain=report.sender_domain,
             matches_reporter=report.sender_matches_reporter,
+        )
+        # Whether trusting its sender is all it would take to count it.
+        trustable = (
+            report.sender_domain is not None
+            and can_be_trusted(report.sender_domain)
+            and decide(mode, sender, trusted | {report.sender_domain}) is True
         )
         if isinstance(report, DmarcAggregateReport):
             kind, reporter, received, period = "DMARC", report.org_name, report.received_at, report.date_range_begin
@@ -110,7 +119,8 @@ async def left_out_reports(
             "period_start": period.isoformat(),
             "received_at": received.isoformat(),
             "sender_domain": report.sender_domain,
-            "reason": left_out_reason(sender),
+            "reason": left_out_reason(sender, trusted),
+            "trustable": trustable,
         })
     out.sort(key=lambda r: r["received_at"], reverse=True)
     return out
