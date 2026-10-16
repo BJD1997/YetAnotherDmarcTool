@@ -12,8 +12,9 @@ vi.mock("../api/client", () => ({
 vi.mock("../auth/AuthContext", () => ({
   useAuth: () => ({ user: { id: "me", role: "org_admin", auth_method: "local" } }),
 }));
+const currentOrg = vi.hoisted(() => ({ value: { entra_tenant_id: null, sign_in_provider: "none" } as Record<string, unknown> }));
 vi.mock("../hooks/useOrganization", () => ({
-  useCurrentOrganization: () => ({ data: { entra_tenant_id: null } }),
+  useCurrentOrganization: () => ({ data: currentOrg.value }),
 }));
 
 function member(id: string, overrides: Record<string, unknown> = {}) {
@@ -45,5 +46,20 @@ describe("Team credential resets", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Reset password" })[0]);
     await waitFor(() => expect(api.post).toHaveBeenCalledWith("/users/alice/reset-password"));
     expect(await screen.findByText("https://dmarc.example/set-password?token=abc")).toBeInTheDocument();
+  });
+});
+
+describe("Team invites", () => {
+  it("shares the organization's own sign-in link next to adding local teammates", async () => {
+    currentOrg.value = { entra_tenant_id: null, sign_in_provider: "google" };
+    vi.mocked(api.get).mockImplementation(async (url: string) =>
+      url === "/users" ? [] : { login_link: "https://dmarc.example/login/acme", provider: "google" },
+    );
+    renderWithAppProviders(<Team />);
+
+    expect(await screen.findByText("https://dmarc.example/login/acme")).toBeInTheDocument();
+    expect(screen.getByText(/Google Workspace account/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Generate setup link/ })).toBeInTheDocument();
+    currentOrg.value = { entra_tenant_id: null, sign_in_provider: "none" };
   });
 });

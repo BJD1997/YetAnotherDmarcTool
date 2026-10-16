@@ -24,6 +24,7 @@ import GeneralTab from "./pages/settings/GeneralTab";
 import AccountTab from "./pages/settings/AccountTab";
 import DomainsTab from "./pages/settings/DomainsTab";
 import SignInActivityTab from "./pages/settings/SignInActivityTab";
+import SignInTab from "./pages/settings/SignInTab";
 import Shell from "./components/Shell";
 import AdminShell from "./components/AdminShell";
 import RequireAuth from "./components/RequireAuth";
@@ -147,6 +148,7 @@ export default function App() {
         <Route index element={<GeneralTab />} />
         <Route path="account" element={<AccountTab />} />
         <Route path="domains" element={<DomainsTab />} />
+        <Route path="sign-in" element={<SignInTab />} />
         <Route path="sign-in-activity" element={<SignInActivityTab />} />
       </Route>
     </Routes>

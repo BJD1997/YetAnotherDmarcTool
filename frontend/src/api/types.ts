@@ -23,6 +23,7 @@ export interface Organization {
   name: string;
   status: "active" | "suspended";
   entra_tenant_id: string | null;
+  sign_in_provider: "none" | "microsoft" | "google" | "oidc";
   is_operator: boolean;
   spf_all_qualifier_mode: SpfAllQualifierMode;
   hosted_mailbox_opt_in: boolean;

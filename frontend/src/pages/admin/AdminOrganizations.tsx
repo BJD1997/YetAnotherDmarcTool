@@ -8,7 +8,7 @@ import { Stat } from "../../components/domain/shared";
 import {
   useAdminOrganizations, useAdminOrgUsers, useAdminResetUser, useChangeAdminPassword, useCreateAdminOrganization,
   useCreateAdminUser, useDeleteAdminOrganization, useSetAdminMailboxConsent, useUpdateAdminOrganization,
-  type AdminOrganization, type AdminOrganizationsPage, type AdminOrgUser,
+  type AdminOrganization, type AdminOrganizationUpdate, type AdminOrganizationsPage, type AdminOrgUser,
 } from "../../hooks/useAdmin";
 import { useClipboardFeedback } from "../../hooks/useClipboardFeedback";
 
@@ -202,8 +202,6 @@ function OrgRow({ org, expanded, onToggle }: { org: AdminOrganization; expanded:
 }
 
 function OrgDetail({ org }: { org: AdminOrganization }) {
-  const [tenantId, setTenantId] = useState(org.entra_tenant_id ?? "");
-
   const updateOrg = useUpdateAdminOrganization(org.id);
   const setMailboxConsent = useSetAdminMailboxConsent(org.id);
 
@@ -231,18 +229,8 @@ function OrgDetail({ org }: { org: AdminOrganization }) {
       </div>
 
       <div style={{ display: "flex", gap: "3rem", marginTop: "1rem", flexWrap: "wrap" }}>
-        {org.entra_tenant_id && <ExpectedAdminField org={org} />}
-        <div>
-          <div className="muted" style={{ fontSize: "0.78rem" }}>
-            Entra tenant ID
-          </div>
-          <div className="field-row" style={{ marginTop: "0.3rem" }}>
-            <input className="input" value={tenantId} onChange={(e) => setTenantId(e.target.value)} placeholder="tenant GUID" style={{ width: "260px" }} />
-            <button className="btn btn--secondary btn--sm" onClick={() => updateOrg.mutate({ entra_tenant_id: tenantId || null })}>
-              Save
-            </button>
-          </div>
-        </div>
+        <SignInProviderField org={org} />
+        {org.sign_in_provider !== "none" && <ExpectedAdminField org={org} />}
 
         <div style={{ flex: 1, minWidth: 260 }}>
           <div className="muted" style={{ fontSize: "0.78rem" }}>
@@ -300,7 +288,7 @@ function OrgDetail({ org }: { org: AdminOrganization }) {
 
       {/* Any org without a Microsoft tenant signs in locally — platform admin
           orgs included, whose local admins reach this console through it. */}
-      {!org.entra_tenant_id && <CreateLocalUser orgId={org.id} />}
+      <CreateLocalUser orgId={org.id} />
 
       <OrgUsersSection orgId={org.id} />
 
@@ -313,6 +301,92 @@ function OrgDetail({ org }: { org: AdminOrganization }) {
 
 // Who becomes org admin on their first sign-in with Microsoft (later also
 // Google or another provider). Members are promoted with "Make org admin".
+const PROVIDERS: { value: AdminOrganization["sign_in_provider"]; label: string }[] = [
+  { value: "none", label: "None (local accounts)" },
+  { value: "microsoft", label: "Microsoft" },
+  { value: "google", label: "Google Workspace" },
+  { value: "oidc", label: "Other OIDC" },
+];
+
+// One sign-in provider per organization, next to local accounts (which
+// always work). Saving sends the chosen provider's fields and clears the
+// others, since an organization can't have two.
+function SignInProviderField({ org }: { org: AdminOrganization }) {
+  const [provider, setProvider] = useState(org.sign_in_provider);
+  const [tenantId, setTenantId] = useState(org.entra_tenant_id ?? "");
+  const [workspace, setWorkspace] = useState(org.google_workspace_domain ?? "");
+  const [issuer, setIssuer] = useState(org.oidc_issuer ?? "");
+  const [clientId, setClientId] = useState(org.oidc_client_id ?? "");
+  const [secret, setSecret] = useState("");
+  const [slug, setSlug] = useState(org.slug);
+  const [error, setError] = useState<string | null>(null);
+  const updateOrg = useUpdateAdminOrganization(org.id);
+
+  function save() {
+    setError(null);
+    const body: AdminOrganizationUpdate = {
+      entra_tenant_id: provider === "microsoft" ? tenantId.trim() || null : null,
+      google_workspace_domain: provider === "google" ? workspace.trim() || null : null,
+      oidc_issuer: provider === "oidc" ? issuer.trim() || null : null,
+      ...(provider === "oidc" ? { oidc_client_id: clientId.trim() || null, ...(secret ? { oidc_client_secret: secret } : {}) } : {}),
+      ...(slug.trim() !== org.slug ? { slug: slug.trim() } : {}),
+    };
+    updateOrg.mutate(body, {
+      onSuccess: () => setSecret(""),
+      onError: (err) => setError(err instanceof ApiError ? err.message : "couldn't save"),
+    });
+  }
+
+  const small = { width: "260px" };
+  return (
+    <div>
+      <div className="muted" style={{ fontSize: "0.78rem" }}>
+        Sign-in provider
+      </div>
+      <div style={{ display: "grid", gap: "0.4rem", marginTop: "0.3rem" }}>
+        <select className="input" value={provider} onChange={(e) => setProvider(e.target.value as AdminOrganization["sign_in_provider"])} style={small} aria-label="Sign-in provider">
+          {PROVIDERS.map((p) => (
+            <option key={p.value} value={p.value}>
+              {p.label}
+            </option>
+          ))}
+        </select>
+        {provider === "microsoft" && (
+          <input className="input" value={tenantId} onChange={(e) => setTenantId(e.target.value)} placeholder="tenant GUID" style={small} />
+        )}
+        {provider === "google" && (
+          <input className="input" value={workspace} onChange={(e) => setWorkspace(e.target.value)} placeholder="Workspace domain, e.g. client.com" style={small} />
+        )}
+        {provider === "oidc" && (
+          <>
+            <input className="input" value={issuer} onChange={(e) => setIssuer(e.target.value)} placeholder="issuer URL" style={small} />
+            <input className="input" value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="client ID" style={small} />
+            <input
+              className="input"
+              type="password"
+              value={secret}
+              onChange={(e) => setSecret(e.target.value)}
+              placeholder={org.oidc_secret_set ? "client secret (unchanged)" : "client secret"}
+              autoComplete="new-password"
+              style={small}
+            />
+          </>
+        )}
+        <label className="muted" style={{ fontSize: "0.78rem" }}>
+          Sign-in link: /login/
+          <input className="input" value={slug} onChange={(e) => setSlug(e.target.value)} aria-label="Sign-in link name" style={{ width: "150px", marginLeft: "0.2rem" }} />
+        </label>
+        {error && <div className="alert alert--critical" style={{ margin: 0 }}>{error}</div>}
+        <div>
+          <button className="btn btn--secondary btn--sm" onClick={save} disabled={updateOrg.isPending}>
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ExpectedAdminField({ org }: { org: AdminOrganization }) {
   const [email, setEmail] = useState(org.expected_admin_email ?? "");
   const updateOrg = useUpdateAdminOrganization(org.id);

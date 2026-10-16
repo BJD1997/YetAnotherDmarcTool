@@ -8,6 +8,13 @@ export interface AdminOrganization {
   id: string;
   name: string;
   entra_tenant_id: string | null;
+  sign_in_provider: "none" | "microsoft" | "google" | "oidc";
+  // The direct sign-in link name, /login/<slug>.
+  slug: string;
+  google_workspace_domain: string | null;
+  oidc_issuer: string | null;
+  oidc_client_id: string | null;
+  oidc_secret_set: boolean;
   status: "active" | "suspended";
   is_operator: boolean;
   // Becomes org admin on first sign-in; everyone else becomes a member.
@@ -160,10 +167,17 @@ export function useCreateAdminOrganization(onSuccess?: () => void, onError?: (er
   });
 }
 
+export type AdminOrganizationUpdate = Partial<
+  Pick<
+    AdminOrganization,
+    "entra_tenant_id" | "status" | "is_operator" | "expected_admin_email" | "slug" | "google_workspace_domain" | "oidc_issuer" | "oidc_client_id"
+  > & { oidc_client_secret: string | null }
+>;
+
 export function useUpdateAdminOrganization(orgId: string) {
   const invalidate = useInvalidateAdminOrganizations();
   return useMutation({
-    mutationFn: (body: Partial<Pick<AdminOrganization, "entra_tenant_id" | "status" | "is_operator" | "expected_admin_email">>) => api.patch<AdminOrganization>(`/admin/organizations/${orgId}`, body),
+    mutationFn: (body: AdminOrganizationUpdate) => api.patch<AdminOrganization>(`/admin/organizations/${orgId}`, body),
     onSuccess: invalidate,
   });
 }

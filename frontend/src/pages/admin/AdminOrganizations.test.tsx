@@ -24,7 +24,8 @@ afterEach(() => vi.useRealTimers());
 
 function org(name: string, overrides: Partial<Record<string, unknown>> = {}) {
   return {
-    id: name, name, entra_tenant_id: null, status: "active", is_operator: false, created_at: "2026-01-01T00:00:00Z",
+    id: name, name, entra_tenant_id: null, sign_in_provider: "none", slug: name.toLowerCase(),
+    google_workspace_domain: null, oidc_issuer: null, oidc_client_id: null, oidc_secret_set: false, status: "active", is_operator: false, created_at: "2026-01-01T00:00:00Z",
     mailbox_connection: null, entra_consent_urls: null, domain_count: 0, job_error_count_7d: 0, last_report_at: null,
     expected_admin_email: null, has_org_admin: true,
     ...overrides,
@@ -73,6 +74,27 @@ describe("AdminOrganizations", () => {
     await waitFor(() => expect(api.patch).toHaveBeenCalledWith("/admin/organizations/Alpha/mailbox-connection", { consent_status: "revoked" }));
   });
 
+  it("sets Google Workspace as the provider and clears the others", async () => {
+    getMock.mockResolvedValue({
+      organizations: [org("Alpha")],
+      has_more: false,
+      summary: { total: 1, active: 1, suspended: 0, orgs_with_job_errors_7d: 0 },
+    });
+    vi.mocked(api.patch).mockResolvedValueOnce({});
+    renderWithAppProviders(<AdminOrganizations />);
+    fireEvent.click(await screen.findByText("Alpha"));
+
+    fireEvent.change(await screen.findByLabelText("Sign-in provider"), { target: { value: "google" } });
+    fireEvent.change(screen.getByPlaceholderText("Workspace domain, e.g. client.com"), { target: { value: "alpha.example" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "Save" })[0]);
+
+    await waitFor(() =>
+      expect(api.patch).toHaveBeenCalledWith("/admin/organizations/Alpha", {
+        entra_tenant_id: null, google_workspace_domain: "alpha.example", oidc_issuer: null,
+      }),
+    );
+  });
+
   it("expands a row's detail on click", async () => {
     getMock.mockResolvedValueOnce({
       organizations: [org("Alpha")],
@@ -84,7 +106,7 @@ describe("AdminOrganizations", () => {
 
     await waitFor(() => expect(screen.getByText("Alpha")).toBeInTheDocument());
     fireEvent.click(screen.getByText("Alpha"));
-    expect(await screen.findByPlaceholderText("tenant GUID")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Sign-in provider")).toBeInTheDocument();
   });
 
   it("restarts the query with the search term", async () => {
@@ -207,12 +229,12 @@ describe("AdminOrganizations", () => {
     confirmSpy.mockRestore();
   });
 
-  it("offers local-user creation on a local platform admin org too", async () => {
+  it("offers local-user creation in every org, also next to a sign-in provider", async () => {
     getMock.mockImplementation(async (url: string) =>
       url.includes("/users")
         ? []
         : {
-            organizations: [org("QA Agent", { is_operator: true }), org("Microsoft Org", { entra_tenant_id: "t-1" })],
+            organizations: [org("QA Agent", { is_operator: true }), org("Microsoft Org", { entra_tenant_id: "t-1", sign_in_provider: "microsoft" })],
             has_more: false,
             summary: { total: 2, active: 2, suspended: 0, orgs_with_job_errors_7d: 0 },
           },
@@ -224,8 +246,8 @@ describe("AdminOrganizations", () => {
 
     fireEvent.click(screen.getByText("QA Agent"));
     fireEvent.click(screen.getByText("Microsoft Org"));
-    await screen.findByPlaceholderText("tenant GUID");
-    expect(screen.queryByPlaceholderText("admin@client.com")).not.toBeInTheDocument();
+    await screen.findByLabelText("Sign-in provider");
+    expect(screen.getByPlaceholderText("admin@client.com")).toBeInTheDocument();
   });
 });
 
@@ -246,7 +268,7 @@ describe("AdminOrganizations expected admin", () => {
       url.includes("/users")
         ? [{ id: "u1", email: "member@client.com", display_name: null, role: "member", auth_method: "entra", status: "active", mfa_enrolled: false, last_login_at: null }]
         : {
-            organizations: [org("Microsoft Org", { entra_tenant_id: "t-1", has_org_admin: false, expected_admin_email: "it-admin@client.com" })],
+            organizations: [org("Microsoft Org", { entra_tenant_id: "t-1", sign_in_provider: "microsoft", has_org_admin: false, expected_admin_email: "it-admin@client.com" })],
             has_more: false,
             summary: { total: 1, active: 1, suspended: 0, orgs_with_job_errors_7d: 0 },
           },
