@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "12629991080932489678"
+      "templateHash": "12739538368284933807"
     }
   },
   "parameters": {
@@ -100,6 +100,21 @@
     "entraSsoAuthority": {
       "type": "string",
       "defaultValue": "https://login.microsoftonline.com/organizations"
+    },
+    "googleSsoClientId": {
+      "type": "string",
+      "defaultValue": ""
+    },
+    "googleSsoClientSecret": {
+      "type": "securestring",
+      "defaultValue": ""
+    },
+    "oidcAllowPrivateIssuers": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Allow organizations' own OIDC sign-in providers on private addresses. Only when every organization is trusted."
+      }
     },
     "entraMailClientId": {
       "type": "string",
@@ -262,6 +277,7 @@
     "imageRepos": "ghcr.io/bjd1997/yetanotherdmarctool,ghcr.io/bjd1997/yetanotherdmarctool-resolver,ghcr.io/bjd1997/yetanotherdmarctool-updater",
     "deployBootstrapSecret": "[not(empty(parameters('platformAdminBootstrapPassword')))]",
     "deployEntraSsoSecret": "[and(not(empty(parameters('entraSsoClientId'))), not(empty(parameters('entraSsoClientSecret'))))]",
+    "deployGoogleSsoSecret": "[and(not(empty(parameters('googleSsoClientId'))), not(empty(parameters('googleSsoClientSecret'))))]",
     "deployEntraMailSecret": "[and(not(empty(parameters('entraMailClientId'))), not(empty(parameters('entraMailClientSecret'))))]",
     "deployHostedReports": "[and(not(empty(parameters('hostedReportsTenantId'))), not(empty(parameters('hostedReportsMailboxAddress'))))]",
     "deployCloudflareSecret": "[and(and(variables('deployHostedReports'), not(empty(parameters('cloudflareApiToken')))), not(empty(parameters('cloudflareZoneId'))))]",
@@ -770,7 +786,8 @@
           "cloudflareApiToken": "[if(variables('deployCloudflareSecret'), createObject('value', parameters('cloudflareApiToken')), createObject('value', ''))]",
           "entraSsoClientSecret": {
             "value": "[parameters('entraSsoClientSecret')]"
-          }
+          },
+          "googleSsoClientSecret": "[if(variables('deployGoogleSsoSecret'), createObject('value', parameters('googleSsoClientSecret')), createObject('value', ''))]"
         },
         "template": {
           "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
@@ -779,7 +796,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "12449825506553703544"
+              "templateHash": "15409373356300982220"
             }
           },
           "parameters": {
@@ -838,6 +855,10 @@
               "defaultValue": ""
             },
             "entraSsoClientSecret": {
+              "type": "securestring",
+              "defaultValue": ""
+            },
+            "googleSsoClientSecret": {
               "type": "securestring",
               "defaultValue": ""
             },
@@ -1033,6 +1054,18 @@
               "name": "[format('{0}/{1}', parameters('keyVaultName'), 'entra-sso-client-secret')]",
               "properties": {
                 "value": "[parameters('entraSsoClientSecret')]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]"
+              ]
+            },
+            {
+              "condition": "[not(empty(parameters('googleSsoClientSecret')))]",
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2023-07-01",
+              "name": "[format('{0}/{1}', parameters('keyVaultName'), 'google-sso-client-secret')]",
+              "properties": {
+                "value": "[parameters('googleSsoClientSecret')]"
               },
               "dependsOn": [
                 "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]"
@@ -1346,6 +1379,15 @@
           "deployEntraSsoSecret": {
             "value": "[variables('deployEntraSsoSecret')]"
           },
+          "googleSsoClientId": {
+            "value": "[parameters('googleSsoClientId')]"
+          },
+          "deployGoogleSsoSecret": {
+            "value": "[variables('deployGoogleSsoSecret')]"
+          },
+          "oidcAllowPrivateIssuers": {
+            "value": "[parameters('oidcAllowPrivateIssuers')]"
+          },
           "entraMailClientId": {
             "value": "[parameters('entraMailClientId')]"
           },
@@ -1370,7 +1412,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "11925397527025642092"
+              "templateHash": "15556413331087858723"
             }
           },
           "parameters": {
@@ -1455,6 +1497,18 @@
               "type": "bool",
               "defaultValue": false
             },
+            "googleSsoClientId": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "deployGoogleSsoSecret": {
+              "type": "bool",
+              "defaultValue": false
+            },
+            "oidcAllowPrivateIssuers": {
+              "type": "bool",
+              "defaultValue": false
+            },
             "entraMailClientId": {
               "type": "string",
               "defaultValue": ""
@@ -1522,8 +1576,8 @@
                 "memory": "0.5Gi"
               }
             },
-            "apiSecrets": "[concat(createArray(createObject('name', 'app-database-url', 'keyVaultUrl', format('{0}secrets/app-database-url', parameters('vaultUri')), 'identity', parameters('identityId')), createObject('name', 'fernet-key', 'keyVaultUrl', format('{0}secrets/fernet-key', parameters('vaultUri')), 'identity', parameters('identityId'))), if(parameters('deployEntraSsoSecret'), createArray(createObject('name', 'entra-sso-client-secret', 'keyVaultUrl', format('{0}secrets/entra-sso-client-secret', parameters('vaultUri')), 'identity', parameters('identityId'))), createArray()), if(parameters('deployCloudflareSecret'), createArray(createObject('name', 'cloudflare-api-token', 'keyVaultUrl', format('{0}secrets/cloudflare-api-token', parameters('vaultUri')), 'identity', parameters('identityId'))), createArray()))]",
-            "apiEnv": "[concat(createArray(createObject('name', 'DATABASE_URL', 'secretRef', 'app-database-url'), createObject('name', 'FERNET_KEY', 'secretRef', 'fernet-key'), createObject('name', 'PUBLIC_BASE_URL', 'value', variables('publicBaseUrl')), createObject('name', 'DNS_RESOLVER_HOST', 'value', '127.0.0.1'), createObject('name', 'RATE_LIMIT_BACKEND', 'value', 'postgres'), createObject('name', 'FORWARDED_ALLOW_IPS', 'value', format('100.100.0.0/16,{0}', parameters('acaSubnetPrefix'))), createObject('name', 'DEPLOYMENT_PLATFORM', 'value', 'azure-container-apps'), createObject('name', 'AZURE_RESOURCE_GROUP', 'value', resourceGroup().name), createObject('name', 'AZURE_UPDATER_JOB_ID', 'value', resourceId('Microsoft.App/jobs', format('{0}-updater', parameters('namePrefix')))), createObject('name', 'AZURE_UPDATE_CLIENT_ID', 'value', parameters('triggerClientId')), createObject('name', 'UPDATE_REHEARSAL_ENABLED', 'value', if(parameters('enableTestUpdate'), 'true', 'false'))), if(parameters('deployEntraSsoSecret'), createArray(createObject('name', 'ENTRA_SSO_CLIENT_ID', 'value', parameters('entraSsoClientId')), createObject('name', 'ENTRA_SSO_CLIENT_SECRET', 'secretRef', 'entra-sso-client-secret'), createObject('name', 'ENTRA_SSO_AUTHORITY', 'value', parameters('entraSsoAuthority'))), createArray()), if(parameters('deployEntraMailSecret'), createArray(createObject('name', 'ENTRA_MAIL_CLIENT_ID', 'value', parameters('entraMailClientId'))), createArray()), variables('hostedReportsEnv'), variables('starttlsEnv'), if(parameters('deployCloudflareSecret'), createArray(createObject('name', 'CLOUDFLARE_API_TOKEN', 'secretRef', 'cloudflare-api-token'), createObject('name', 'CLOUDFLARE_ZONE_ID', 'value', parameters('cloudflareZoneId'))), createArray()))]",
+            "apiSecrets": "[concat(createArray(createObject('name', 'app-database-url', 'keyVaultUrl', format('{0}secrets/app-database-url', parameters('vaultUri')), 'identity', parameters('identityId')), createObject('name', 'fernet-key', 'keyVaultUrl', format('{0}secrets/fernet-key', parameters('vaultUri')), 'identity', parameters('identityId'))), if(parameters('deployEntraSsoSecret'), createArray(createObject('name', 'entra-sso-client-secret', 'keyVaultUrl', format('{0}secrets/entra-sso-client-secret', parameters('vaultUri')), 'identity', parameters('identityId'))), createArray()), if(parameters('deployGoogleSsoSecret'), createArray(createObject('name', 'google-sso-client-secret', 'keyVaultUrl', format('{0}secrets/google-sso-client-secret', parameters('vaultUri')), 'identity', parameters('identityId'))), createArray()), if(parameters('deployCloudflareSecret'), createArray(createObject('name', 'cloudflare-api-token', 'keyVaultUrl', format('{0}secrets/cloudflare-api-token', parameters('vaultUri')), 'identity', parameters('identityId'))), createArray()))]",
+            "apiEnv": "[concat(createArray(createObject('name', 'DATABASE_URL', 'secretRef', 'app-database-url'), createObject('name', 'FERNET_KEY', 'secretRef', 'fernet-key'), createObject('name', 'PUBLIC_BASE_URL', 'value', variables('publicBaseUrl')), createObject('name', 'DNS_RESOLVER_HOST', 'value', '127.0.0.1'), createObject('name', 'RATE_LIMIT_BACKEND', 'value', 'postgres'), createObject('name', 'FORWARDED_ALLOW_IPS', 'value', format('100.100.0.0/16,{0}', parameters('acaSubnetPrefix'))), createObject('name', 'DEPLOYMENT_PLATFORM', 'value', 'azure-container-apps'), createObject('name', 'AZURE_RESOURCE_GROUP', 'value', resourceGroup().name), createObject('name', 'AZURE_UPDATER_JOB_ID', 'value', resourceId('Microsoft.App/jobs', format('{0}-updater', parameters('namePrefix')))), createObject('name', 'AZURE_UPDATE_CLIENT_ID', 'value', parameters('triggerClientId')), createObject('name', 'UPDATE_REHEARSAL_ENABLED', 'value', if(parameters('enableTestUpdate'), 'true', 'false'))), if(parameters('deployEntraSsoSecret'), createArray(createObject('name', 'ENTRA_SSO_CLIENT_ID', 'value', parameters('entraSsoClientId')), createObject('name', 'ENTRA_SSO_CLIENT_SECRET', 'secretRef', 'entra-sso-client-secret'), createObject('name', 'ENTRA_SSO_AUTHORITY', 'value', parameters('entraSsoAuthority'))), createArray()), if(parameters('deployGoogleSsoSecret'), createArray(createObject('name', 'GOOGLE_SSO_CLIENT_ID', 'value', parameters('googleSsoClientId')), createObject('name', 'GOOGLE_SSO_CLIENT_SECRET', 'secretRef', 'google-sso-client-secret')), createArray()), createArray(createObject('name', 'OIDC_ALLOW_PRIVATE_ISSUERS', 'value', if(parameters('oidcAllowPrivateIssuers'), 'true', 'false'))), if(parameters('deployEntraMailSecret'), createArray(createObject('name', 'ENTRA_MAIL_CLIENT_ID', 'value', parameters('entraMailClientId'))), createArray()), variables('hostedReportsEnv'), variables('starttlsEnv'), if(parameters('deployCloudflareSecret'), createArray(createObject('name', 'CLOUDFLARE_API_TOKEN', 'secretRef', 'cloudflare-api-token'), createObject('name', 'CLOUDFLARE_ZONE_ID', 'value', parameters('cloudflareZoneId'))), createArray()))]",
             "workerSecrets": "[concat(createArray(createObject('name', 'app-database-url', 'keyVaultUrl', format('{0}secrets/app-database-url', parameters('vaultUri')), 'identity', parameters('identityId')), createObject('name', 'fernet-key', 'keyVaultUrl', format('{0}secrets/fernet-key', parameters('vaultUri')), 'identity', parameters('identityId')), createObject('name', 'keda-pg-connection', 'keyVaultUrl', format('{0}secrets/keda-pg-connection', parameters('vaultUri')), 'identity', parameters('identityId'))), if(parameters('deployEntraMailSecret'), createArray(createObject('name', 'entra-mail-client-secret', 'keyVaultUrl', format('{0}secrets/entra-mail-client-secret', parameters('vaultUri')), 'identity', parameters('identityId'))), createArray()))]",
             "workerEnv": "[concat(createArray(createObject('name', 'DATABASE_URL', 'secretRef', 'app-database-url'), createObject('name', 'FERNET_KEY', 'secretRef', 'fernet-key'), createObject('name', 'DNS_RESOLVER_HOST', 'value', '127.0.0.1'), createObject('name', 'RATE_LIMIT_BACKEND', 'value', 'postgres')), if(parameters('deployEntraMailSecret'), createArray(createObject('name', 'ENTRA_MAIL_CLIENT_ID', 'value', parameters('entraMailClientId')), createObject('name', 'ENTRA_MAIL_CLIENT_SECRET', 'secretRef', 'entra-mail-client-secret')), createArray()), variables('hostedReportsEnv'), variables('starttlsEnv'))]"
           },

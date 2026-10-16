@@ -59,6 +59,12 @@ param entraSsoClientId string = ''
 param entraSsoClientSecret string = ''
 #disable-next-line no-hardcoded-env-urls
 param entraSsoAuthority string = 'https://login.microsoftonline.com/organizations'
+// --- optional Google sign-in (one Google OAuth client for the server) ---
+param googleSsoClientId string = ''
+@secure()
+param googleSsoClientSecret string = ''
+@description('Allow organizations\' own OIDC sign-in providers on private addresses. Only when every organization is trusted.')
+param oidcAllowPrivateIssuers bool = false
 param entraMailClientId string = ''
 @secure()
 param entraMailClientSecret string = ''
@@ -188,6 +194,7 @@ var imageRepos = 'ghcr.io/bjd1997/yetanotherdmarctool,ghcr.io/bjd1997/yetanother
 
 var deployBootstrapSecret = !empty(platformAdminBootstrapPassword)
 var deployEntraSsoSecret = !empty(entraSsoClientId) && !empty(entraSsoClientSecret)
+var deployGoogleSsoSecret = !empty(googleSsoClientId) && !empty(googleSsoClientSecret)
 var deployEntraMailSecret = !empty(entraMailClientId) && !empty(entraMailClientSecret)
 var deployHostedReports = !empty(hostedReportsTenantId) && !empty(hostedReportsMailboxAddress)
 var deployCloudflareSecret = deployHostedReports && !empty(cloudflareApiToken) && !empty(cloudflareZoneId)
@@ -240,6 +247,7 @@ module keyvault 'modules/keyvault.bicep' = {
     entraMailClientSecret: entraMailClientSecret
     cloudflareApiToken: deployCloudflareSecret ? cloudflareApiToken : ''
     entraSsoClientSecret: entraSsoClientSecret
+    googleSsoClientSecret: deployGoogleSsoSecret ? googleSsoClientSecret : ''
   }
 }
 
@@ -365,6 +373,9 @@ module apps 'modules/apps.bicep' = {
     entraSsoClientId: entraSsoClientId
     entraSsoAuthority: entraSsoAuthority
     deployEntraSsoSecret: deployEntraSsoSecret
+    googleSsoClientId: googleSsoClientId
+    deployGoogleSsoSecret: deployGoogleSsoSecret
+    oidcAllowPrivateIssuers: oidcAllowPrivateIssuers
     entraMailClientId: entraMailClientId
     deployEntraMailSecret: deployEntraMailSecret
     hostedReportsTenantId: deployHostedReports ? hostedReportsTenantId : ''

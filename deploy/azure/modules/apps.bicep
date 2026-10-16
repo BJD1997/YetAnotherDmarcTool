@@ -38,6 +38,10 @@ param entraSsoClientId string = ''
 #disable-next-line no-hardcoded-env-urls
 param entraSsoAuthority string = 'https://login.microsoftonline.com/organizations'
 param deployEntraSsoSecret bool = false
+// Optional Google sign-in; the secret comes from Key Vault like Entra's.
+param googleSsoClientId string = ''
+param deployGoogleSsoSecret bool = false
+param oidcAllowPrivateIssuers bool = false
 param entraMailClientId string = ''
 param deployEntraMailSecret bool = false
 
@@ -114,6 +118,13 @@ var apiSecrets = concat(
     {
       name: 'entra-sso-client-secret'
       keyVaultUrl: '${vaultUri}secrets/entra-sso-client-secret'
+      identity: identityId
+    }
+  ] : [],
+  deployGoogleSsoSecret ? [
+    {
+      name: 'google-sso-client-secret'
+      keyVaultUrl: '${vaultUri}secrets/google-sso-client-secret'
       identity: identityId
     }
   ] : [],
@@ -194,6 +205,22 @@ var apiEnv = concat(
       value: entraSsoAuthority
     }
   ] : [],
+  deployGoogleSsoSecret ? [
+    {
+      name: 'GOOGLE_SSO_CLIENT_ID'
+      value: googleSsoClientId
+    }
+    {
+      name: 'GOOGLE_SSO_CLIENT_SECRET'
+      secretRef: 'google-sso-client-secret'
+    }
+  ] : [],
+  [
+    {
+      name: 'OIDC_ALLOW_PRIVATE_ISSUERS'
+      value: oidcAllowPrivateIssuers ? 'true' : 'false'
+    }
+  ],
   // The api only needs the mail app's client ID (for the admin-consent
   // links in onboarding); the secret stays with the worker, which does the
   // mailbox syncs.

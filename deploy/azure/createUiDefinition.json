@@ -255,6 +255,50 @@
         ]
       },
       {
+        "name": "signIn",
+        "label": "Sign-in (optional)",
+        "elements": [
+          {
+            "name": "info",
+            "type": "Microsoft.Common.InfoBox",
+            "visible": true,
+            "options": {
+              "icon": "Info",
+              "text": "Optional. Fill in to offer \"Sign in with Google\" to organizations on Google Workspace: a Google Cloud OAuth client (Web application) with redirect URI https://<your address>/api/auth/google/callback. Organizations can also connect their own OpenID Connect provider from Settings, without anything here."
+            }
+          },
+          {
+            "name": "googleSsoClientId",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Google OAuth client ID",
+            "defaultValue": "",
+            "constraints": {
+              "required": false
+            }
+          },
+          {
+            "name": "googleSsoClientSecret",
+            "type": "Microsoft.Common.PasswordBox",
+            "label": {
+              "password": "Google OAuth client secret",
+              "confirmPassword": "Confirm"
+            },
+            "constraints": {
+              "required": false
+            },
+            "options": {
+              "hideConfirmation": true
+            }
+          },
+          {
+            "name": "oidcAllowPrivateIssuers",
+            "type": "Microsoft.Common.CheckBox",
+            "label": "Allow organizations' sign-in providers on private addresses (only when every organization is trusted)",
+            "defaultValue": false
+          }
+        ]
+      },
+      {
         "name": "hostedMailbox",
         "label": "Hosted reporting mailbox (optional)",
         "elements": [
@@ -354,6 +398,9 @@
       "platformAdminBootstrapPassword": "[steps('admin').platformAdminBootstrapPassword]",
       "entraSsoClientId": "[steps('entra').entraSsoClientId]",
       "entraSsoClientSecret": "[steps('entra').entraSsoClientSecret]",
+      "googleSsoClientId": "[steps('signIn').googleSsoClientId]",
+      "googleSsoClientSecret": "[steps('signIn').googleSsoClientSecret]",
+      "oidcAllowPrivateIssuers": "[steps('signIn').oidcAllowPrivateIssuers]",
       "entraMailClientId": "[steps('entra').entraMailClientId]",
       "entraMailClientSecret": "[steps('entra').entraMailClientSecret]",
       "hostedReportsTenantId": "[steps('hostedMailbox').hostedReportsTenantId]",
