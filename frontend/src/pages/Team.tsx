@@ -1,6 +1,5 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
-import { ArrowLeft, Check, Copy, UserPlus } from "lucide-react";
+import { Check, Copy, UserPlus } from "lucide-react";
 import { ApiError } from "../api/client";
 import type { TeamMember } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
@@ -169,10 +168,6 @@ export default function Team() {
 
   return (
     <section>
-      <Link to="/domains" className="back-link">
-        <ArrowLeft size={14} />
-        Domains
-      </Link>
       <div className="page-header">
         <div>
           <h1>Team</h1>
