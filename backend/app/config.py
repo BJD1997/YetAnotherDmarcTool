@@ -108,8 +108,6 @@ class Settings(BaseSettings):
     # Entra App B — Dashboard SSO (delegated, OIDC) (Phase 1)
     entra_sso_client_id: str | None = None
     entra_sso_client_secret: str | None = None
-    # "organizations" excludes personal Microsoft accounts — this is a B2B tool.
-    entra_sso_authority: str = "https://login.microsoftonline.com/organizations"
 
     # Bootstraps the first platform_admins row if the table is empty
     # (see app/scripts/bootstrap_platform_admin.py, run by the `migrate` container).

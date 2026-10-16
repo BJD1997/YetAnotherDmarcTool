@@ -62,7 +62,7 @@ async def _probe_host(host: str) -> Finding:
         if code != 220:
             return Finding(status="error", summary=f"{host} did not send a 220 greeting on connect (got {code})", subject=host)
 
-        writer.write(b"EHLO dmarcwatch-probe" + _CRLF)
+        writer.write(b"EHLO yadt-probe" + _CRLF)
         await writer.drain()
         code, lines = await _read_smtp_response(reader)
         if code != 250:

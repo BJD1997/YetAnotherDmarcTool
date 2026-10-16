@@ -163,10 +163,12 @@ export function useUpdateAdminOrganization(orgId: string) {
   });
 }
 
-export function useSetAdminMailboxConnection(orgId: string) {
+// The mailbox itself is the org admin's to set up; the platform admin can
+// only mark it granted or revoke it.
+export function useSetAdminMailboxConsent(orgId: string) {
   const invalidate = useInvalidateAdminOrganizations();
   return useMutation({
-    mutationFn: (body: { mailbox_address: string; consent_status?: string }) => api.post(`/admin/organizations/${orgId}/mailbox-connection`, body),
+    mutationFn: (consent_status: "granted" | "revoked") => api.patch(`/admin/organizations/${orgId}/mailbox-connection`, { consent_status }),
     onSuccess: invalidate,
   });
 }
