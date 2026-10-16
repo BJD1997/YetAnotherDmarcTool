@@ -208,7 +208,7 @@ function MailboxStep({ onBack, onNext }: { onBack: () => void; onNext: () => voi
     return (
       <div>
         <h2 style={{ marginTop: 0 }}>Report mailbox</h2>
-        {hostedReady ? (
+        {hostedReady && !connection ? (
           <div className="alert alert--good">
             Once you add a domain, we'll generate a dedicated YetAnotherDmarcTool-hosted reporting address for it
             automatically, so there's nothing to connect. If your reports already arrive in a mailbox of your own, you
@@ -260,7 +260,10 @@ function DomainStep({ onBack, onNext }: { onBack: () => void; onNext: () => void
   const hasDomain = (domains ?? []).length > 0;
   const apexDomains = (domains ?? []).filter((d) => !d.parent_domain_id);
   const latestDomain = [...apexDomains].sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
-  const hostedOnly = !!org && !org.entra_tenant_id;
+  const { data: connection } = useMailboxConnection();
+  // An own mailbox (IMAP) makes the hosted address unnecessary; it stays
+  // available in the Policy Builder for anyone who wants both.
+  const hostedOnly = !!org && !org.entra_tenant_id && !connection;
   const noReportMailbox = useNoReportMailbox();
 
   return (
