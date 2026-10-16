@@ -26,6 +26,9 @@ class MailboxConnection(UUIDPkMixin, TimestampMixin, Base):
     mailbox_address: Mapped[str] = mapped_column(String(320), nullable=False)
 
     # Microsoft 365 (Graph) or any IMAP mailbox: one mailbox per organization.
+    # The Microsoft 365 tenant this mailbox lives in: its own, so the
+    # organization's sign-in can change without breaking report ingestion.
+    ms_tenant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     kind: Mapped[MailboxKind] = mapped_column(
         pg_enum(MailboxKind, "mailbox_kind"), nullable=False, default=MailboxKind.microsoft, server_default="microsoft"
     )

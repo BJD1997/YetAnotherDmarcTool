@@ -1,4 +1,3 @@
-import secrets
 import uuid
 from datetime import datetime
 from typing import Literal
@@ -12,7 +11,7 @@ from app.models.enums import OrganizationStatus, ReportSenderCheck, SpfAllQualif
 from app.models.mixins import TimestampMixin, UUIDPkMixin
 from app.models.pg_enum import pg_enum
 from app.services.auth.totp_secret import EncryptedSecret
-from app.services.organizations.slug import slugify
+from app.services.organizations.slug import random_slug
 
 
 class Organization(UUIDPkMixin, TimestampMixin, Base):
@@ -36,15 +35,10 @@ class Organization(UUIDPkMixin, TimestampMixin, Base):
     oidc_issuer: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     oidc_client_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     oidc_client_secret: Mapped[str | None] = mapped_column(EncryptedSecret(1024), nullable=True)
-    # The short name in its direct sign-in link, /login/<slug>. Code that
-    # creates organizations for real sets a clean unique one (unique_slug);
-    # the default only keeps other code paths (tests, the demo seed) working.
-    slug: Mapped[str] = mapped_column(
-        String(63),
-        unique=True,
-        nullable=False,
-        default=lambda ctx: f"{slugify(ctx.get_current_parameters()['name'])[:56]}-{secrets.token_hex(3)}",
-    )
+    # The name in its direct sign-in link, /login/<slug>: random by default
+    # so links can't be guessed from organization names; the platform admin
+    # may choose a readable one.
+    slug: Mapped[str] = mapped_column(String(63), unique=True, nullable=False, default=random_slug)
 
     @property
     def sign_in_provider(self) -> Literal["none", "microsoft", "google", "oidc"]:
