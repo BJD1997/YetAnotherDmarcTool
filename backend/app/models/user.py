@@ -16,6 +16,9 @@ class User(UUIDPkMixin, TimestampMixin, Base):
     __tablename__ = "users"
     __table_args__ = (
         UniqueConstraint("organization_id", "entra_object_id", name="uq_users_org_entra_object_id"),
+        UniqueConstraint(
+            "organization_id", "auth_method", "external_subject", name="uq_users_org_method_external_subject"
+        ),
     )
 
     organization_id: Mapped[uuid.UUID] = mapped_column(
@@ -31,6 +34,8 @@ class User(UUIDPkMixin, TimestampMixin, Base):
     # lower(email) in the migration, which disambiguates local-auth login
     # lookups instead — Entra users are disambiguated by org+object_id).
     entra_object_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Google/OIDC users: the provider's stable user ID (the `sub` claim).
+    external_subject: Mapped[str | None] = mapped_column(String(255), nullable=True)
     email: Mapped[str] = mapped_column(String(320), nullable=False)
     display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
 

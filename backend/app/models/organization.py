@@ -1,5 +1,7 @@
+import secrets
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from sqlalchemy import Boolean, DateTime, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
@@ -9,6 +11,8 @@ from app.db.base import Base
 from app.models.enums import OrganizationStatus, ReportSenderCheck, SpfAllQualifierMode
 from app.models.mixins import TimestampMixin, UUIDPkMixin
 from app.models.pg_enum import pg_enum
+from app.services.auth.totp_secret import EncryptedSecret
+from app.services.organizations.slug import slugify
 
 
 class Organization(UUIDPkMixin, TimestampMixin, Base):
@@ -22,6 +26,35 @@ class Organization(UUIDPkMixin, TimestampMixin, Base):
     entra_tenant_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), unique=True, nullable=True
     )
+
+    # Google Workspace sign-in: the Workspace's primary domain, matched
+    # against the `hd` claim Google puts in the ID token.
+    google_workspace_domain: Mapped[str | None] = mapped_column(String(253), unique=True, nullable=True)
+    # The organization's own OpenID Connect provider (Authentik, Keycloak,
+    # ...). The rest comes from the issuer's discovery document. At most one
+    # of Microsoft, Google and OIDC is set (a check constraint, see 0043).
+    oidc_issuer: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    oidc_client_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    oidc_client_secret: Mapped[str | None] = mapped_column(EncryptedSecret(1024), nullable=True)
+    # The short name in its direct sign-in link, /login/<slug>. Code that
+    # creates organizations for real sets a clean unique one (unique_slug);
+    # the default only keeps other code paths (tests, the demo seed) working.
+    slug: Mapped[str] = mapped_column(
+        String(63),
+        unique=True,
+        nullable=False,
+        default=lambda ctx: f"{slugify(ctx.get_current_parameters()['name'])[:56]}-{secrets.token_hex(3)}",
+    )
+
+    @property
+    def sign_in_provider(self) -> Literal["none", "microsoft", "google", "oidc"]:
+        if self.entra_tenant_id is not None:
+            return "microsoft"
+        if self.google_workspace_domain:
+            return "google"
+        if self.oidc_issuer:
+            return "oidc"
+        return "none"
 
     status: Mapped[OrganizationStatus] = mapped_column(
         pg_enum(OrganizationStatus, "organization_status"),

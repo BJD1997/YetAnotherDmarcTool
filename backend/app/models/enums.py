@@ -111,6 +111,8 @@ class UserRole(str, enum.Enum):
 class AuthMethod(str, enum.Enum):
     entra = "entra"
     local = "local"
+    google = "google"
+    oidc = "oidc"
     # Only on sign_in_events: the break-glass platform admin login (never a
     # users.auth_method value).
     platform_admin = "platform_admin"
