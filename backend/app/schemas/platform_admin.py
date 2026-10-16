@@ -1,7 +1,8 @@
+import re
 import uuid
 from typing import Literal
 
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 from app.models.enums import ConsentStatus, OrganizationStatus, UserRole
 from app.schemas.auth import TotpSecret
@@ -21,14 +22,42 @@ class AdminEnrollOtpConfirmRequest(BaseModel):
     code: str
 
 
-class OrganizationCreateRequest(BaseModel):
+_SLUG_PATTERN = r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+
+
+class _SignInFields(BaseModel):
+    # The direct sign-in link name, /login/<slug>.
+    slug: str | None = Field(default=None, pattern=_SLUG_PATTERN)
+    entra_tenant_id: uuid.UUID | None = None
+    google_workspace_domain: str | None = Field(default=None, max_length=253)
+    oidc_issuer: str | None = Field(default=None, max_length=2048)
+    oidc_client_id: str | None = Field(default=None, max_length=255)
+    # Left out on an update: keep the stored secret.
+    oidc_client_secret: str | None = Field(default=None, max_length=1024)
+    # Optional: this person becomes org admin on their first sign-in
+    # through the provider (otherwise the break-glass account promotes).
+    expected_admin_email: EmailStr | None = None
+
+    @field_validator("google_workspace_domain")
+    @classmethod
+    def _workspace(cls, value: str | None) -> str | None:
+        value = (value or "").strip().lower().rstrip(".")
+        if not value:
+            return None
+        if "." not in value or not re.fullmatch(r"[a-z0-9.-]+", value):
+            raise ValueError("enter the Workspace's domain, for example example.com")
+        return value
+
+
+class OrganizationCreateRequest(_SignInFields):
     name: str
-    entra_tenant_id: uuid.UUID | None = None
+    # The organization's break-glass account: local, org admin, and the one
+    # that chooses the organization's sign-in provider. Gets a setup link.
+    break_glass_email: EmailStr | None = None
 
 
-class OrganizationUpdateRequest(BaseModel):
+class OrganizationUpdateRequest(_SignInFields):
     name: str | None = None
-    entra_tenant_id: uuid.UUID | None = None
     status: OrganizationStatus | None = None
     is_operator: bool | None = None
 

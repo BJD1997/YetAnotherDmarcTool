@@ -10,17 +10,21 @@ from app.config import settings
 from app.models.organization import Organization
 
 
-def entra_consent_urls(org: Organization) -> dict | None:
-    if org.entra_tenant_id is None or not settings.entra_mail_client_id or not settings.entra_sso_client_id:
+def entra_consent_urls(org: Organization, mailbox_tenant_id=None) -> dict | None:
+    """mailbox_tenant_id: for an organization without Microsoft sign-in, the
+    tenant of its Microsoft 365 report mailbox (only the mail-access link
+    then matters, but both are built the same way)."""
+    tenant_id = org.entra_tenant_id or mailbox_tenant_id
+    if tenant_id is None or not settings.entra_mail_client_id or not settings.entra_sso_client_id:
         return None
     mail_redirect = f"{settings.public_base_url}/api/admin/entra/consent-callback"
     return {
         "mail_access_consent_url": (
-            f"https://login.microsoftonline.com/{org.entra_tenant_id}/adminconsent?"
+            f"https://login.microsoftonline.com/{tenant_id}/adminconsent?"
             + urlencode({"client_id": settings.entra_mail_client_id, "redirect_uri": mail_redirect})
         ),
         "sso_consent_url": (
-            f"https://login.microsoftonline.com/{org.entra_tenant_id}/adminconsent?"
+            f"https://login.microsoftonline.com/{tenant_id}/adminconsent?"
             + urlencode({"client_id": settings.entra_sso_client_id, "redirect_uri": settings.entra_sso_redirect_uri})
         ),
     }

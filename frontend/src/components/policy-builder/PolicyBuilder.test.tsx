@@ -19,6 +19,7 @@ const ORG: Organization = {
   name: "Test Org",
   status: "active",
   entra_tenant_id: null,
+  sign_in_provider: "none",
   is_operator: false,
   spf_all_qualifier_mode: "strict",
   hosted_mailbox_opt_in: false,
@@ -27,6 +28,8 @@ const ORG: Organization = {
   rating_window_days: 90,
   ask_ai_enabled: false,
   entra_consent_urls: null,
+  microsoft_mailbox_available: false,
+  google_mailbox: null,
 };
 
 function builderData(overrides: Partial<PolicyBuilderData> = {}): PolicyBuilderData {

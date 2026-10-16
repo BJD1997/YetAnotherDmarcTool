@@ -7,6 +7,7 @@ import { useAdminAuth } from "../auth/AdminAuthContext";
 import ThemeToggle from "./ThemeToggle";
 import { useAdminUpdates } from "../hooks/useAdmin";
 import { useHealth } from "../hooks/useOverviewResources";
+import UpdatedBanner from "./UpdatedBanner";
 
 export default function AdminShell({ children }: { children: ReactNode }) {
   const { admin } = useAdminAuth();
@@ -143,7 +144,10 @@ export default function AdminShell({ children }: { children: ReactNode }) {
         </div>
       </aside>
       <main className="app-main">
-        <div className="app-main-inner">{children}</div>
+        <div className="app-main-inner">
+          <UpdatedBanner />
+          {children}
+        </div>
       </main>
     </div>
   );

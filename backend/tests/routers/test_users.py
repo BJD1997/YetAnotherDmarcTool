@@ -26,14 +26,14 @@ async def test_create_local_user_requires_admin(api):
     assert response.status_code == 403
 
 
-async def test_create_local_user_rejects_entra_org(api):
+async def test_no_local_teammates_once_the_org_has_a_provider(api):
     client, owner_factory = api
     _org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin, entra=True)
     await login_as(client, owner_factory, user)
 
     response = await client.post("/api/users", json={"email": "new@example.com"})
 
-    assert response.status_code == 409
+    assert response.status_code == 409 and "provider" in response.text
 
 
 async def test_create_local_user(api):
@@ -71,3 +71,21 @@ async def test_update_user_not_found_for_other_org(api):
     response = await client.patch(f"/api/users/{other_user.id}", json={"role": "org_admin"})
 
     assert response.status_code == 404
+
+
+async def test_the_break_glass_account_cant_be_demoted_or_disabled_by_org_admins(api):
+    from app.models.user import User as UserModel
+
+    client, owner_factory = api
+    org, admin = await seed_org_and_user(owner_factory, role=UserRole.org_admin)
+    async with owner_factory() as db:
+        keys = UserModel(organization_id=org.id, email="keys@example.com", role=UserRole.org_admin, is_break_glass=True, auth_method="local")
+        db.add(keys)
+        await db.commit()
+        keys_id = keys.id
+    await login_as(client, owner_factory, admin)
+
+    assert (await client.patch(f"/api/users/{keys_id}", json={"role": "member"})).status_code == 409
+    assert (await client.patch(f"/api/users/{keys_id}", json={"status": "disabled"})).status_code == 409
+    # Resetting it is allowed (the user's choice: org admins may help).
+    assert (await client.post(f"/api/users/{keys_id}/reset-password")).status_code == 200

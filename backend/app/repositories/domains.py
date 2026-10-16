@@ -84,3 +84,13 @@ async def list_hosted_domain_names_for_org(db: AsyncSession, organization_id: UU
         select(Domain.name).where(Domain.organization_id == organization_id, Domain.hosted_report_address.is_not(None))
     )
     return set(result.scalars())
+
+
+async def verified_domain_names(db: AsyncSession, organization_id: UUID) -> list[str]:
+    result = await db.execute(
+        select(Domain.name).where(
+            Domain.organization_id == organization_id,
+            Domain.verification_status == DomainVerificationStatus.verified,
+        )
+    )
+    return [name.lower() for name in result.scalars()]

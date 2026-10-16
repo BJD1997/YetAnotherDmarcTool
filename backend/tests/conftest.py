@@ -48,7 +48,7 @@ from app.models.enums import AuthMethod, OrganizationStatus, UserRole, UserStatu
 from app.models.organization import Organization
 from app.models.user import User
 from app.services.auth import session_manager
-from app.services.auth.rate_limit import login_limiter, otp_account_limiter, otp_limiter
+from app.services.auth.rate_limit import login_limiter, otp_account_limiter, otp_limiter, sign_in_lookup_limiter
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
 _APP_ROLE = "dmarc_app"
@@ -177,6 +177,7 @@ async def api(migrated_db):
     login_limiter._memory._hits.clear()
     otp_limiter._memory._hits.clear()
     otp_account_limiter._memory._hits.clear()
+    sign_in_lookup_limiter._memory._hits.clear()
 
     owner_engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
     app_engine = create_async_engine(_app_url(), poolclass=NullPool)
@@ -241,6 +242,7 @@ async def seed_org_and_user(
     role: UserRole = UserRole.org_admin,
     entra: bool = False,
     is_demo_read_only: bool = False,
+    break_glass: bool = False,
 ) -> tuple[Organization, User]:
     """Inserts an Organization + User directly via the RLS-bypassing owner
     role — same idea as _seed_two_orgs in test_rls.py."""
@@ -259,7 +261,8 @@ async def seed_org_and_user(
             display_name="Test Admin",
             role=role,
             status=UserStatus.active,
-            auth_method=AuthMethod.entra if entra else AuthMethod.local,
+            auth_method=AuthMethod.entra if entra and not break_glass else AuthMethod.local,
+            is_break_glass=break_glass,
         )
         db.add(user)
         await db.flush()

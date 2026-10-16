@@ -1,3 +1,4 @@
+import dataclasses
 from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID, uuid4
@@ -16,6 +17,7 @@ from app.models.enums import AuthResult, Disposition, DomainVerificationStatus, 
 from app.models.sender_review import SenderReview
 from app.models.source_ip_identity import SourceIpIdentity
 from app.models.tls_rpt import TlsRptReport
+from app.models.trusted_reporter import TrustedReporter
 from app.services.ingestion.sender_auth import decide_sql
 from app.services.pagination import keyset_paginate
 
@@ -304,8 +306,16 @@ async def dmarc_disposition_breakdown(db: AsyncSession, domain_id: UUID) -> dict
     return {disposition.value: count for disposition, count in rows.all()}
 
 
-async def windowed_totals_excluding_blocked(db: AsyncSession, domain_id: UUID, since: datetime) -> tuple[int, int]:
-    """(total_count, dmarc_pass_count) over the window starting at `since`,
+@dataclasses.dataclass(frozen=True)
+class AuthCounts:
+    total: int
+    dmarc_pass: int
+    spf_pass: int
+    dkim_pass: int
+
+
+async def windowed_auth_counts_excluding_blocked(db: AsyncSession, domain_id: UUID, since: datetime) -> AuthCounts:
+    """Message counts (total, DMARC/SPF/DKIM pass) over the window starting at `since`,
     excluding traffic from senders explicitly marked blocked (SenderReview)
     — confirmed spoofing/abuse a domain owner has already dealt with
     shouldn't keep dragging the rating down forever. Pending/unreviewed
@@ -331,11 +341,13 @@ async def windowed_totals_excluding_blocked(db: AsyncSession, domain_id: UUID, s
         .join(SenderReview, SenderReview.service_label == SourceIpIdentity.service_label)
         .where(SenderReview.domain_id == domain_id, SenderReview.status == SenderReviewStatus.blocked)
     )
-    total_count, pass_count = (
+    total_count, pass_count, spf_count, dkim_count = (
         await db.execute(
             select(
                 func.coalesce(func.sum(DmarcAggregateRecord.count), 0),
                 func.coalesce(func.sum(case((dmarc_pass, DmarcAggregateRecord.count), else_=0)), 0),
+                func.coalesce(func.sum(case((DmarcAggregateRecord.spf_result == AuthResult.pass_, DmarcAggregateRecord.count), else_=0)), 0),
+                func.coalesce(func.sum(case((DmarcAggregateRecord.dkim_result == AuthResult.pass_, DmarcAggregateRecord.count), else_=0)), 0),
             )
             .select_from(DmarcAggregateRecord)
             .join(DmarcAggregateReport, DmarcAggregateReport.id == DmarcAggregateRecord.report_id)
@@ -346,7 +358,13 @@ async def windowed_totals_excluding_blocked(db: AsyncSession, domain_id: UUID, s
             )
         )
     ).one()
-    return int(total_count), int(pass_count)
+    return AuthCounts(int(total_count), int(pass_count), int(spf_count), int(dkim_count))
+
+
+async def windowed_totals_excluding_blocked(db: AsyncSession, domain_id: UUID, since: datetime) -> tuple[int, int]:
+    """(total_count, dmarc_pass_count): see windowed_auth_counts_excluding_blocked."""
+    counts = await windowed_auth_counts_excluding_blocked(db, domain_id, since)
+    return counts.total, counts.dmarc_pass
 
 
 async def daily_totals_excluding_blocked(db: AsyncSession, domain_id: UUID, since: datetime) -> list[tuple]:
@@ -1068,6 +1086,28 @@ async def apply_report_sender_check(db: AsyncSession, organization_id: UUID, mod
             .scalar_subquery()
         )
     )
+
+
+async def trusted_reporter_domains(db: AsyncSession, organization_id: UUID) -> frozenset[str]:
+    rows = await db.execute(select(TrustedReporter.domain).where(TrustedReporter.organization_id == organization_id))
+    return frozenset(rows.scalars())
+
+
+async def trust_reporter(db: AsyncSession, organization_id: UUID, domain: str, user_id: UUID | None) -> None:
+    """Idempotent. Callers re-evaluate stored reports afterwards
+    (apply_report_sender_check)."""
+    await db.execute(
+        pg_insert(TrustedReporter)
+        .values(id=uuid4(), organization_id=organization_id, domain=domain, trusted_by=user_id)
+        .on_conflict_do_nothing(constraint="uq_trusted_reporters_org_domain")
+    )
+
+
+async def untrust_reporter(db: AsyncSession, organization_id: UUID, domain: str) -> bool:
+    result = await db.execute(
+        delete(TrustedReporter).where(TrustedReporter.organization_id == organization_id, TrustedReporter.domain == domain)
+    )
+    return result.rowcount > 0
 
 
 async def delete_unverified_aggregate_duplicate(db: AsyncSession, report: DmarcAggregateReport) -> None:
