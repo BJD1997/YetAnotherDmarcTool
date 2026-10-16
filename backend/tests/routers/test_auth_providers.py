@@ -225,3 +225,57 @@ async def test_a_suspended_org_cant_sign_in(api, fake_provider):
     fake_provider["claims"] = {"sub": "kc-1", "email": "jan@acme.example", "email_verified": True}
     _set_flow_cookies(client, str(org.id))
     assert (await _callback(client, "oidc")).headers["location"] == "/login?error=organization_suspended"
+
+
+# --- the login page: routing an email, direct links --------------------------
+
+async def test_discover_routes_an_email_on_a_verified_domain(api, fake_provider):
+    client, owner_factory = api
+    await _oidc_org(owner_factory)
+    response = await client.post("/api/auth/discover", json={"email": "Jan@Mail.Acme.example"})
+    assert response.json() == {"url": "/api/auth/oidc/start?org=acme&login_hint=Jan%40Mail.Acme.example"}
+
+
+@pytest.mark.parametrize("email", ["jan@unknown.example", "jan@gmail.com", "not-an-email"])
+async def test_discover_gives_nothing_away_for_other_addresses(api, email):
+    client, owner_factory = api
+    await _oidc_org(owner_factory)
+    response = await client.post("/api/auth/discover", json={"email": email})
+    assert response.status_code == 200 and response.json() == {"url": None}
+
+
+async def test_discover_ignores_unverified_domains(api):
+    client, owner_factory = api
+    org = await _org(owner_factory, slug="sneaky", oidc_issuer="https://idp.sneaky.example", oidc_client_id="c", oidc_client_secret="s")
+    async with owner_factory() as db:
+        db.add(Domain(organization_id=org.id, name="victim.example", verification_status=DomainVerificationStatus.pending))
+        await db.commit()
+    assert (await client.post("/api/auth/discover", json={"email": "ceo@victim.example"})).json() == {"url": None}
+
+
+async def test_discover_sends_microsoft_and_google_orgs_to_their_button(api, monkeypatch, google_app):
+    import uuid as _uuid
+
+    client, owner_factory = api
+    monkeypatch.setattr("app.routers.auth_providers.settings.entra_sso_client_id", "ms")
+    ms = await _org(owner_factory, name="MS", slug="ms", entra_tenant_id=_uuid.uuid4())
+    await _verified_domain(owner_factory, ms, "ms.example")
+    g = await _org(owner_factory, name="G", slug="g", google_workspace_domain="g.example")
+    await _verified_domain(owner_factory, g, "g.example")
+
+    assert (await client.post("/api/auth/discover", json={"email": "a@ms.example"})).json()["url"].startswith("/api/auth/login?login_hint=")
+    assert (await client.post("/api/auth/discover", json={"email": "a@g.example"})).json()["url"].startswith("/api/auth/google/login?login_hint=")
+
+
+async def test_the_direct_link_finds_the_orgs_provider(api):
+    client, owner_factory = api
+    await _oidc_org(owner_factory)
+    assert (await client.get("/api/auth/org/acme")).json() == {"url": "/api/auth/oidc/start?org=acme"}
+    assert (await client.get("/api/auth/org/nope")).status_code == 404
+
+
+async def test_config_says_whether_company_sign_in_exists(api):
+    client, owner_factory = api
+    assert (await client.get("/api/auth/config")).json()["company_sign_in_enabled"] is False
+    await _oidc_org(owner_factory)
+    assert (await client.get("/api/auth/config")).json()["company_sign_in_enabled"] is True

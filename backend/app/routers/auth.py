@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse, RedirectResponse
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -12,6 +13,7 @@ from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user
 from app.models.enums import AuthMethod, OrganizationStatus, SignInResult, UserStatus
 from app.models.mfa_pending_challenge import MfaPendingChallenge
+from app.models.organization import Organization
 from app.models.user import User
 from app.models.user_recovery_code import UserRecoveryCode
 from app.repositories.auth import (
@@ -48,10 +50,28 @@ _MFA_PENDING_COOKIE = settings.mfa_pending_cookie_name
 
 
 @router.get("/config")
-async def auth_config() -> dict:
+async def auth_config(db: AsyncSession = Depends(get_db)) -> dict:
     """Unauthenticated — the login page calls this before a user exists to
-    decide whether to show the "Sign in with Microsoft" option at all."""
-    return {"entra_sso_enabled": bool(settings.entra_sso_client_id)}
+    decide which sign-in options to show. company_sign_in_enabled: some
+    organization has a provider that works here, so asking for a work
+    email address makes sense."""
+    has_provider = [Organization.oidc_issuer.is_not(None)]
+    if settings.google_sso_client_id:
+        has_provider.append(Organization.google_workspace_domain.is_not(None))
+    if settings.entra_sso_client_id:
+        has_provider.append(Organization.entra_tenant_id.is_not(None))
+    company = (
+        await db.execute(
+            select(Organization.id)
+            .where(Organization.status == OrganizationStatus.active, or_(*has_provider))
+            .limit(1)
+        )
+    ).first()
+    return {
+        "entra_sso_enabled": bool(settings.entra_sso_client_id),
+        "google_sso_enabled": bool(settings.google_sso_client_id),
+        "company_sign_in_enabled": company is not None,
+    }
 
 
 @router.get("/login")

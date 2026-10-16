@@ -6,7 +6,7 @@ async def test_auth_config_sso_disabled(api):
     client, _owner_factory = api
     response = await client.get("/api/auth/config")
     assert response.status_code == 200
-    assert response.json() == {"entra_sso_enabled": False}
+    assert response.json() == {"entra_sso_enabled": False, "google_sso_enabled": False, "company_sign_in_enabled": False}
 
 
 async def test_login_redirect_404_when_sso_disabled(api):

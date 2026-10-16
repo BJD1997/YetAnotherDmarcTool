@@ -4,21 +4,27 @@ sign_in_flow.complete_sign_in."""
 
 import secrets
 import uuid
+from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel, Field
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.db.rls import set_org_context
+from app.db.rls import set_org_context, set_platform_admin_context
 from app.db.session import get_db
-from app.models.enums import AuthMethod, OrganizationStatus, SignInResult
+from app.models.domain import Domain
+from app.models.enums import AuthMethod, DomainVerificationStatus, OrganizationStatus, SignInResult
 from app.models.organization import Organization
 from app.repositories.auth import get_organization_by_google_domain, get_organization_by_slug
 from app.repositories.domains import verified_domain_names
 from app.repositories.organizations import get_organization
 from app.services.auth import oauth_cookies, oidc, pkce
+from app.services.auth.rate_limit import login_limiter, rate_limiter
 from app.services.auth.sign_in_flow import complete_sign_in, session_redirect
+from app.services.ingestion.sender_auth import can_be_trusted
 from app.services.auth.sign_in_log import client_network_info, record_sign_in_event
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -201,3 +207,77 @@ async def oidc_callback(request: Request, db: AsyncSession = Depends(get_db)) ->
         display_name=claims.get("name") or claims.get("preferred_username"), ip_address=ip_address, user_agent=user_agent,
     )
     return session_redirect(outcome, clear_cookies=oauth_cookies.NAMES)
+
+
+# --- the login page ------------------------------------------------------------
+
+class DiscoverRequest(BaseModel):
+    email: str = Field(max_length=320)
+
+
+def sign_in_url(org: Organization, login_hint: str | None) -> str | None:
+    """Where an organization's people start signing in; None when its
+    provider isn't available on this server."""
+    hint = f"login_hint={quote(login_hint, safe='')}" if login_hint else ""
+    provider = org.sign_in_provider
+    if provider == "oidc":
+        return f"/api/auth/oidc/start?{urlencode({'org': org.slug})}" + (f"&{hint}" if hint else "")
+    if provider == "google" and settings.google_sso_client_id:
+        return "/api/auth/google/login" + (f"?{hint}" if hint else "")
+    if provider == "microsoft" and settings.entra_sso_client_id:
+        return "/api/auth/login" + (f"?{hint}" if hint else "")
+    return None
+
+
+async def _org_for_email_domain(db: AsyncSession, domain: str) -> Organization | None:
+    """The active organization with a provider that verified this domain or
+    a parent of it (the longest match wins). Reads across organizations,
+    so the bypass is on only for this one query."""
+    labels = domain.split(".")
+    candidates = [".".join(labels[i:]) for i in range(len(labels) - 1)]
+    await set_platform_admin_context(db, is_admin=True)
+    try:
+        rows = (
+            await db.execute(
+                select(Domain.name, Organization)
+                .join(Organization, Organization.id == Domain.organization_id)
+                .where(
+                    Domain.name.in_(candidates),
+                    Domain.verification_status == DomainVerificationStatus.verified,
+                    Organization.status == OrganizationStatus.active,
+                    or_(
+                        Organization.entra_tenant_id.is_not(None),
+                        Organization.google_workspace_domain.is_not(None),
+                        Organization.oidc_issuer.is_not(None),
+                    ),
+                )
+            )
+        ).all()
+    finally:
+        await set_platform_admin_context(db, is_admin=False)
+    if not rows:
+        return None
+    return max(rows, key=lambda row: len(row[0]))[1]
+
+
+@router.post("/discover", dependencies=[Depends(rate_limiter(login_limiter))])
+async def discover_sign_in(body: DiscoverRequest, db: AsyncSession = Depends(get_db)) -> dict:
+    """Where "Sign in with your company account" goes for this email. Never
+    names the organization; anything unknown gets the same empty answer."""
+    email = body.email.strip()
+    local, _, domain = email.rpartition("@")
+    domain = domain.lower().rstrip(".")
+    if not local or "." not in domain or not can_be_trusted(domain):
+        return {"url": None}
+    org = await _org_for_email_domain(db, domain)
+    return {"url": sign_in_url(org, email) if org else None}
+
+
+@router.get("/org/{slug}")
+async def org_sign_in(slug: str, db: AsyncSession = Depends(get_db)) -> dict:
+    """/login/<slug>: straight to that organization's provider."""
+    org = await get_organization_by_slug(db, slug[:63])
+    url = sign_in_url(org, None) if org and org.status == OrganizationStatus.active else None
+    if url is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND)
+    return {"url": url}
