@@ -237,6 +237,8 @@ async def mailbox_stopped_receiving_reports(db: AsyncSession, organization_id: u
     cutoff = datetime.now(timezone.utc) - timedelta(days=STALE_MAILBOX_DAYS)
     if connection.last_sync_at < cutoff:
         return []  # sync itself hasn't run recently either — a scheduling/worker problem, not this rule
+    if connection.consent_granted_at is not None and connection.consent_granted_at >= cutoff:
+        return []  # connected too recently to expect reports yet
 
     latest_report_at = await last_report_received_at_for_org(db, organization_id)
     if latest_report_at is not None and latest_report_at >= cutoff:
