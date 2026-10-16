@@ -192,3 +192,16 @@ def test_example_database_passwords_are_flagged(url, variable):
 
 def test_own_database_password_is_fine():
     assert setup_checks.example_database_login_problem("postgresql+asyncpg://dmarc_app:Str0ng-Pw@db:5432/dmarc") is None
+
+
+def test_a_half_set_up_hosted_imap_mailbox(clean_settings):
+    clean_settings.setattr(settings, "hosted_reports_source", "imap")
+    clean_settings.setattr(settings, "hosted_reports_mailbox_address", "rua@hosted.example")
+    clean_settings.setattr(settings, "hosted_reports_imap_host", "mail.hosted.example")
+    assert "HOSTED_REPORTS_IMAP_USERNAME, HOSTED_REPORTS_IMAP_PASSWORD" in problems()
+    assert "HOSTED_REPORTS_TENANT_ID" not in problems()
+
+    clean_settings.setattr(settings, "hosted_reports_imap_username", "rua")
+    clean_settings.setattr(settings, "hosted_reports_imap_password", "pw")
+    assert "hosted reporting mailbox" not in problems()
+    assert any("HOSTED_REPORTS_IMAP_AUTHSERV_ID" in tip for tip in setup_checks.config_tips())

@@ -106,16 +106,23 @@ def config_problems() -> list[str]:
             "The mailbox app is half set up: ENTRA_MAIL_CLIENT_ID and ENTRA_MAIL_CLIENT_SECRET go together. "
             f"Set both, or neither, {_ENV_HINT}."
         )
-    if settings.hosted_reports_mailbox_address or settings.hosted_reports_tenant_id:
-        missing = [
-            name
-            for name, value in (
-                ("HOSTED_REPORTS_MAILBOX_ADDRESS", settings.hosted_reports_mailbox_address),
-                ("HOSTED_REPORTS_TENANT_ID", settings.hosted_reports_tenant_id),
-                ("ENTRA_MAIL_CLIENT_ID", settings.entra_mail_client_id),
-            )
-            if not value
-        ]
+    if settings.hosted_reports_source == "imap":
+        hosted_needs = (
+            ("HOSTED_REPORTS_MAILBOX_ADDRESS", settings.hosted_reports_mailbox_address),
+            ("HOSTED_REPORTS_IMAP_HOST", settings.hosted_reports_imap_host),
+            ("HOSTED_REPORTS_IMAP_USERNAME", settings.hosted_reports_imap_username),
+            ("HOSTED_REPORTS_IMAP_PASSWORD", settings.hosted_reports_imap_password),
+        )
+        hosted_started = any(value for _name, value in hosted_needs)
+    else:
+        hosted_needs = (
+            ("HOSTED_REPORTS_MAILBOX_ADDRESS", settings.hosted_reports_mailbox_address),
+            ("HOSTED_REPORTS_TENANT_ID", settings.hosted_reports_tenant_id),
+            ("ENTRA_MAIL_CLIENT_ID", settings.entra_mail_client_id),
+        )
+        hosted_started = bool(settings.hosted_reports_mailbox_address or settings.hosted_reports_tenant_id)
+    if hosted_started:
+        missing = [name for name, value in hosted_needs if not value]
         if missing:
             found.append(
                 f"The hosted reporting mailbox is half set up: it also needs {', '.join(missing)}. "
@@ -185,7 +192,14 @@ def config_tips() -> list[str]:
         tips.append(
             "There's no hosted reporting mailbox, so every organization needs a mailbox of its own for reports. "
             "To give each domain a ready-made reporting address instead, set HOSTED_REPORTS_MAILBOX_ADDRESS and "
-            f"HOSTED_REPORTS_TENANT_ID (it uses the mailbox app above). See {_CONFIG_DOCS}"
+            "either HOSTED_REPORTS_TENANT_ID (a Microsoft 365 mailbox, through the mailbox app above) or "
+            f"HOSTED_REPORTS_SOURCE=imap with the HOSTED_REPORTS_IMAP_* settings. See {_CONFIG_DOCS}"
+        )
+    elif settings.hosted_reports_source == "imap" and not settings.hosted_reports_imap_authserv_id:
+        tips.append(
+            "The hosted mailbox is read over IMAP, but HOSTED_REPORTS_IMAP_AUTHSERV_ID isn't set, so no report is "
+            "read yet. Set it to your mail server's ID: the first word of the Authentication-Results header it "
+            f"adds to incoming mail (the hosted mailbox's sync error names the one it found). See {_CONFIG_DOCS}"
         )
     elif not (settings.cloudflare_api_token or settings.cloudflare_zone_id):
         tips.append(
