@@ -9,6 +9,7 @@ import {
   useResyncMailbox,
   useSetImapConnection,
   useSetMailboxConnection,
+  useStartMicrosoftMailboxTest,
 } from "../../hooks/useMailboxConnection";
 import ImapMailboxForm from "./ImapMailboxForm";
 import { useCurrentOrganization } from "../../hooks/useOrganization";
@@ -54,9 +55,11 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
   const [saveError, setSaveError] = useState<string | null>(null);
   const [showLinks, setShowLinks] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
-  // Organizations that sign in with Microsoft choose between their Microsoft
-  // 365 mailbox and any IMAP mailbox; others can only use IMAP.
-  const canUseMicrosoft = !!org?.entra_tenant_id;
+  // A Microsoft 365 mailbox or any IMAP mailbox. Organizations that don't
+  // sign in with Microsoft first prove the mailbox's tenant with a test
+  // sign-in (TenantProof), unless their Microsoft mailbox already has one.
+  const canUseMicrosoft = !!org?.entra_tenant_id || !!org?.microsoft_mailbox_available;
+  const [ticket, setTicket] = useState<string | null>(null);
   const [choice, setChoice] = useState<"microsoft" | "imap">("microsoft");
   const confirmId = useSetImapConnection(startWaiting, (err) =>
     setSaveError(err instanceof ApiError ? err.message : "couldn't save the mail server ID"),
@@ -136,10 +139,17 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
           </div>
         ) : (
         <>
-        <div style={{ marginTop: "0.75rem" }}>
-          <div className="stat-tile-label">Step 1 — grant access</div>
-          {consentCta}
-        </div>
+        {org?.entra_tenant_id ? (
+          <div style={{ marginTop: "0.75rem" }}>
+            <div className="stat-tile-label">Step 1 — grant access</div>
+            {consentCta}
+          </div>
+        ) : (
+          <div style={{ marginTop: "0.75rem" }}>
+            <div className="stat-tile-label">Step 1 — confirm your Microsoft tenant</div>
+            <TenantProof onPassed={setTicket} />
+          </div>
+        )}
 
         <div style={{ marginTop: "0.9rem", paddingTop: "0.75rem", borderTop: "1px solid var(--border)" }}>
           <div className="stat-tile-label" style={{ marginBottom: "0.4rem" }}>
@@ -148,7 +158,7 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              setConnection.mutate(mailbox);
+              setConnection.mutate({ mailbox_address: mailbox, ...(ticket ? { ticket } : {}) });
             }}
             className="field-row"
           >
@@ -160,7 +170,11 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
               style={{ width: "260px" }}
               required
             />
-            <button type="submit" className="btn btn--secondary btn--sm" disabled={setConnection.isPending}>
+            <button
+              type="submit"
+              className="btn btn--secondary btn--sm"
+              disabled={setConnection.isPending || (!org?.entra_tenant_id && !ticket)}
+            >
               Save &amp; start syncing
             </button>
           </form>
@@ -193,21 +207,32 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
           />
         </div>
       ) : editing ? (
+        <>
+        {!org?.entra_tenant_id && isImap && (
+          <div style={{ marginTop: "0.75rem", marginBottom: "0.5rem" }}>
+            <TenantProof onPassed={setTicket} />
+          </div>
+        )}
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            setConnection.mutate(mailbox);
+            setConnection.mutate({ mailbox_address: mailbox, ...(ticket ? { ticket } : {}) });
           }}
           className="field-row"
         >
           <input className="input" value={mailbox} onChange={(e) => setMailbox(e.target.value)} style={{ width: "260px" }} required />
-          <button type="submit" className="btn btn--primary btn--sm" disabled={setConnection.isPending}>
+          <button
+            type="submit"
+            className="btn btn--primary btn--sm"
+            disabled={setConnection.isPending || (!org?.entra_tenant_id && isImap && !ticket)}
+          >
             Save
           </button>
           <button type="button" className="btn btn--ghost btn--sm" onClick={() => setEditing(false)}>
             Cancel
           </button>
         </form>
+        </>
       ) : (
         <>
           <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}>
@@ -338,6 +363,60 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
         </>
       )}
       {saveError && <div style={{ marginTop: "0.5rem" }}>{saveError}</div>}
+    </div>
+  );
+}
+
+// For an organization that doesn't sign in with Microsoft: a test sign-in
+// with a Microsoft work account on one of its verified domains proves which
+// tenant its report mailbox is in; the ticket goes along with the save.
+function TenantProof({ onPassed }: { onPassed: (ticket: string) => void }) {
+  const start = useStartMicrosoftMailboxTest();
+  const [passed, setPassed] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    function onMessage(event: MessageEvent) {
+      if (event.origin !== window.location.origin || event.data?.type !== "yadt-sign-in-test") return;
+      if (event.data.ok && event.data.tenant_id) {
+        setPassed(`Signed in as ${event.data.email}: tenant ${event.data.tenant_id}.`);
+        setError(null);
+        onPassed(event.data.ticket);
+      } else if (!event.data.ok) {
+        setPassed(null);
+        setError(event.data.error ?? "The test sign-in failed.");
+      }
+    }
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [onPassed]);
+
+  return (
+    <div style={{ display: "grid", gap: "0.4rem", marginTop: "0.3rem" }}>
+      <p className="section-hint" style={{ margin: 0 }}>
+        Sign in once with a Microsoft work account of your organization (its email on one of your verified domains). Its
+        tenant becomes the report mailbox's tenant; afterwards your Global Admin grants mail access.
+      </p>
+      <div>
+        <button
+          type="button"
+          className="btn btn--secondary btn--sm"
+          disabled={start.isPending}
+          onClick={() => {
+            setError(null);
+            start.mutate(undefined, {
+              onSuccess: ({ start_url }) => {
+                window.open(start_url, "yadt-sign-in-test", "width=520,height=680");
+              },
+              onError: (err) => setError(err instanceof ApiError ? err.message : "couldn't start the test"),
+            });
+          }}
+        >
+          Test sign-in with Microsoft
+        </button>
+      </div>
+      {passed && <div className="alert alert--good" style={{ margin: 0 }}>{passed}</div>}
+      {error && <div className="alert alert--critical" style={{ margin: 0 }}>{error}</div>}
     </div>
   );
 }

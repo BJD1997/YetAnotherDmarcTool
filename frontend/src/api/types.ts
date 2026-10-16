@@ -35,6 +35,9 @@ export interface Organization {
   ask_ai_enabled: boolean | null;
   is_demo_read_only: boolean;
   entra_consent_urls: EntraConsentUrls | null;
+  // A Microsoft 365 report mailbox can be connected (with a test sign-in
+  // when the organization doesn't sign in with Microsoft).
+  microsoft_mailbox_available: boolean;
 }
 
 export type DomainMailProfile = "sends_mail" | "receive_only" | "parked";

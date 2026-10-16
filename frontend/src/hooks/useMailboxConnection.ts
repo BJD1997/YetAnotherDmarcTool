@@ -22,9 +22,13 @@ export function useMailboxConnection({ retry = false, ...options }: MailboxConne
 export function useSetMailboxConnection(onSuccess?: () => void, onError?: (error: Error) => void) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (mailbox_address: string) => api.put<MailboxConnectionStatus>("/mailbox-connection", { mailbox_address }),
+    // ticket: from a test sign-in with Microsoft, for organizations that
+    // don't sign in with Microsoft (it names the mailbox's tenant).
+    mutationFn: (body: { mailbox_address: string; ticket?: string }) => api.put<MailboxConnectionStatus>("/mailbox-connection", body),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.mailboxConnection.current });
+      // The mail-access consent links follow the mailbox's tenant.
+      queryClient.invalidateQueries({ queryKey: queryKeys.organization.current });
       queryClient.invalidateQueries({ queryKey: queryKeys.onboarding.status });
       onSuccess?.();
     },
@@ -58,4 +62,10 @@ export function useResyncMailbox(onSuccess?: () => void) {
 
 export function useMailboxJobRuns() {
   return useQuery({ queryKey: queryKeys.mailboxConnection.jobRuns, queryFn: () => api.get<MailboxJobRun[]>("/mailbox-connection/job-runs?limit=15") });
+}
+
+export function useStartMicrosoftMailboxTest() {
+  return useMutation({
+    mutationFn: () => api.post<{ start_url: string }>("/mailbox-connection/microsoft/test"),
+  });
 }

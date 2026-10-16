@@ -28,6 +28,7 @@ const ORG: Organization = {
   rating_window_days: 90,
   ask_ai_enabled: false,
   entra_consent_urls: null,
+  microsoft_mailbox_available: false,
 };
 
 function builderData(overrides: Partial<PolicyBuilderData> = {}): PolicyBuilderData {

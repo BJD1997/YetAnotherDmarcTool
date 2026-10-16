@@ -55,7 +55,8 @@ export default function GeneralTab() {
   return (
     <section>
       {/* Every organization connects one mailbox of its own: Microsoft 365
-          (only with Microsoft sign-in) or any IMAP mailbox. */}
+          (with a tenant test when it doesn't sign in with Microsoft) or any
+          IMAP mailbox. */}
       <h3 className="section-title">Mailbox connection</h3>
       <p className="section-hint">The shared mailbox this organization's DMARC/TLS-RPT reports arrive at.</p>
       <MailboxConnectionSection canManage={canManage} />
