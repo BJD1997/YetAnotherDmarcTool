@@ -183,7 +183,9 @@ export default function Team() {
       </div>
 
       {org && org.sign_in_provider !== "none" && <ShareSignInLink provider={org.sign_in_provider} />}
-      {canManage && <AddLocalTeammate />}
+      {/* Once the organization has a provider, people join through it; the
+          break-glass account is then its only local account. */}
+      {canManage && org?.sign_in_provider === "none" && <AddLocalTeammate />}
 
       {resetLink && <ResetLinkNotice {...resetLink} onDismiss={() => setResetLink(null)} />}
       {notice && <div className="alert alert--good">{notice}</div>}
@@ -217,7 +219,7 @@ export default function Team() {
                       </span>
                       {member.auth_method === "local" && (
                         <span className="badge badge--neutral" style={{ marginLeft: "0.3rem" }}>
-                          local
+                          {member.is_break_glass ? "break-glass" : "local"}
                         </span>
                       )}
                       {member.auth_method === "local" && !member.mfa_enrolled && (
@@ -234,30 +236,35 @@ export default function Team() {
                       <td>
                         {!isSelf && (
                           <div className="chip-row">
-                            <button
-                              className="btn btn--ghost btn--sm"
-                              onClick={() =>
-                                updateMember.mutate({
-                                  id: member.id,
-                                  body: { role: member.role === "org_admin" ? "member" : "org_admin" },
-                                })
-                              }
-                              disabled={updateMember.isPending}
-                            >
-                              {member.role === "org_admin" ? "Demote to member" : "Promote to org admin"}
-                            </button>
-                            <button
-                              className="btn btn--ghost btn--sm"
-                              onClick={() =>
-                                updateMember.mutate({
-                                  id: member.id,
-                                  body: { status: member.status === "active" ? "disabled" : "active" },
-                                })
-                              }
-                              disabled={updateMember.isPending}
-                            >
-                              {member.status === "active" ? "Disable" : "Re-enable"}
-                            </button>
+                            {/* The break-glass account stays an active org admin. */}
+                            {!member.is_break_glass && (
+                              <>
+                                <button
+                                  className="btn btn--ghost btn--sm"
+                                  onClick={() =>
+                                    updateMember.mutate({
+                                      id: member.id,
+                                      body: { role: member.role === "org_admin" ? "member" : "org_admin" },
+                                    })
+                                  }
+                                  disabled={updateMember.isPending}
+                                >
+                                  {member.role === "org_admin" ? "Demote to member" : "Promote to org admin"}
+                                </button>
+                                <button
+                                  className="btn btn--ghost btn--sm"
+                                  onClick={() =>
+                                    updateMember.mutate({
+                                      id: member.id,
+                                      body: { status: member.status === "active" ? "disabled" : "active" },
+                                    })
+                                  }
+                                  disabled={updateMember.isPending}
+                                >
+                                  {member.status === "active" ? "Disable" : "Re-enable"}
+                                </button>
+                              </>
+                            )}
                             {member.auth_method === "local" && (
                               <>
                                 <button

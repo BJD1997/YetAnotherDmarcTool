@@ -20,6 +20,7 @@ export interface AdminOrganization {
   // Becomes org admin on first sign-in; everyone else becomes a member.
   expected_admin_email: string | null;
   has_org_admin: boolean;
+  has_break_glass: boolean;
   created_at: string;
   mailbox_connection: {
     id: string;
@@ -46,6 +47,8 @@ export interface AdminOrgUser {
   display_name: string | null;
   role: "org_admin" | "member";
   auth_method: "entra" | "local" | "google" | "oidc";
+  // The organization's one break-glass account (local, org admin).
+  is_break_glass: boolean;
   status: "active" | "disabled";
   mfa_enrolled: boolean;
   last_login_at: string | null;
@@ -157,12 +160,15 @@ function useInvalidateAdminOrganizations() {
   return () => queryClient.invalidateQueries({ queryKey: queryKeys.admin.organizationsAll });
 }
 
-export function useCreateAdminOrganization(onSuccess?: () => void, onError?: (error: Error) => void) {
+export function useCreateAdminOrganization(
+  onSuccess?: (created: AdminOrganization & { break_glass_setup_link?: string }) => void,
+  onError?: (error: Error) => void,
+) {
   const invalidate = useInvalidateAdminOrganizations();
   return useMutation({
-    mutationFn: (body: { name: string; entra_tenant_id: string | null; expected_admin_email: string | null }) =>
-      api.post<AdminOrganization>("/admin/organizations", body),
-    onSuccess: () => { invalidate(); onSuccess?.(); },
+    mutationFn: (body: { name: string; break_glass_email: string }) =>
+      api.post<AdminOrganization & { break_glass_setup_link?: string }>("/admin/organizations", body),
+    onSuccess: (created) => { invalidate(); onSuccess?.(created); },
     onError,
   });
 }
@@ -227,7 +233,15 @@ export function useAdminResetUser(orgId: string) {
       invalidateOrgs();
     },
   });
-  return { resetPassword, resetMfa, makeOrgAdmin };
+  // Lockout help: another local account becomes the break-glass account.
+  const makeBreakGlass = useMutation({
+    mutationFn: (userId: string) => api.post<AdminOrgUser>(`/admin/organizations/${orgId}/users/${userId}/make-break-glass`),
+    onSuccess: () => {
+      invalidate();
+      invalidateOrgs();
+    },
+  });
+  return { resetPassword, resetMfa, makeOrgAdmin, makeBreakGlass };
 }
 
 export function useDeleteAdminOrganization(orgId: string) {

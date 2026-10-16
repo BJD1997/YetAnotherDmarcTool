@@ -253,14 +253,17 @@ describe("AdminOrganizations", () => {
 
 
 describe("AdminOrganizations expected admin", () => {
-  it("asks for the admin email when a tenant ID is filled in", async () => {
+  it("creates an organization with its break-glass account and shows the setup link", async () => {
     getMock.mockResolvedValue({ organizations: [], has_more: false, summary: { total: 0, active: 0, suspended: 0, orgs_with_job_errors_7d: 0 } });
+    vi.mocked(api.post).mockResolvedValueOnce({ ...org("Acme"), break_glass_setup_link: "https://dmarc.example/set-password?token=abc" });
     renderWithAppProviders(<AdminOrganizations />);
 
-    const adminEmail = await screen.findByPlaceholderText("Admin email");
-    expect(adminEmail).not.toBeRequired();
-    fireEvent.change(screen.getByPlaceholderText("Entra tenant ID (optional)"), { target: { value: "t-1" } });
-    expect(screen.getByPlaceholderText("Admin email (required)")).toBeRequired();
+    fireEvent.change(await screen.findByPlaceholderText("Organization name"), { target: { value: "Acme" } });
+    fireEvent.change(screen.getByPlaceholderText("Break-glass account email"), { target: { value: "keys@acme.example" } });
+    fireEvent.click(screen.getByRole("button", { name: /Create organization/ }));
+
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith("/admin/organizations", { name: "Acme", break_glass_email: "keys@acme.example" }));
+    expect(await screen.findByText("https://dmarc.example/set-password?token=abc")).toBeInTheDocument();
   });
 
   it("flags an organization without an org admin and offers Make org admin", async () => {

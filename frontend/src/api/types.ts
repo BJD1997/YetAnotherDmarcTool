@@ -4,6 +4,8 @@ export interface CurrentUser {
   display_name: string | null;
   role: "org_admin" | "member";
   auth_method: "entra" | "local" | "google" | "oidc";
+  // The organization's one break-glass account (local, org admin).
+  is_break_glass: boolean;
   organization_id: string;
 }
 
@@ -87,6 +89,7 @@ export interface TeamMember {
   role: "org_admin" | "member";
   status: "active" | "disabled";
   auth_method: "entra" | "local" | "google" | "oidc";
+  is_break_glass: boolean;
   mfa_enrolled: boolean;
   last_login_at: string | null;
 }

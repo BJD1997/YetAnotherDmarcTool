@@ -50,7 +50,7 @@ describe("Team credential resets", () => {
 });
 
 describe("Team invites", () => {
-  it("shares the organization's own sign-in link next to adding local teammates", async () => {
+  it("shares the organization's own sign-in link, and adds no local teammates next to a provider", async () => {
     currentOrg.value = { entra_tenant_id: null, sign_in_provider: "google" };
     vi.mocked(api.get).mockImplementation(async (url: string) =>
       url === "/users" ? [] : { login_link: "https://dmarc.example/login/acme", provider: "google" },
@@ -59,7 +59,7 @@ describe("Team invites", () => {
 
     expect(await screen.findByText("https://dmarc.example/login/acme")).toBeInTheDocument();
     expect(screen.getByText(/Google Workspace account/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Generate setup link/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Generate setup link/ })).not.toBeInTheDocument();
     currentOrg.value = { entra_tenant_id: null, sign_in_provider: "none" };
   });
 });

@@ -39,12 +39,18 @@ export default function AdminOrganizations() {
 
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [name, setName] = useState("");
-  const [tenantId, setTenantId] = useState("");
-  const [adminEmail, setAdminEmail] = useState("");
+  const [breakGlassEmail, setBreakGlassEmail] = useState("");
+  const [created, setCreated] = useState<{ name: string; link: string } | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
+  const { copied, copy } = useClipboardFeedback();
 
   const createOrg = useCreateAdminOrganization(
-    () => { setName(""); setTenantId(""); setAdminEmail(""); setCreateError(null); },
+    (org) => {
+      setName("");
+      setBreakGlassEmail("");
+      setCreateError(null);
+      setCreated(org.break_glass_setup_link ? { name: org.name, link: org.break_glass_setup_link } : null);
+    },
     (err) => setCreateError(err instanceof ApiError ? err.message : "failed to create organization"),
   );
 
@@ -60,26 +66,20 @@ export default function AdminOrganizations() {
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            createOrg.mutate({ name, entra_tenant_id: tenantId || null, expected_admin_email: adminEmail || null });
+            setCreated(null);
+            createOrg.mutate({ name, break_glass_email: breakGlassEmail.trim() });
           }}
           className="field-row"
         >
           <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Organization name" required />
           <input
             className="input"
-            value={tenantId}
-            onChange={(e) => setTenantId(e.target.value)}
-            placeholder="Entra tenant ID (optional)"
-            style={{ width: "260px" }}
-          />
-          <input
-            className="input"
             type="email"
-            value={adminEmail}
-            onChange={(e) => setAdminEmail(e.target.value)}
-            placeholder={tenantId ? "Admin email (required)" : "Admin email"}
-            required={!!tenantId}
-            style={{ width: "220px" }}
+            value={breakGlassEmail}
+            onChange={(e) => setBreakGlassEmail(e.target.value)}
+            placeholder="Break-glass account email"
+            required
+            style={{ width: "240px" }}
           />
           <button type="submit" className="btn btn--primary" disabled={createOrg.isPending}>
             <Plus />
@@ -87,10 +87,24 @@ export default function AdminOrganizations() {
           </button>
         </form>
         <p className="section-hint" style={{ marginBottom: 0 }}>
-          Providing the tenant ID now activates the org immediately — the client can then sign in, approve consent,
-          and set their own mailbox from inside their dashboard, no further steps needed here. With a tenant ID, only
-          the person with the admin email becomes org admin when they first sign in; everyone else becomes a member.
+          Every organization starts with its break-glass account: a local account (password and authenticator) that
+          administers it and chooses how its people sign in (Microsoft, Google Workspace or their own provider) in
+          Settings → Sign-in.
         </p>
+        {created && (
+          <div className="alert alert--good" style={{ marginTop: "0.75rem", marginBottom: 0 }}>
+            {created.name} is ready. Share this one-time link with the break-glass account's owner to set its password:
+            <div className="field-row" style={{ marginTop: "0.4rem" }}>
+              <code className="input" style={{ display: "inline-block", maxWidth: "100%", overflow: "auto" }}>
+                {created.link}
+              </code>
+              <button className="btn btn--secondary btn--sm" onClick={() => void copy(created.link)}>
+                {copied ? <Check /> : <Copy />}
+                {copied ? "Copied" : "Copy link"}
+              </button>
+            </div>
+          </div>
+        )}
         {createError && (
           <div className="alert alert--critical" style={{ marginTop: "0.75rem", marginBottom: 0 }}>
             {createError}
@@ -288,7 +302,9 @@ function OrgDetail({ org }: { org: AdminOrganization }) {
 
       {/* Any org without a Microsoft tenant signs in locally — platform admin
           orgs included, whose local admins reach this console through it. */}
-      <CreateLocalUser orgId={org.id} />
+      {(!org.has_break_glass || org.sign_in_provider === "none") && (
+        <CreateLocalUser orgId={org.id} breakGlass={!org.has_break_glass} />
+      )}
 
       <OrgUsersSection orgId={org.id} />
 
@@ -418,7 +434,7 @@ function ExpectedAdminField({ org }: { org: AdminOrganization }) {
 
 function OrgUsersSection({ orgId }: { orgId: string }) {
   const { data: users, isPending } = useAdminOrgUsers(orgId);
-  const { resetPassword, resetMfa, makeOrgAdmin } = useAdminResetUser(orgId);
+  const { resetPassword, resetMfa, makeOrgAdmin, makeBreakGlass } = useAdminResetUser(orgId);
   const { copied, copy } = useClipboardFeedback();
   const [resetLink, setResetLink] = useState<{ email: string; link: string } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -442,6 +458,16 @@ function OrgUsersSection({ orgId }: { orgId: string }) {
     setResetLink(null);
     makeOrgAdmin.mutate(user.id, {
       onSuccess: () => setMessage(`${user.email} is now org admin.`),
+      onError,
+    });
+  }
+
+  function handleMakeBreakGlass(user: AdminOrgUser) {
+    if (!window.confirm(`Make ${user.email} this organization's break-glass account? The current one becomes an ordinary local account.`)) return;
+    setError(null);
+    setResetLink(null);
+    makeBreakGlass.mutate(user.id, {
+      onSuccess: () => setMessage(`${user.email} is now the break-glass account.`),
       onError,
     });
   }
@@ -471,6 +497,11 @@ function OrgUsersSection({ orgId }: { orgId: string }) {
                 <tr key={user.id}>
                   <td>
                     {user.email}
+                    {user.is_break_glass && (
+                      <span className="badge badge--neutral" style={{ marginLeft: "0.4rem" }}>
+                        break-glass
+                      </span>
+                    )}
                     <span className="muted"> · {user.role === "org_admin" ? "org admin" : "member"}</span>
                     {user.status === "disabled" && <span className="muted"> · disabled</span>}
                     {user.auth_method === "entra" && <span className="muted"> · Microsoft</span>}
@@ -487,6 +518,11 @@ function OrgUsersSection({ orgId }: { orgId: string }) {
                     )}
                     {user.auth_method === "local" && (
                       <>
+                        {!user.is_break_glass && (
+                          <button className="btn btn--ghost btn--sm" onClick={() => handleMakeBreakGlass(user)} disabled={makeBreakGlass.isPending}>
+                            Make break-glass
+                          </button>
+                        )}
                         <button className="btn btn--ghost btn--sm" onClick={() => handleResetPassword(user)} disabled={resetPassword.isPending}>
                           Reset password
                         </button>
@@ -573,7 +609,7 @@ function OperatorAccessSection({ org }: { org: AdminOrganization }) {
   );
 }
 
-function CreateLocalUser({ orgId }: { orgId: string }) {
+function CreateLocalUser({ orgId, breakGlass }: { orgId: string; breakGlass: boolean }) {
   const [email, setEmail] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [setupLink, setSetupLink] = useState<string | null>(null);
@@ -597,7 +633,9 @@ function CreateLocalUser({ orgId }: { orgId: string }) {
   return (
     <div style={{ marginTop: "1rem", paddingTop: "0.75rem", borderTop: "1px solid var(--border)" }}>
       <div className="muted" style={{ fontSize: "0.78rem", marginBottom: "0.3rem" }}>
-        No Entra tenant — bootstrap this org's first user
+        {breakGlass
+          ? "No break-glass account yet: create it (a local org admin that chooses how the organization signs in)"
+          : "Add a local user (only while the organization has no sign-in provider)"}
       </div>
       <form
         onSubmit={(e) => {

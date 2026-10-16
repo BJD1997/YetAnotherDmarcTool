@@ -264,6 +264,13 @@ export default function AccountTab() {
 
   return (
     <section>
+      {user?.is_break_glass && (
+        <div className="alert alert--neutral" style={{ marginTop: 0 }}>
+          This is your organization's <strong>break-glass account</strong>: it always signs in with this password and
+          authenticator, and it's the account that chooses how your organization signs in (Settings → Sign-in). Keep its
+          recovery codes somewhere safe.
+        </div>
+      )}
       <h3 className="section-title">Password</h3>
       <p className="section-hint">Changing it signs you out on every other device.</p>
       <ChangePasswordSection />
