@@ -308,7 +308,30 @@
             "visible": true,
             "options": {
               "icon": "Info",
-              "text": "One mailbox in your own Microsoft 365 tenant that gives every domain its own reporting address (mailbox+tag@the mailbox's domain), for organizations without a mailbox of their own. Needs the Entra Mail client from the previous step, with Mail Access consent in this tenant. Fill in both or leave both blank."
+              "text": "Optional. One shared mailbox that gives every domain its own <name>+<tag>@<mailbox domain> reporting address, for organizations without a mailbox of their own. Read from Microsoft 365 (needs the Entra Mail client and the tenant ID), over IMAP, or from Google Workspace (needs the Google service account key in the next step)."
+            }
+          },
+          {
+            "name": "hostedReportsSource",
+            "type": "Microsoft.Common.DropDown",
+            "label": "Hosted mailbox source",
+            "defaultValue": "Microsoft 365",
+            "constraints": {
+              "allowedValues": [
+                {
+                  "label": "Microsoft 365",
+                  "value": "microsoft"
+                },
+                {
+                  "label": "IMAP",
+                  "value": "imap"
+                },
+                {
+                  "label": "Google Workspace",
+                  "value": "google"
+                }
+              ],
+              "required": false
             }
           },
           {
@@ -320,7 +343,8 @@
               "required": false,
               "regex": "^$|^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
               "validationMessage": "A tenant ID looks like 00000000-0000-0000-0000-000000000000."
-            }
+            },
+            "visible": "[equals(steps('hostedMailbox').hostedReportsSource, 'microsoft')]"
           },
           {
             "name": "hostedReportsMailboxAddress",
@@ -340,6 +364,111 @@
               ]
             },
             "toolTip": "Reporting addresses use this mailbox's name and domain, for example reports+a1b2c3@example.com."
+          },
+          {
+            "name": "hostedReportsImapHost",
+            "type": "Microsoft.Common.TextBox",
+            "label": "IMAP server",
+            "defaultValue": "",
+            "visible": "[equals(steps('hostedMailbox').hostedReportsSource, 'imap')]",
+            "constraints": {
+              "required": false
+            }
+          },
+          {
+            "name": "hostedReportsImapPort",
+            "type": "Microsoft.Common.TextBox",
+            "label": "IMAP port",
+            "defaultValue": "993",
+            "visible": "[equals(steps('hostedMailbox').hostedReportsSource, 'imap')]",
+            "constraints": {
+              "required": false
+            }
+          },
+          {
+            "name": "hostedReportsImapSecurity",
+            "type": "Microsoft.Common.DropDown",
+            "label": "IMAP security",
+            "defaultValue": "SSL/TLS",
+            "visible": "[equals(steps('hostedMailbox').hostedReportsSource, 'imap')]",
+            "constraints": {
+              "allowedValues": [
+                {
+                  "label": "SSL/TLS",
+                  "value": "ssl"
+                },
+                {
+                  "label": "STARTTLS",
+                  "value": "starttls"
+                }
+              ],
+              "required": false
+            }
+          },
+          {
+            "name": "hostedReportsImapUsername",
+            "type": "Microsoft.Common.TextBox",
+            "label": "IMAP username",
+            "defaultValue": "",
+            "visible": "[equals(steps('hostedMailbox').hostedReportsSource, 'imap')]",
+            "constraints": {
+              "required": false
+            }
+          },
+          {
+            "name": "hostedReportsImapPassword",
+            "type": "Microsoft.Common.PasswordBox",
+            "label": {
+              "password": "IMAP password",
+              "confirmPassword": "Confirm"
+            },
+            "visible": "[equals(steps('hostedMailbox').hostedReportsSource, 'imap')]",
+            "constraints": {
+              "required": false
+            },
+            "options": {
+              "hideConfirmation": true
+            }
+          },
+          {
+            "name": "hostedReportsImapAuthservId",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Mail server ID (Authentication-Results)",
+            "defaultValue": "",
+            "visible": "[equals(steps('hostedMailbox').hostedReportsSource, 'imap')]",
+            "toolTip": "The first word of the Authentication-Results header your mail server adds. Nothing is read until it is set; the hosted mailbox's sync error in the admin console names the one it found.",
+            "constraints": {
+              "required": false
+            }
+          }
+        ]
+      },
+      {
+        "name": "googleMail",
+        "label": "Google Workspace mailboxes (optional)",
+        "elements": [
+          {
+            "name": "info",
+            "type": "Microsoft.Common.InfoBox",
+            "visible": true,
+            "options": {
+              "icon": "Info",
+              "text": "Optional. To read report mailboxes in Google Workspace (organizations' own, or the hosted mailbox with source Google Workspace): a Google Cloud service account with domain-wide delegation. Paste its JSON key on one line (for example the output of: jq -c . key.json). It is stored in Key Vault."
+            }
+          },
+          {
+            "name": "googleMailServiceAccountJson",
+            "type": "Microsoft.Common.PasswordBox",
+            "label": {
+              "password": "Service account JSON key",
+              "confirmPassword": "Confirm"
+            },
+            "constraints": {
+              "required": false
+            },
+            "options": {
+              "hideConfirmation": true
+            }
           }
         ]
       },
@@ -403,8 +532,16 @@
       "oidcAllowPrivateIssuers": "[steps('signIn').oidcAllowPrivateIssuers]",
       "entraMailClientId": "[steps('entra').entraMailClientId]",
       "entraMailClientSecret": "[steps('entra').entraMailClientSecret]",
-      "hostedReportsTenantId": "[steps('hostedMailbox').hostedReportsTenantId]",
+      "hostedReportsTenantId": "[coalesce(steps('hostedMailbox').hostedReportsTenantId, '')]",
       "hostedReportsMailboxAddress": "[steps('hostedMailbox').hostedReportsMailboxAddress]",
+      "hostedReportsSource": "[coalesce(steps('hostedMailbox').hostedReportsSource, 'microsoft')]",
+      "hostedReportsImapHost": "[coalesce(steps('hostedMailbox').hostedReportsImapHost, '')]",
+      "hostedReportsImapPort": "[coalesce(steps('hostedMailbox').hostedReportsImapPort, '993')]",
+      "hostedReportsImapSecurity": "[coalesce(steps('hostedMailbox').hostedReportsImapSecurity, 'ssl')]",
+      "hostedReportsImapUsername": "[coalesce(steps('hostedMailbox').hostedReportsImapUsername, '')]",
+      "hostedReportsImapPassword": "[coalesce(steps('hostedMailbox').hostedReportsImapPassword, '')]",
+      "hostedReportsImapAuthservId": "[coalesce(steps('hostedMailbox').hostedReportsImapAuthservId, '')]",
+      "googleMailServiceAccountJson": "[steps('googleMail').googleMailServiceAccountJson]",
       "cloudflareZoneId": "[steps('cloudflare').cloudflareZoneId]",
       "cloudflareApiToken": "[steps('cloudflare').cloudflareApiToken]",
       "publicBaseUrlOverride": "[steps('sizing').publicBaseUrlOverride]"

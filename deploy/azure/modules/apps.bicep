@@ -50,6 +50,17 @@ param deployEntraMailSecret bool = false
 // records — the token goes to the api only).
 param hostedReportsTenantId string = ''
 param hostedReportsMailboxAddress string = ''
+param hostedReportsSource string = 'microsoft'
+param hostedReportsImapHost string = ''
+param hostedReportsImapPort string = '993'
+param hostedReportsImapSecurity string = 'ssl'
+param hostedReportsImapUsername string = ''
+param hostedReportsImapFolder string = 'INBOX'
+param hostedReportsImapProcessedFolder string = 'DMARC processed'
+param hostedReportsImapAuthservId string = ''
+param deployHostedImapSecret bool = false
+// Google Workspace report mailboxes: the service account's key (Key Vault).
+param deployGoogleMailSecret bool = false
 param cloudflareZoneId string = ''
 param deployCloudflareSecret bool = false
 
@@ -75,7 +86,7 @@ var starttlsEnv = [
   }
 ]
 
-var hostedReportsEnv = empty(hostedReportsMailboxAddress) ? [] : [
+var hostedReportsEnv = concat(empty(hostedReportsMailboxAddress) ? [] : [
   {
     name: 'HOSTED_REPORTS_TENANT_ID'
     value: hostedReportsTenantId
@@ -84,7 +95,64 @@ var hostedReportsEnv = empty(hostedReportsMailboxAddress) ? [] : [
     name: 'HOSTED_REPORTS_MAILBOX_ADDRESS'
     value: hostedReportsMailboxAddress
   }
-]
+  {
+    name: 'HOSTED_REPORTS_SOURCE'
+    value: hostedReportsSource
+  }
+], deployHostedImapSecret ? [
+  {
+    name: 'HOSTED_REPORTS_IMAP_HOST'
+    value: hostedReportsImapHost
+  }
+  {
+    name: 'HOSTED_REPORTS_IMAP_PORT'
+    value: hostedReportsImapPort
+  }
+  {
+    name: 'HOSTED_REPORTS_IMAP_SECURITY'
+    value: hostedReportsImapSecurity
+  }
+  {
+    name: 'HOSTED_REPORTS_IMAP_USERNAME'
+    value: hostedReportsImapUsername
+  }
+  {
+    name: 'HOSTED_REPORTS_IMAP_PASSWORD'
+    secretRef: 'hosted-imap-password'
+  }
+  {
+    name: 'HOSTED_REPORTS_IMAP_FOLDER'
+    value: hostedReportsImapFolder
+  }
+  {
+    name: 'HOSTED_REPORTS_IMAP_PROCESSED_FOLDER'
+    value: hostedReportsImapProcessedFolder
+  }
+  {
+    name: 'HOSTED_REPORTS_IMAP_AUTHSERV_ID'
+    value: hostedReportsImapAuthservId
+  }
+] : [], deployGoogleMailSecret ? [
+  {
+    name: 'GOOGLE_MAIL_SERVICE_ACCOUNT_JSON'
+    secretRef: 'google-mail-service-account'
+  }
+] : [])
+
+// Key Vault references both apps need for the env above.
+var mailSourceSecrets = concat(deployHostedImapSecret ? [
+  {
+    name: 'hosted-imap-password'
+    keyVaultUrl: '${vaultUri}secrets/hosted-imap-password'
+    identity: identityId
+  }
+] : [], deployGoogleMailSecret ? [
+  {
+    name: 'google-mail-service-account'
+    keyVaultUrl: '${vaultUri}secrets/google-mail-service-account'
+    identity: identityId
+  }
+] : [])
 
 var apiFqdn = '${namePrefix}-api.${envDefaultDomain}'
 var publicBaseUrl = empty(publicBaseUrlOverride) ? 'https://${apiFqdn}' : publicBaseUrlOverride
@@ -128,6 +196,7 @@ var apiSecrets = concat(
       identity: identityId
     }
   ] : [],
+  mailSourceSecrets,
   deployCloudflareSecret ? [
     {
       name: 'cloudflare-api-token'
@@ -318,6 +387,7 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
 // --- worker ---
 
 var workerSecrets = concat(
+  mailSourceSecrets,
   [
     {
       name: 'app-database-url'

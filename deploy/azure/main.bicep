@@ -76,6 +76,34 @@ param entraMailClientSecret string = ''
 // above (with Mail Access consent in this tenant). Both or neither.
 param hostedReportsTenantId string = ''
 param hostedReportsMailboxAddress string = ''
+@description('How the hosted mailbox is read: microsoft (the tenant above), imap or google.')
+@allowed([
+  'microsoft'
+  'imap'
+  'google'
+])
+param hostedReportsSource string = 'microsoft'
+param hostedReportsImapHost string = ''
+param hostedReportsImapPort string = '993'
+@allowed([
+  'ssl'
+  'starttls'
+])
+param hostedReportsImapSecurity string = 'ssl'
+param hostedReportsImapUsername string = ''
+@secure()
+param hostedReportsImapPassword string = ''
+param hostedReportsImapFolder string = 'INBOX'
+param hostedReportsImapProcessedFolder string = 'DMARC processed'
+@description('The hosted IMAP server\'s Authentication-Results ID; nothing is read until it is set.')
+param hostedReportsImapAuthservId string = ''
+
+// --- optional Google Workspace report mailboxes ---
+// A service account with domain-wide delegation (scope gmail.modify): its
+// JSON key. Used for organizations' Google mailboxes and, with
+// hostedReportsSource=google, the hosted mailbox.
+@secure()
+param googleMailServiceAccountJson string = ''
 
 // --- optional Cloudflare (needs the hosted reporting mailbox) ---
 // Creates the DMARC authorization record each domain using a hosted address
@@ -196,7 +224,11 @@ var deployBootstrapSecret = !empty(platformAdminBootstrapPassword)
 var deployEntraSsoSecret = !empty(entraSsoClientId) && !empty(entraSsoClientSecret)
 var deployGoogleSsoSecret = !empty(googleSsoClientId) && !empty(googleSsoClientSecret)
 var deployEntraMailSecret = !empty(entraMailClientId) && !empty(entraMailClientSecret)
-var deployHostedReports = !empty(hostedReportsTenantId) && !empty(hostedReportsMailboxAddress)
+var deployGoogleMailSecret = !empty(googleMailServiceAccountJson)
+var deployHostedReports = !empty(hostedReportsMailboxAddress) && (hostedReportsSource == 'imap'
+  ? (!empty(hostedReportsImapHost) && !empty(hostedReportsImapUsername) && !empty(hostedReportsImapPassword))
+  : hostedReportsSource == 'google' ? deployGoogleMailSecret : !empty(hostedReportsTenantId))
+var deployHostedImapSecret = deployHostedReports && hostedReportsSource == 'imap'
 var deployCloudflareSecret = deployHostedReports && !empty(cloudflareApiToken) && !empty(cloudflareZoneId)
 
 var contributorRoleId = 'b24988ac-6180-42a0-ab88-20f7382dd24c'
@@ -248,6 +280,8 @@ module keyvault 'modules/keyvault.bicep' = {
     cloudflareApiToken: deployCloudflareSecret ? cloudflareApiToken : ''
     entraSsoClientSecret: entraSsoClientSecret
     googleSsoClientSecret: deployGoogleSsoSecret ? googleSsoClientSecret : ''
+    googleMailServiceAccountJson: googleMailServiceAccountJson
+    hostedReportsImapPassword: deployHostedImapSecret ? hostedReportsImapPassword : ''
   }
 }
 
@@ -380,6 +414,16 @@ module apps 'modules/apps.bicep' = {
     deployEntraMailSecret: deployEntraMailSecret
     hostedReportsTenantId: deployHostedReports ? hostedReportsTenantId : ''
     hostedReportsMailboxAddress: deployHostedReports ? hostedReportsMailboxAddress : ''
+    hostedReportsSource: hostedReportsSource
+    hostedReportsImapHost: hostedReportsImapHost
+    hostedReportsImapPort: hostedReportsImapPort
+    hostedReportsImapSecurity: hostedReportsImapSecurity
+    hostedReportsImapUsername: hostedReportsImapUsername
+    hostedReportsImapFolder: hostedReportsImapFolder
+    hostedReportsImapProcessedFolder: hostedReportsImapProcessedFolder
+    hostedReportsImapAuthservId: hostedReportsImapAuthservId
+    deployHostedImapSecret: deployHostedImapSecret
+    deployGoogleMailSecret: deployGoogleMailSecret
     cloudflareZoneId: deployCloudflareSecret ? cloudflareZoneId : ''
     deployCloudflareSecret: deployCloudflareSecret
     enableTestUpdate: enableTestUpdate
