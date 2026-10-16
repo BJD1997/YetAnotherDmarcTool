@@ -13,6 +13,8 @@ from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.repositories.organizations import get_organization
 from app.schemas.organizations import OrganizationUpdateRequest, TrustedReporterRequest
 from app.services.auth.entra_links import entra_consent_urls
+from app.services.gmail.client import SCOPE as GMAIL_SCOPE
+from app.services.gmail.client import GmailError, load_service_account
 
 router = APIRouter(prefix="/organizations", tags=["organizations"])
 
@@ -37,7 +39,19 @@ def _org_out(org: Organization, mailbox_tenant_id=None) -> dict:
         # A Microsoft 365 report mailbox can be connected (with a test
         # sign-in when the organization doesn't sign in with Microsoft).
         "microsoft_mailbox_available": bool(settings.entra_sso_client_id and settings.entra_mail_client_id),
+        # For the Workspace admin's domain-wide delegation step.
+        "google_mailbox": _google_mailbox_out(),
     }
+
+
+def _google_mailbox_out() -> dict | None:
+    try:
+        account = load_service_account()
+    except GmailError:
+        account = None
+    if account is None:
+        return None
+    return {"client_id": account.client_id, "scope": GMAIL_SCOPE}
 
 
 async def _mailbox_tenant(db: AsyncSession, organization_id):

@@ -52,6 +52,7 @@ class SpfAllQualifierMode(str, enum.Enum):
 class MailboxKind(str, enum.Enum):
     microsoft = "microsoft"
     imap = "imap"
+    google = "google"
 
 
 class ImapSecurity(str, enum.Enum):

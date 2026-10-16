@@ -5,6 +5,18 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from app.models.enums import ImapSecurity
 
 
+class GoogleMailboxRequest(BaseModel):
+    mailbox_address: str = Field(max_length=320)
+
+    @field_validator("mailbox_address")
+    @classmethod
+    def _address(cls, value: str) -> str:
+        value = value.strip().lower()
+        if not _ADDRESS_RE.match(value):
+            raise ValueError("not a valid email address")
+        return value
+
+
 class MailboxConnectionSetRequest(BaseModel):
     mailbox_address: str
     # For an organization without Microsoft sign-in: the ticket from a

@@ -13,7 +13,11 @@ from app.models.user import User
 from app.repositories.dmarc_reports import last_report_received_at_for_org
 from app.repositories.mailbox_connections import get_org_mailbox_connection, list_mailbox_job_runs
 from app.repositories.organizations import get_organization
-from app.schemas.mailbox_connections import ImapConnectionRequest, MailboxConnectionSetRequest
+from app.repositories.domains import verified_domain_names
+from app.routers.auth_providers import email_on_domains
+from app.schemas.mailbox_connections import GoogleMailboxRequest, ImapConnectionRequest, MailboxConnectionSetRequest
+from app.services.gmail.client import GmailError
+from app.services.gmail.poll import test_mailbox as test_gmail_mailbox
 from app.routers.sign_in_settings import microsoft_tenant_taken
 from app.services.auth import sign_in_test
 from app.services.auth.session_manager import cookie_kwargs
@@ -216,6 +220,55 @@ async def resync_mailbox_connection(
 
     await _queue_sync(db, user.organization_id, connection.ms_tenant_id)
     return {"status": "resync started"}
+
+
+async def _google_mailbox_checked(db: AsyncSession, organization_id, address: str) -> int:
+    """The mailbox must be on one of the organization's verified domains:
+    the service account can act as anyone in a Workspace that granted it
+    access, so this is what stops one organization from reading another's
+    mailbox. Then signs in as it; returns the inbox's message count."""
+    if not email_on_domains(address, await verified_domain_names(db, organization_id)):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "the mailbox must be on one of your verified domains")
+    try:
+        return await test_gmail_mailbox(address)
+    except GmailError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Couldn't use this mailbox: {exc}") from exc
+
+
+@router.post("/google/test")
+async def test_google_mailbox(
+    body: GoogleMailboxRequest, db: AsyncSession = Depends(get_db), user: User = Depends(require_org_admin)
+) -> dict:
+    messages = await _google_mailbox_checked(db, user.organization_id, body.mailbox_address)
+    return {"ok": True, "messages": messages}
+
+
+@router.put("/google")
+async def set_google_mailbox(
+    body: GoogleMailboxRequest, db: AsyncSession = Depends(get_db), user: User = Depends(require_org_admin)
+) -> dict:
+    """A Google Workspace mailbox as the organization's one report mailbox,
+    replacing any other. Only after a successful connection test."""
+    await _google_mailbox_checked(db, user.organization_id, body.mailbox_address)
+    connection = await get_org_mailbox_connection(db, user.organization_id)
+    if connection is None:
+        connection = MailboxConnection(organization_id=user.organization_id, mailbox_address=body.mailbox_address)
+        db.add(connection)
+    else:
+        _clear_imap(connection)
+    connection.kind = MailboxKind.google
+    connection.mailbox_address = body.mailbox_address
+    connection.ms_tenant_id = None
+    connection.delta_link = None
+    connection.consent_status = ConsentStatus.granted
+    connection.consent_granted_at = datetime.now(timezone.utc)
+    connection.last_sync_status = None
+    connection.last_sync_error = None
+    await db.flush()
+    await db.refresh(connection)
+    await db.commit()
+    await _queue_sync(db, user.organization_id)
+    return _connection_out(connection)
 
 
 def _clear_imap(connection: MailboxConnection) -> None:

@@ -35,7 +35,10 @@ async def list_orgs_with_granted_mailbox_connections(db: AsyncSession) -> Sequen
         select(MailboxConnection.organization_id, MailboxConnection.ms_tenant_id)
         .where(
             MailboxConnection.consent_status == ConsentStatus.granted,
-            or_(MailboxConnection.kind == MailboxKind.imap, MailboxConnection.ms_tenant_id.is_not(None)),
+            or_(
+                MailboxConnection.kind.in_([MailboxKind.imap, MailboxKind.google]),
+                MailboxConnection.ms_tenant_id.is_not(None),
+            ),
         )
     )
     return result.all()

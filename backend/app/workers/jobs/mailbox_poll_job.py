@@ -42,6 +42,7 @@ from app.models.enums import ConsentStatus, JobStatus, JobType, MailboxKind, Syn
 from app.models.job_run import JobRun
 from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.services.graph.mailbox_poller import MessageTooLargeError, fetch_message_raw_mime, fetch_new_message_ids
+from app.services.gmail.poll import poll_gmail_mailbox
 from app.services.imap.poll import poll_imap_mailbox
 from app.services.ingestion import report_writer
 from app.services.ingestion.parsedmarc_adapter import UnparseableReportError, parse_report_email
@@ -101,8 +102,9 @@ async def _do_poll(organization_id: uuid.UUID, tenant_id: str | None) -> None:
             if connection is None or connection.consent_status != ConsentStatus.granted:
                 return
 
-            if connection.kind == MailboxKind.imap:
-                await poll_imap_mailbox(db, organization_id, connection, stats)
+            if connection.kind in (MailboxKind.imap, MailboxKind.google):
+                poll = poll_imap_mailbox if connection.kind == MailboxKind.imap else poll_gmail_mailbox
+                await poll(db, organization_id, connection, stats)
                 connection = await get_org_mailbox_connection(db, organization_id)
                 connection.last_sync_at = datetime.now(timezone.utc)
                 connection.last_sync_status = SyncStatus.success
