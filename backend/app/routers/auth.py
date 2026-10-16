@@ -2,7 +2,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,7 +10,7 @@ from app.config import settings
 from app.db.rls import set_org_context, set_platform_admin_context
 from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user
-from app.models.enums import AuthMethod, OrganizationStatus, SignInResult, UserRole, UserStatus
+from app.models.enums import AuthMethod, OrganizationStatus, SignInResult, UserStatus
 from app.models.mfa_pending_challenge import MfaPendingChallenge
 from app.models.user import User
 from app.models.user_recovery_code import UserRecoveryCode
@@ -20,7 +20,6 @@ from app.repositories.auth import (
     get_organization_by_entra_tenant_id,
     get_password_setup_token,
     get_unused_recovery_code,
-    get_user_by_org_and_entra_object_id,
 )
 from app.repositories.organizations import get_organization
 from app.schemas.auth import (
@@ -37,6 +36,7 @@ from app.services.auth.password import dummy_verify, hash_password, verify_passw
 from app.services.auth.rate_limit import login_limiter, otp_account_limiter, otp_limiter, rate_limiter
 from app.services.auth.session_manager import cookie_kwargs
 from app.services.auth.sign_in_log import client_network_info, record_sign_in_event
+from app.services.auth.sign_in_flow import complete_sign_in, session_redirect
 from app.services.auth.tokens import hash_token, new_opaque_token
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -55,7 +55,7 @@ async def auth_config() -> dict:
 
 
 @router.get("/login")
-async def login() -> RedirectResponse:
+async def login(login_hint: str | None = Query(default=None, max_length=320)) -> RedirectResponse:
     if not settings.entra_sso_client_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND)
 
@@ -65,7 +65,8 @@ async def login() -> RedirectResponse:
     challenge = pkce.derive_challenge(verifier)
 
     auth_url = entra_oidc.build_authorization_url(
-        state=state, nonce=nonce, code_challenge=challenge, redirect_uri=settings.entra_sso_redirect_uri
+        state=state, nonce=nonce, code_challenge=challenge, redirect_uri=settings.entra_sso_redirect_uri,
+        login_hint=login_hint,
     )
     response = RedirectResponse(auth_url, status_code=302)
     short_lived = {**cookie_kwargs(), "max_age": 600}
@@ -135,74 +136,11 @@ async def callback(request: Request, db: AsyncSession = Depends(get_db)) -> Redi
         await db.commit()
         return RedirectResponse("/login?error=organization_not_provisioned", status_code=302)
 
-    # Moved up from after the suspended check below, so that branch gets
-    # correct RLS context for free (real org.id already known here).
-    await set_org_context(db, org.id)
-    if org.status == OrganizationStatus.suspended:
-        await record_sign_in_event(
-            db, result=SignInResult.failure, auth_method=AuthMethod.entra,
-            organization_id=org.id, attempted_email=email, failure_reason="organization_suspended",
-            ip_address=ip_address, user_agent=user_agent,
-        )
-        await db.commit()
-        return RedirectResponse("/login?error=organization_suspended", status_code=302)
-
-    user = await get_user_by_org_and_entra_object_id(db, org.id, object_id)
-
-    if user is None:
-        # Only the expected admin becomes org admin, whichever order people
-        # sign in; without one set, nobody does (the platform admin then
-        # sets it or makes someone admin).
-        expected = (org.expected_admin_email or "").strip().lower()
-        is_expected_admin = bool(expected) and email.strip().lower() == expected
-        user = User(
-            organization_id=org.id,
-            entra_object_id=object_id,
-            email=email,
-            display_name=display_name,
-            role=UserRole.org_admin if is_expected_admin else UserRole.member,
-        )
-        db.add(user)
-        await db.flush()
-    else:
-        if user.status != UserStatus.active:
-            await record_sign_in_event(
-                db, result=SignInResult.failure, auth_method=AuthMethod.entra,
-                organization_id=org.id, user_id=user.id, attempted_email=email, failure_reason="user_disabled",
-                ip_address=ip_address, user_agent=user_agent,
-            )
-            await db.commit()
-            return RedirectResponse("/login?error=user_disabled", status_code=302)
-        user.email = email
-        user.display_name = display_name
-
-    user.last_login_at = datetime.now(timezone.utc)
-
-    _, raw_token = await session_manager.create_user_session(
-        db,
-        user_id=user.id,
-        organization_id=org.id,
-        ip_address=ip_address,
-        user_agent=user_agent,
-    )
-    await record_sign_in_event(
-        db, result=SignInResult.success, auth_method=AuthMethod.entra,
-        organization_id=org.id, user_id=user.id, attempted_email=email,
+    outcome = await complete_sign_in(
+        db, org=org, method=AuthMethod.entra, subject=object_id, email=email, display_name=display_name,
         ip_address=ip_address, user_agent=user_agent,
     )
-    await db.commit()
-
-    response = RedirectResponse("/", status_code=302)
-    response.delete_cookie(_OAUTH_STATE_COOKIE, path="/")
-    response.delete_cookie(_OAUTH_VERIFIER_COOKIE, path="/")
-    response.delete_cookie(_OAUTH_NONCE_COOKIE, path="/")
-    response.set_cookie(
-        settings.session_cookie_name,
-        raw_token,
-        max_age=settings.session_idle_timeout_hours * 3600,
-        **cookie_kwargs(),
-    )
-    return response
+    return session_redirect(outcome, clear_cookies=(_OAUTH_STATE_COOKIE, _OAUTH_VERIFIER_COOKIE, _OAUTH_NONCE_COOKIE))
 
 
 @router.post("/logout")

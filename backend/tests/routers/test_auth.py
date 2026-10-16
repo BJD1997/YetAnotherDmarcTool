@@ -480,3 +480,10 @@ async def test_enrollment_refuses_a_secret_the_server_didnt_hand_out(api):
     for weak in ("AAAA", "a" * 32, "JBSWY3DPEHPK3PXP"):
         response = await client.post("/api/auth/enroll-otp/confirm", json={"secret": weak, "code": "123456"})
         assert response.status_code == 422, weak
+
+
+async def test_microsoft_login_passes_the_email_hint(api, monkeypatch):
+    client, _owner_factory = api
+    monkeypatch.setattr("app.routers.auth.settings.entra_sso_client_id", "client-id")
+    response = await client.get("/api/auth/login", params={"login_hint": "jan@acme.example"}, follow_redirects=False)
+    assert response.status_code == 302 and "login_hint=jan%40acme.example" in response.headers["location"]
