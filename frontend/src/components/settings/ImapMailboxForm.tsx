@@ -23,6 +23,10 @@ export default function ImapMailboxForm({
   const [port, setPort] = useState<number>(current?.port ?? DEFAULT_PORT.ssl);
   const [username, setUsername] = useState(current?.username ?? "");
   const [password, setPassword] = useState("");
+  // Only shown filled in when it differs from the username.
+  const [reportAddress, setReportAddress] = useState(
+    current && current.report_address !== current.username.toLowerCase() ? current.report_address : "",
+  );
   const [folder, setFolder] = useState(current?.folder ?? "INBOX");
   const [processedFolder, setProcessedFolder] = useState(current?.processed_folder ?? "DMARC processed");
   const [authservId, setAuthservId] = useState(current?.authserv_id ?? current?.detected_authserv_id ?? "");
@@ -36,6 +40,7 @@ export default function ImapMailboxForm({
     security,
     username: username.trim(),
     ...(password ? { password } : {}),
+    ...(reportAddress.trim() ? { report_address: reportAddress.trim() } : {}),
     folder: folder.trim(),
     processed_folder: processedFolder.trim(),
     authserv_id: authservId.trim() || null,
@@ -112,6 +117,19 @@ export default function ImapMailboxForm({
           />
         </label>
       </div>
+      <label className="field-label">
+        Report address
+        <input
+          className="input"
+          type="email"
+          value={reportAddress}
+          onChange={(e) => setReportAddress(e.target.value)}
+          placeholder="same as the username"
+        />
+        <span className="section-hint" style={{ margin: 0 }}>
+          The address in your DMARC rua= record. Only needed when you sign in with something else, as with iCloud.
+        </span>
+      </label>
       <div className="field-row">
         <label className="field-label" style={{ flex: "1 1 12rem" }}>
           Reports arrive in

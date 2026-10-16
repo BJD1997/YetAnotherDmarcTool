@@ -235,6 +235,36 @@ async def test_the_stored_password_is_only_reused_for_the_same_server_and_user(a
     assert other.status_code == 400 and "enter the password" in other.text
 
 
+async def test_the_report_address_can_differ_from_the_username(api, server_works):
+    # iCloud signs in with the Apple ID, while reports go to a custom domain.
+    client, owner_factory = api
+    await _admin(client, owner_factory)
+
+    saved = await client.put(
+        "/api/mailbox-connection/imap", json=_body(username="someone@icloud.example", report_address="DMARC@Example.com")
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["mailbox_address"] == "dmarc@example.com"
+    assert saved.json()["imap"]["report_address"] == "dmarc@example.com"
+    assert server_works[-1].username == "someone@icloud.example"
+
+    # Left out: the username is the address.
+    default = await client.put("/api/mailbox-connection/imap", json=_body(password="app-password"))
+    assert default.json()["mailbox_address"] == "reports@mail.example"
+
+
+async def test_a_username_that_isnt_an_address_needs_a_report_address(api, server_works):
+    client, owner_factory = api
+    await _admin(client, owner_factory)
+
+    missing = await client.put("/api/mailbox-connection/imap", json=_body(username="someone"))
+    assert missing.status_code == 400 and "address reports are sent to" in missing.text
+    assert server_works == []
+
+    given = await client.put("/api/mailbox-connection/imap", json=_body(username="someone", report_address="dmarc@example.com"))
+    assert given.status_code == 200 and given.json()["mailbox_address"] == "dmarc@example.com"
+
+
 async def test_settings_that_dont_work_are_not_saved(api, monkeypatch):
     client, owner_factory = api
     await _admin(client, owner_factory)
@@ -258,6 +288,7 @@ async def test_imap_rejects_bad_input(api, server_works):
         _body(security="none"),
         _body(processed_folder="inbox"),
         _body(folder="Ünïcode"),
+        _body(report_address="not an address"),
     ):
         assert (await client.post("/api/mailbox-connection/imap/test", json=bad)).status_code == 422, bad
 

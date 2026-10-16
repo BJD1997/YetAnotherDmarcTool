@@ -27,6 +27,7 @@ def _connection_out(connection: MailboxConnection) -> dict:
             "port": connection.imap_port,
             "security": connection.imap_security.value if connection.imap_security else None,
             "username": connection.imap_username,
+            "report_address": connection.mailbox_address,
             "folder": connection.imap_folder,
             "processed_folder": connection.imap_processed_folder,
             "authserv_id": connection.imap_authserv_id,
@@ -234,15 +235,20 @@ async def set_imap_connection(
     """Saves an IMAP mailbox as the organization's one mailbox, replacing a
     Microsoft 365 one. Only after a successful connection test, so a typo
     doesn't leave the organization with a mailbox that never syncs."""
+    mailbox_address = body.mailbox_address
+    if mailbox_address is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "enter the address reports are sent to: the username isn't an email address"
+        )
     settings = await _imap_settings(db, user.organization_id, body)
     _messages, detected = await _tested(settings)
 
     connection = await get_org_mailbox_connection(db, user.organization_id)
     if connection is None:
-        connection = MailboxConnection(organization_id=user.organization_id, mailbox_address=body.username)
+        connection = MailboxConnection(organization_id=user.organization_id, mailbox_address=mailbox_address)
         db.add(connection)
     connection.kind = MailboxKind.imap
-    connection.mailbox_address = body.username
+    connection.mailbox_address = mailbox_address
     connection.imap_host = settings.host
     connection.imap_port = settings.port
     connection.imap_security = settings.security

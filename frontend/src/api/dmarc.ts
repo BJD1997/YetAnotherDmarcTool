@@ -240,6 +240,8 @@ export interface ImapSettingsOut {
   port: number;
   security: "ssl" | "starttls";
   username: string;
+  // The address reports are sent to (the DMARC rua= target).
+  report_address: string;
   folder: string;
   processed_folder: string;
   // The mail server's Authentication-Results ID the sender check trusts;
@@ -256,6 +258,8 @@ export interface ImapSettingsIn {
   username: string;
   // Left out: keep the stored password (same server and user only).
   password?: string;
+  // Left out: the username is the address reports are sent to.
+  report_address?: string;
   folder: string;
   processed_folder: string;
   authserv_id: string | null;
