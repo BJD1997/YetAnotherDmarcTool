@@ -4,11 +4,11 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import HTMLResponse, JSONResponse
-from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.db.rls import set_platform_admin_context
 from app.db.session import get_db
 from app.middleware.tenant_context import (
     AdminPrincipal,
@@ -16,7 +16,7 @@ from app.middleware.tenant_context import (
     get_current_platform_admin,
     get_current_platform_admin_local,
 )
-from app.models.enums import AuthMethod, ConsentStatus, JobStatus, JobType, OrganizationStatus, SignInResult, UserRole
+from app.models.enums import AuthMethod, ConsentStatus, JobStatus, JobType, OrganizationStatus, SignInResult, UserRole, UserStatus
 from app.models.mailbox_connection import MailboxConnection
 from app.models.organization import Organization
 from app.models.platform_admin import PlatformAdmin
@@ -39,7 +39,7 @@ from app.repositories.platform_admin import (
     org_summary_stats,
 )
 from app.repositories.sign_in_events import list_platform_admin_sign_in_events
-from app.repositories.users import count_org_admins, get_user_in_org, list_users_for_org
+from app.repositories.users import count_org_admins, get_break_glass_user, get_user_in_org, list_users_for_org
 from app.schemas.platform_admin import (
     AdminEnrollOtpConfirmRequest,
     AdminLoginRequest,
@@ -59,7 +59,6 @@ from app.services.auth.session_manager import cookie_kwargs
 from app.services.auth.sign_in_log import client_network_info, record_sign_in_event
 from app.routers.sign_in_events import sign_in_event_out
 from app.services.auth.tokens import hash_token, new_opaque_token
-from app.services.organizations.slug import unique_slug
 from app.services.cloudflare.dns_provisioner import release_authorization_records
 
 router = APIRouter(prefix="/admin", tags=["platform-admin"])
@@ -101,6 +100,7 @@ async def _org_out(db: AsyncSession, org: Organization, aggregates: dict | None 
         "is_operator": org.is_operator,
         "expected_admin_email": org.expected_admin_email,
         "has_org_admin": await count_org_admins(db, org.id) > 0,
+        "has_break_glass": await get_break_glass_user(db, org.id) is not None,
         "created_at": org.created_at.isoformat(),
         "mailbox_connection": await _mailbox_out(db, org.id),
         "entra_consent_urls": entra_consent_urls(org),
@@ -510,9 +510,7 @@ async def _apply_sign_in_fields(db: AsyncSession, org: Organization, body, *, cr
         if other is not None and other.id != org.id:
             raise HTTPException(status.HTTP_409_CONFLICT, "that sign-in link name is taken")
         org.slug = body.slug
-    elif creating and body.slug is None:
-        taken = set((await db.execute(select(Organization.slug))).scalars())
-        org.slug = unique_slug(org.name, taken)
+    # Left out on create: the model's random default.
 
 
 @router.post("/organizations", status_code=status.HTTP_201_CREATED)
@@ -530,7 +528,15 @@ async def create_organization(
     db.add(org)
     await _commit_org(db)
     await db.refresh(org)
-    return await _org_out(db, org)
+    out = await _org_out(db, org)
+    if body.break_glass_email is not None:
+        # The commit above ended the transaction, and with it the
+        # platform-admin context users' row-level security needs.
+        await set_platform_admin_context(db, is_admin=True)
+        user, setup_link = await _add_local_user(db, org, LocalUserCreateRequest(email=body.break_glass_email))
+        await db.commit()
+        out = {**out, "has_break_glass": True, "break_glass_setup_link": setup_link}
+    return out
 
 
 @router.get("/organizations/names")
@@ -636,6 +642,7 @@ def _local_user_out(user: User) -> dict:
         "display_name": user.display_name,
         "role": user.role.value,
         "auth_method": user.auth_method.value,
+        "is_break_glass": user.is_break_glass,
     }
 
 
@@ -667,7 +674,7 @@ async def _resettable_user(db: AsyncSession, admin: AdminPrincipal, org_id: uuid
     if target is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
     if target.auth_method != AuthMethod.local:
-        raise HTTPException(status.HTTP_409_CONFLICT, "this user signs in with Microsoft — reset it in Entra instead")
+        raise HTTPException(status.HTTP_409_CONFLICT, "this user signs in through the organization's provider — reset it there instead")
     if admin.auth_type == "operator_org" and target.id == admin.id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "use Settings → Account to change your own sign-in")
     return target
@@ -744,13 +751,28 @@ async def create_local_user(
     org = await get_organization(db, org_id)
     if org is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "organization not found")
+    user, setup_link = await _add_local_user(db, org, body)
+    await db.commit()
+    return {**_local_user_out(user), "setup_link": setup_link}
 
+
+async def _add_local_user(db: AsyncSession, org: Organization, body: LocalUserCreateRequest) -> tuple[User, str]:
+    """The organization's first local account becomes its break-glass
+    account (org admin). More local accounts only while the organization
+    has no sign-in provider."""
+    is_break_glass = await get_break_glass_user(db, org.id) is None
+    if not is_break_glass and org.sign_in_provider != "none":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "this organization signs in through its provider and already has its break-glass account",
+        )
     user = User(
-        organization_id=org_id,
+        organization_id=org.id,
         auth_method=AuthMethod.local,
         email=body.email,
         display_name=body.display_name,
-        role=body.role,
+        role=UserRole.org_admin if is_break_glass else body.role,
+        is_break_glass=is_break_glass,
     )
     db.add(user)
     try:
@@ -766,9 +788,34 @@ async def create_local_user(
     # (see app/db/rls.py's own docstring on this exact gotcha).
     await db.flush()
     await db.refresh(user)
-    await db.commit()
+    return user, setup_link
 
-    return {**_local_user_out(user), "setup_link": setup_link}
+
+@router.post("/organizations/{org_id}/users/{user_id}/make-break-glass")
+async def make_break_glass(
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin: AdminPrincipal = Depends(get_current_platform_admin),
+) -> dict:
+    """Lockout help: another local account of the organization becomes its
+    break-glass account (an active org admin); the previous one stays an
+    ordinary local account."""
+    target = await _resettable_user(db, admin, org_id, user_id)
+    current = await get_break_glass_user(db, org_id)
+    if current is not None and current.id != target.id:
+        current.is_break_glass = False
+        await db.flush()
+    target.is_break_glass = True
+    target.role = UserRole.org_admin
+    target.status = UserStatus.active
+    await account_reset.log_account_change(db, request, target, "made_break_glass_by_platform_admin", actor_email=admin.email)
+    await db.flush()
+    await db.refresh(target)
+    out = _local_user_out(target)
+    await db.commit()
+    return out
 
 
 @router.patch("/organizations/{org_id}/mailbox-connection")

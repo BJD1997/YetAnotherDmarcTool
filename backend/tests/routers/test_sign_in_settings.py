@@ -133,13 +133,11 @@ async def test_a_microsoft_org_cant_add_its_own_provider(api, fake_provider):
 async def test_platform_admin_sets_a_provider_and_only_one(api):
     client, owner_factory = api
     await login_as_platform_admin(client, owner_factory)
-    created = await client.post(
-        "/api/admin/organizations",
-        json={"name": "Acme B.V.", "google_workspace_domain": "Acme.example", "expected_admin_email": "boss@acme.example"},
-    )
+    created = await client.post("/api/admin/organizations", json={"name": "Acme B.V.", "google_workspace_domain": "Acme.example"})
     assert created.status_code == 201, created.text
     org = created.json()
-    assert (org["slug"], org["sign_in_provider"], org["google_workspace_domain"]) == ("acme-b-v", "google", "acme.example")
+    assert (org["sign_in_provider"], org["google_workspace_domain"]) == ("google", "acme.example")
+    assert len(org["slug"]) == 10 and "acme" not in org["slug"]
 
     both = await client.patch(
         f"/api/admin/organizations/{org['id']}",
@@ -156,11 +154,12 @@ async def test_platform_admin_sets_a_provider_and_only_one(api):
     assert "\"s\"" not in switched.text
 
 
-async def test_platform_admin_slugs_are_unique(api):
+async def test_platform_admin_slugs_are_random_unless_chosen_and_unique(api):
     client, owner_factory = api
     await login_as_platform_admin(client, owner_factory)
     first = (await client.post("/api/admin/organizations", json={"name": "Acme"})).json()
     second = (await client.post("/api/admin/organizations", json={"name": "Acme"})).json()
-    assert (first["slug"], second["slug"]) == ("acme", "acme-2")
+    assert first["slug"] != second["slug"]
+    assert (await client.patch(f"/api/admin/organizations/{first['id']}", json={"slug": "acme"})).json()["slug"] == "acme"
     taken = await client.patch(f"/api/admin/organizations/{second['id']}", json={"slug": "acme"})
     assert taken.status_code == 409

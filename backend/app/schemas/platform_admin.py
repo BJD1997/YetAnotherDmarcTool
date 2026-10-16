@@ -34,7 +34,8 @@ class _SignInFields(BaseModel):
     oidc_client_id: str | None = Field(default=None, max_length=255)
     # Left out on an update: keep the stored secret.
     oidc_client_secret: str | None = Field(default=None, max_length=1024)
-    # With a sign-in provider: the one person who becomes org admin.
+    # Optional: this person becomes org admin on their first sign-in
+    # through the provider (otherwise the break-glass account promotes).
     expected_admin_email: EmailStr | None = None
 
     @field_validator("google_workspace_domain")
@@ -50,12 +51,9 @@ class _SignInFields(BaseModel):
 
 class OrganizationCreateRequest(_SignInFields):
     name: str
-
-    @model_validator(mode="after")
-    def admin_email_with_a_provider(self) -> "OrganizationCreateRequest":
-        if (self.entra_tenant_id or self.google_workspace_domain or self.oidc_issuer) and self.expected_admin_email is None:
-            raise ValueError("enter the admin's email address: with a sign-in provider, only they become org admin")
-        return self
+    # The organization's break-glass account: local, org admin, and the one
+    # that chooses the organization's sign-in provider. Gets a setup link.
+    break_glass_email: EmailStr | None = None
 
 
 class OrganizationUpdateRequest(_SignInFields):

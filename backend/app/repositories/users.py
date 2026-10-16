@@ -33,3 +33,10 @@ async def count_org_admins(db: AsyncSession, organization_id: UUID) -> int:
         select(func.count()).select_from(User).where(User.organization_id == organization_id, User.role == UserRole.org_admin)
     )
     return result.scalar_one()
+
+
+async def get_break_glass_user(db: AsyncSession, organization_id: UUID) -> User | None:
+    result = await db.execute(
+        select(User).where(User.organization_id == organization_id, User.is_break_glass.is_(True))
+    )
+    return result.scalar_one_or_none()

@@ -294,17 +294,49 @@ async def test_create_local_user_for_org(api):
     assert "setup_link" in body
 
 
-async def test_create_local_user_works_in_an_entra_org(api):
+async def test_an_entra_org_gets_one_break_glass_account_and_no_more_locals(api):
     client, owner_factory = api
     await login_as_platform_admin(client, owner_factory)
     entra_tenant_id = str(uuid.uuid4())
-    org_id = (
-        await client.post("/api/admin/organizations", json={"name": "Entra Org", "entra_tenant_id": entra_tenant_id, "expected_admin_email": "admin@example.com"})
-    ).json()["id"]
+    org_id = (await client.post("/api/admin/organizations", json={"name": "Entra Org", "entra_tenant_id": entra_tenant_id})).json()["id"]
 
-    response = await client.post(f"/api/admin/organizations/{org_id}/users", json={"email": "someone@example.com"})
+    first = await client.post(f"/api/admin/organizations/{org_id}/users", json={"email": "keys@example.com", "role": "member"})
+    assert first.status_code == 201, first.text
+    assert first.json()["is_break_glass"] is True and first.json()["role"] == "org_admin"
 
-    assert response.status_code == 201, response.text
+    second = await client.post(f"/api/admin/organizations/{org_id}/users", json={"email": "someone@example.com"})
+    assert second.status_code == 409
+
+
+async def test_creating_an_org_with_its_break_glass_account(api):
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+    created = await client.post("/api/admin/organizations", json={"name": "New Org", "break_glass_email": "keys@new.example"})
+    assert created.status_code == 201, created.text
+    assert created.json()["has_break_glass"] is True and "token=" in created.json()["break_glass_setup_link"]
+    users = (await client.get(f"/api/admin/organizations/{created.json()['id']}/users")).json()
+    assert [(u["email"], u["is_break_glass"], u["role"]) for u in users] == [("keys@new.example", True, "org_admin")]
+
+
+async def test_a_local_org_keeps_adding_teammates(api):
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+    org_id = (await client.post("/api/admin/organizations", json={"name": "Local Org", "break_glass_email": "keys@local.example"})).json()["id"]
+    teammate = await client.post(f"/api/admin/organizations/{org_id}/users", json={"email": "two@local.example", "role": "member"})
+    assert teammate.status_code == 201 and teammate.json()["is_break_glass"] is False
+
+
+async def test_platform_admin_can_move_the_break_glass_to_another_local_account(api):
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+    org_id = (await client.post("/api/admin/organizations", json={"name": "Local Org", "break_glass_email": "keys@local.example"})).json()["id"]
+    two = (await client.post(f"/api/admin/organizations/{org_id}/users", json={"email": "two@local.example", "role": "member"})).json()
+
+    moved = await client.post(f"/api/admin/organizations/{org_id}/users/{two['id']}/make-break-glass")
+    assert moved.status_code == 200, moved.text
+    users = {u["email"]: u for u in (await client.get(f"/api/admin/organizations/{org_id}/users")).json()}
+    assert users["two@local.example"]["is_break_glass"] is True and users["two@local.example"]["role"] == "org_admin"
+    assert users["keys@local.example"]["is_break_glass"] is False
 
 
 async def test_platform_admin_can_only_change_mailbox_consent(api):
@@ -716,13 +748,14 @@ async def test_admin_sign_in_events_filter_by_date_range(api):
     assert [e["email"] for e in response.json()["events"]] == ["inside@example.com"]
 
 
-async def test_microsoft_organizations_need_an_admin_email(api):
+async def test_the_admin_email_is_optional_and_kept_lowercase(api):
+    # The break-glass account promotes people; an admin email is optional.
     client, owner_factory = api
     await login_as_platform_admin(client, owner_factory)
     tenant = str(uuid.uuid4())
 
-    missing = await client.post("/api/admin/organizations", json={"name": "No Admin Org", "entra_tenant_id": tenant})
-    assert missing.status_code == 422
+    without = await client.post("/api/admin/organizations", json={"name": "No Admin Org", "entra_tenant_id": str(uuid.uuid4())})
+    assert without.status_code == 201
 
     created = await client.post(
         "/api/admin/organizations",

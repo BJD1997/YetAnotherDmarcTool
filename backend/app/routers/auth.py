@@ -184,6 +184,7 @@ async def me(user: User = Depends(get_current_user)) -> dict:
         "display_name": user.display_name,
         "role": user.role.value,
         "auth_method": user.auth_method.value,
+        "is_break_glass": user.is_break_glass,
         "organization_id": str(user.organization_id),
     }
 
