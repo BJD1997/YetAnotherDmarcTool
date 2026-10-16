@@ -1,5 +1,6 @@
 import { Route, Routes } from "react-router-dom";
 import Login from "./pages/Login";
+import LoginOrg from "./pages/LoginOrg";
 import SetPassword from "./pages/SetPassword";
 import AdminLogin from "./pages/admin/AdminLogin";
 import AdminOrganizations from "./pages/admin/AdminOrganizations";
@@ -32,6 +33,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route path="/login/:slug" element={<LoginOrg />} />
       <Route path="/set-password" element={<SetPassword />} />
       <Route path="/admin/login" element={<AdminLogin />} />
       <Route
