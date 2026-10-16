@@ -13,7 +13,11 @@ from app.services.jobs.advisory_lock import try_advisory_lock
 
 logger = logging.getLogger(__name__)
 
-VERIFICATION_LABEL = "_dmarc-dashboard-verify"
+VERIFICATION_LABEL = "_yadt-verify"
+# The name from before the rebrand. Only pending domains are checked (a
+# verified domain is never re-checked), so this only matters for a domain
+# whose record was published under the old name and isn't verified yet.
+LEGACY_VERIFICATION_LABEL = "_dmarc-dashboard-verify"
 
 
 def verification_record_name(domain_name: str) -> str:
@@ -21,8 +25,11 @@ def verification_record_name(domain_name: str) -> str:
 
 
 async def verify_domain_ownership(domain_name: str, token: str) -> bool:
-    values = await resolve_txt(verification_record_name(domain_name))
-    return any(token in value for value in values)
+    for label in (VERIFICATION_LABEL, LEGACY_VERIFICATION_LABEL):
+        values = await resolve_txt(f"{label}.{domain_name}")
+        if any(token in value for value in values):
+            return True
+    return False
 
 
 async def apply_domain_verification(db: AsyncSession, domain: Domain) -> bool:
