@@ -131,10 +131,16 @@ async def set_mailbox_connection(
     silently pretending to have succeeded. The sync itself runs on the
     worker (see _queue_sync)."""
     org = await get_organization(db, user.organization_id)
-    if org.entra_tenant_id is None:
+    connection = await get_org_mailbox_connection(db, user.organization_id)
+    # The mailbox's own tenant: the organization's Microsoft sign-in tenant,
+    # or the one this mailbox already had (the organization may have moved
+    # its sign-in elsewhere since).
+    tenant_id = org.entra_tenant_id or (
+        connection.ms_tenant_id if connection is not None and connection.kind == MailboxKind.microsoft else None
+    )
+    if tenant_id is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "organization has no Entra tenant ID set yet — contact your platform administrator")
 
-    connection = await get_org_mailbox_connection(db, user.organization_id)
     if connection is None:
         connection = MailboxConnection(organization_id=user.organization_id, mailbox_address=body.mailbox_address)
         db.add(connection)
@@ -152,6 +158,7 @@ async def set_mailbox_connection(
         connection.mailbox_address = body.mailbox_address
         connection.delta_link = None
 
+    connection.ms_tenant_id = tenant_id
     connection.consent_status = ConsentStatus.granted
     connection.consent_granted_at = datetime.now(timezone.utc)
 
@@ -159,7 +166,7 @@ async def set_mailbox_connection(
     await db.refresh(connection)
     await db.commit()
 
-    await _queue_sync(db, org.id, org.entra_tenant_id)
+    await _queue_sync(db, org.id, tenant_id)
 
     return _connection_out(connection)
 
@@ -173,11 +180,10 @@ async def resync_mailbox_connection(
     if connection is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no mailbox connection configured for your organization yet")
 
-    org = await get_organization(db, user.organization_id)
-    if connection.kind == MailboxKind.microsoft and org.entra_tenant_id is None:
+    if connection.kind == MailboxKind.microsoft and connection.ms_tenant_id is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "organization has no Entra tenant ID set")
 
-    await _queue_sync(db, org.id, org.entra_tenant_id)
+    await _queue_sync(db, user.organization_id, connection.ms_tenant_id)
     return {"status": "resync started"}
 
 

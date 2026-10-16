@@ -8,7 +8,6 @@ from app.models.enums import ConsentStatus, JobType, MailboxKind
 from app.models.hosted_reports_poll_state import HostedReportsPollState
 from app.models.job_run import JobRun
 from app.models.mailbox_connection import MailboxConnection
-from app.models.organization import Organization
 
 
 async def get_org_mailbox_connection(db: AsyncSession, organization_id: UUID) -> MailboxConnection | None:
@@ -27,16 +26,16 @@ async def list_mailbox_job_runs(db: AsyncSession, organization_id: UUID, *, limi
 
 
 async def list_orgs_with_granted_mailbox_connections(db: AsyncSession) -> Sequence:
-    """(organization_id, entra_tenant_id) for every org with a granted
-    mailbox connection — the worker's own job-registration list, cross-org
-    by design (see app/workers/scheduler.py's _enqueue_mailbox_polls). An
-    IMAP mailbox needs no tenant; a Microsoft 365 one does."""
+    """(organization_id, tenant_id) for every org with a granted mailbox
+    connection — the worker's own job-registration list, cross-org by
+    design (see app/workers/scheduler.py's _enqueue_mailbox_polls). An IMAP
+    mailbox needs no tenant; a Microsoft 365 one uses its own (not the
+    organization's sign-in, which may have moved elsewhere)."""
     result = await db.execute(
-        select(Organization.id, Organization.entra_tenant_id)
-        .join(MailboxConnection, MailboxConnection.organization_id == Organization.id)
+        select(MailboxConnection.organization_id, MailboxConnection.ms_tenant_id)
         .where(
             MailboxConnection.consent_status == ConsentStatus.granted,
-            or_(MailboxConnection.kind == MailboxKind.imap, Organization.entra_tenant_id.is_not(None)),
+            or_(MailboxConnection.kind == MailboxKind.imap, MailboxConnection.ms_tenant_id.is_not(None)),
         )
     )
     return result.all()
