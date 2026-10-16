@@ -109,6 +109,12 @@ class Settings(BaseSettings):
     entra_sso_client_id: str | None = None
     entra_sso_client_secret: str | None = None
 
+    # OpenID Connect providers on a private address (10.x, 192.168.x, ...)
+    # are refused unless this is on: an org admin could otherwise make the
+    # server contact internal addresses. Turn on only when every
+    # organization on this server is trusted. Also allows http:// issuers.
+    oidc_allow_private_issuers: bool = False
+
     # Bootstraps the first platform_admins row if the table is empty
     # (see app/scripts/bootstrap_platform_admin.py, run by the `migrate` container).
     platform_admin_bootstrap_email: str | None = None
