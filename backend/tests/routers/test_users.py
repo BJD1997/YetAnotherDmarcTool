@@ -26,14 +26,14 @@ async def test_create_local_user_requires_admin(api):
     assert response.status_code == 403
 
 
-async def test_create_local_user_rejects_entra_org(api):
+async def test_create_local_user_works_next_to_a_sign_in_provider(api):
     client, owner_factory = api
     _org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin, entra=True)
     await login_as(client, owner_factory, user)
 
     response = await client.post("/api/users", json={"email": "new@example.com"})
 
-    assert response.status_code == 409
+    assert response.status_code == 201, response.text
 
 
 async def test_create_local_user(api):

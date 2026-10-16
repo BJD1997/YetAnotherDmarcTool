@@ -178,7 +178,7 @@ async def oidc_callback(request: Request, db: AsyncSession = Depends(get_db)) ->
     if cookies is None or not cookies.org_id:
         return await _failure(db, request, method, "invalid_state")
     if cookies.mode == "test":
-        from app.routers.organizations import finish_oidc_test
+        from app.routers.sign_in_settings import finish_oidc_test  # imports this module
 
         return await finish_oidc_test(request, db, cookies)
 

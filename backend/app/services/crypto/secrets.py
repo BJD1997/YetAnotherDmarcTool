@@ -41,6 +41,11 @@ def _fernet() -> MultiFernet:
     return MultiFernet([Fernet(key) for key in keys])
 
 
+def fernet() -> MultiFernet:
+    """For short-lived encrypted tokens with a TTL (see auth/oidc_test.py)."""
+    return _fernet()
+
+
 def encrypt_secret(plaintext: str) -> bytes:
     return _fernet().encrypt(plaintext.encode("utf-8"))
 

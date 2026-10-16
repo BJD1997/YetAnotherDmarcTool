@@ -294,7 +294,7 @@ async def test_create_local_user_for_org(api):
     assert "setup_link" in body
 
 
-async def test_create_local_user_rejects_entra_org(api):
+async def test_create_local_user_works_in_an_entra_org(api):
     client, owner_factory = api
     await login_as_platform_admin(client, owner_factory)
     entra_tenant_id = str(uuid.uuid4())
@@ -304,7 +304,7 @@ async def test_create_local_user_rejects_entra_org(api):
 
     response = await client.post(f"/api/admin/organizations/{org_id}/users", json={"email": "someone@example.com"})
 
-    assert response.status_code == 409
+    assert response.status_code == 201, response.text
 
 
 async def test_platform_admin_can_only_change_mailbox_consent(api):

@@ -8,7 +8,6 @@ from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user, require_org_admin
 from app.models.enums import AuthMethod, UserRole, UserStatus
 from app.models.user import User
-from app.repositories.organizations import get_organization
 from app.repositories.users import get_user_in_org, list_users_for_org
 from app.schemas.users import LocalUserCreateRequest, UserUpdateRequest
 from app.services.auth import account_reset, session_manager
@@ -41,16 +40,11 @@ async def create_local_user(
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_org_admin),
 ) -> dict:
-    """Lets a local-auth org's own admin add teammates the same way a
-    platform admin bootstraps that org's first user (see
-    platform_admin.create_local_user) — gives local-auth orgs the same
-    "admin shares a link, no operator involvement per teammate" parity
-    Entra orgs already have via Team.tsx's ShareSignInLink."""
-    org = await get_organization(db, admin.organization_id)
-    if org is None or org.entra_tenant_id is not None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "this organization uses Entra SSO — teammates join by signing in, not manual creation"
-        )
+    """Lets an org admin add a local teammate the same way a platform admin
+    bootstraps an organization's first user (see
+    platform_admin.create_local_user): a one-time link the admin shares."""
+    # Local accounts work in every organization, next to any sign-in
+    # provider: someone without an account at the provider still gets in.
 
     new_user = User(
         organization_id=admin.organization_id,

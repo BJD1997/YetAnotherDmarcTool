@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import HTMLResponse, JSONResponse
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +23,7 @@ from app.models.platform_admin import PlatformAdmin
 from app.models.platform_admin_mfa_pending_challenge import PlatformAdminMfaPendingChallenge
 from app.models.platform_admin_recovery_code import PlatformAdminRecoveryCode
 from app.models.user import User
+from app.repositories.auth import get_organization_by_google_domain, get_organization_by_slug
 from app.repositories.domains import list_hosted_domain_names_for_org
 from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.repositories.organizations import get_organization
@@ -49,7 +51,7 @@ from app.schemas.platform_admin import (
     OrganizationCreateRequest,
     OrganizationUpdateRequest,
 )
-from app.services.auth import account_reset, session_manager, totp
+from app.services.auth import account_reset, oidc, session_manager, totp
 from app.services.auth.rate_limit import login_limiter, otp_account_limiter, otp_limiter, rate_limiter
 from app.services.auth.entra_links import entra_consent_urls
 from app.services.auth.password import dummy_verify, hash_password, verify_password
@@ -57,6 +59,7 @@ from app.services.auth.session_manager import cookie_kwargs
 from app.services.auth.sign_in_log import client_network_info, record_sign_in_event
 from app.routers.sign_in_events import sign_in_event_out
 from app.services.auth.tokens import hash_token, new_opaque_token
+from app.services.organizations.slug import unique_slug
 from app.services.cloudflare.dns_provisioner import release_authorization_records
 
 router = APIRouter(prefix="/admin", tags=["platform-admin"])
@@ -88,6 +91,12 @@ async def _org_out(db: AsyncSession, org: Organization, aggregates: dict | None 
         "id": str(org.id),
         "name": org.name,
         "entra_tenant_id": str(org.entra_tenant_id) if org.entra_tenant_id else None,
+        "sign_in_provider": org.sign_in_provider,
+        "slug": org.slug,
+        "google_workspace_domain": org.google_workspace_domain,
+        "oidc_issuer": org.oidc_issuer,
+        "oidc_client_id": org.oidc_client_id,
+        "oidc_secret_set": bool(org.oidc_client_secret),
         "status": org.status.value,
         "is_operator": org.is_operator,
         "expected_admin_email": org.expected_admin_email,
@@ -464,6 +473,48 @@ async def _commit_org(db: AsyncSession) -> None:
         raise HTTPException(status.HTTP_409_CONFLICT, "that Microsoft tenant ID is already used by another organization")
 
 
+async def _apply_sign_in_fields(db: AsyncSession, org: Organization, body, *, creating: bool) -> None:
+    """Applies the sign-in provider and link fields that were sent (null
+    clears one) and refuses combinations that can't work: at most one
+    provider, complete OIDC settings, unique Workspace domains and links."""
+    sent = body.model_fields_set
+    if "entra_tenant_id" in sent:
+        org.entra_tenant_id = body.entra_tenant_id
+    if "google_workspace_domain" in sent:
+        domain = body.google_workspace_domain
+        if domain is not None:
+            other = await get_organization_by_google_domain(db, domain)
+            if other is not None and other.id != org.id:
+                raise HTTPException(status.HTTP_409_CONFLICT, "another organization already uses this Google Workspace")
+        org.google_workspace_domain = domain
+    if "oidc_issuer" in sent:
+        if body.oidc_issuer is None:
+            org.oidc_issuer = org.oidc_client_id = org.oidc_client_secret = None
+        else:
+            try:
+                issuer = oidc.normalize_issuer(body.oidc_issuer, allow_private=settings.oidc_allow_private_issuers)
+            except oidc.OidcError as exc:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+            client_id = (body.oidc_client_id or org.oidc_client_id or "").strip()
+            # Without a new secret, the stored one stays only for the same provider and app.
+            same_app = issuer == org.oidc_issuer and client_id == org.oidc_client_id
+            secret = body.oidc_client_secret or (org.oidc_client_secret if same_app else None)
+            if not client_id or not secret:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "enter the issuer, client ID and client secret")
+            org.oidc_issuer, org.oidc_client_id, org.oidc_client_secret = issuer, client_id, secret
+    if sum(1 for v in (org.entra_tenant_id, org.google_workspace_domain, org.oidc_issuer) if v) > 1:
+        raise HTTPException(status.HTTP_409_CONFLICT, "an organization signs in with one provider: clear the other first")
+
+    if body.slug is not None and body.slug != org.slug:
+        other = await get_organization_by_slug(db, body.slug)
+        if other is not None and other.id != org.id:
+            raise HTTPException(status.HTTP_409_CONFLICT, "that sign-in link name is taken")
+        org.slug = body.slug
+    elif creating and body.slug is None:
+        taken = set((await db.execute(select(Organization.slug))).scalars())
+        org.slug = unique_slug(org.name, taken)
+
+
 @router.post("/organizations", status_code=status.HTTP_201_CREATED)
 async def create_organization(
     body: OrganizationCreateRequest,
@@ -472,10 +523,10 @@ async def create_organization(
 ) -> dict:
     org = Organization(
         name=body.name,
-        entra_tenant_id=body.entra_tenant_id,
         expected_admin_email=str(body.expected_admin_email).lower() if body.expected_admin_email else None,
         status=OrganizationStatus.active,
     )
+    await _apply_sign_in_fields(db, org, body, creating=True)
     db.add(org)
     await _commit_org(db)
     await db.refresh(org)
@@ -531,10 +582,9 @@ async def update_organization(
         org.is_operator = body.is_operator
     if body.name is not None:
         org.name = body.name
-    # Sent as null means "clear it" (the org goes back to local sign-in);
-    # left out means "leave it alone".
-    if "entra_tenant_id" in body.model_fields_set:
-        org.entra_tenant_id = body.entra_tenant_id
+    # Sent as null means "clear it" (the org goes back to local sign-in
+    # only); left out means "leave it alone".
+    await _apply_sign_in_fields(db, org, body, creating=False)
     if body.status is not None:
         org.status = body.status
     if "expected_admin_email" in body.model_fields_set:
@@ -687,18 +737,13 @@ async def create_local_user(
     _admin: AdminPrincipal = Depends(get_current_platform_admin),
 ) -> dict:
     """Bootstraps a local-auth org's first user — mirrors provisioning the
-    organization itself today. Entra orgs keep auto-provisioning their
-    users on first SSO login (see /auth/callback) and don't get a parallel
-    manual path here. Returns a one-time "set your password" link for the
+    organization itself today. Works next to any sign-in provider, whose
+    users are still created on their first sign-in. Returns a one-time "set your password" link for the
     admin to share out-of-band (same manual-share philosophy as Team.tsx's
     ShareSignInLink — no outbound email sending in this app)."""
     org = await get_organization(db, org_id)
     if org is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "organization not found")
-    if org.entra_tenant_id is not None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "this organization uses Entra SSO — users join by signing in, not manual creation"
-        )
 
     user = User(
         organization_id=org_id,

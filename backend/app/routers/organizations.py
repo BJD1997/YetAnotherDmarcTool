@@ -21,6 +21,7 @@ def _org_out(org: Organization) -> dict:
         "name": org.name,
         "status": org.status.value,
         "entra_tenant_id": str(org.entra_tenant_id) if org.entra_tenant_id else None,
+        "sign_in_provider": org.sign_in_provider,
         "is_operator": org.is_operator,
         "spf_all_qualifier_mode": org.spf_all_qualifier_mode.value,
         "hosted_mailbox_opt_in": org.hosted_mailbox_opt_in,
