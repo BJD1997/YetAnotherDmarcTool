@@ -167,6 +167,12 @@ class ImapMailbox:
         # NO usually means it already exists; anything else shows up below
         # when the move itself fails.
         self._processed_ready = True if status in ("OK", "NO") else False
+        # Some mail apps and webmail only list subscribed folders; without
+        # this the folder exists but can't be seen there.
+        try:
+            self._client.subscribe(_quote(self._settings.processed_folder))
+        except imaplib.IMAP4.error:
+            pass
 
     def mark_read_and_move(self, uid: bytes) -> None:
         self.mark_read(uid)

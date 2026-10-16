@@ -341,7 +341,11 @@ def test_move_falls_back_to_copy_and_delete():
             calls.append("CREATE")
             return "NO", [b"exists"]
 
+        def subscribe(self, _folder):
+            calls.append("SUBSCRIBE")
+            return "OK", [b""]
+
     settings = imap_client.ImapSettings("h", 993, ImapSecurity.ssl, "u", "p", "INBOX", "DMARC processed")
     imap_client.ImapMailbox(Client(), settings).mark_read_and_move(b"7")
 
-    assert calls == ["STORE", "CREATE", "COPY", "STORE", "EXPUNGE"]
+    assert calls == ["STORE", "CREATE", "SUBSCRIBE", "COPY", "STORE", "EXPUNGE"]
