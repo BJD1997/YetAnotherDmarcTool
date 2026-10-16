@@ -22,7 +22,7 @@ from app.repositories.auth import get_organization_by_google_domain, get_organiz
 from app.repositories.domains import verified_domain_names
 from app.repositories.organizations import get_organization
 from app.services.auth import oauth_cookies, oidc, pkce
-from app.services.auth.rate_limit import login_limiter, rate_limiter
+from app.services.auth.rate_limit import rate_limiter, sign_in_lookup_limiter
 from app.services.auth.sign_in_flow import complete_sign_in, session_redirect
 from app.services.ingestion.sender_auth import can_be_trusted
 from app.services.auth.sign_in_log import client_network_info, record_sign_in_event
@@ -127,6 +127,10 @@ async def google_callback(request: Request, db: AsyncSession = Depends(get_db)) 
     cookies = oauth_cookies.read(request)
     if cookies is None or not settings.google_sso_client_id:
         return await _failure(db, request, method, "invalid_state")
+    if cookies.mode == "test":
+        from app.routers.sign_in_settings import finish_test  # imports this module
+
+        return await finish_test(request, db, cookies)
     try:
         claims = await checked_claims(google_provider(), request, cookies, settings.google_sso_redirect_uri)
     except (oidc.OidcError, KeyError):
@@ -153,7 +157,7 @@ async def google_callback(request: Request, db: AsyncSession = Depends(get_db)) 
 
 # --- an organization's own provider ------------------------------------------
 
-@router.get("/oidc/start")
+@router.get("/oidc/start", dependencies=[Depends(rate_limiter(sign_in_lookup_limiter))])
 async def oidc_start(
     org: str = Query(max_length=63),
     login_hint: str | None = Query(default=None, max_length=320),
@@ -178,9 +182,9 @@ async def oidc_callback(request: Request, db: AsyncSession = Depends(get_db)) ->
     if cookies is None or not cookies.org_id:
         return await _failure(db, request, method, "invalid_state")
     if cookies.mode == "test":
-        from app.routers.sign_in_settings import finish_oidc_test  # imports this module
+        from app.routers.sign_in_settings import finish_test  # imports this module
 
-        return await finish_oidc_test(request, db, cookies)
+        return await finish_test(request, db, cookies)
 
     try:
         org = await get_organization(db, uuid.UUID(cookies.org_id))
@@ -260,7 +264,7 @@ async def _org_for_email_domain(db: AsyncSession, domain: str) -> Organization |
     return max(rows, key=lambda row: len(row[0]))[1]
 
 
-@router.post("/discover", dependencies=[Depends(rate_limiter(login_limiter))])
+@router.post("/discover", dependencies=[Depends(rate_limiter(sign_in_lookup_limiter))])
 async def discover_sign_in(body: DiscoverRequest, db: AsyncSession = Depends(get_db)) -> dict:
     """Where "Sign in with your company account" goes for this email. Never
     names the organization; anything unknown gets the same empty answer."""
@@ -273,7 +277,7 @@ async def discover_sign_in(body: DiscoverRequest, db: AsyncSession = Depends(get
     return {"url": sign_in_url(org, email) if org else None}
 
 
-@router.get("/org/{slug}")
+@router.get("/org/{slug}", dependencies=[Depends(rate_limiter(sign_in_lookup_limiter))])
 async def org_sign_in(slug: str, db: AsyncSession = Depends(get_db)) -> dict:
     """/login/<slug>: straight to that organization's provider."""
     org = await get_organization_by_slug(db, slug[:63])

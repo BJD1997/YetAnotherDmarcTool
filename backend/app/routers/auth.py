@@ -33,7 +33,7 @@ from app.schemas.auth import (
     SetPasswordRequest,
     VerifyOtpRequest,
 )
-from app.services.auth import account_reset, entra_oidc, pkce, session_manager, totp
+from app.services.auth import account_reset, entra_oidc, oauth_cookies, pkce, session_manager, totp
 from app.services.auth.password import dummy_verify, hash_password, verify_password
 from app.services.auth.rate_limit import login_limiter, otp_account_limiter, otp_limiter, rate_limiter
 from app.services.auth.session_manager import cookie_kwargs
@@ -93,11 +93,21 @@ async def login(login_hint: str | None = Query(default=None, max_length=320)) ->
     response.set_cookie(_OAUTH_STATE_COOKIE, state, **short_lived)
     response.set_cookie(_OAUTH_VERIFIER_COOKIE, verifier, **short_lived)
     response.set_cookie(_OAUTH_NONCE_COOKIE, nonce, **short_lived)
+    # A real sign-in, not a leftover Settings test.
+    response.set_cookie(oauth_cookies.MODE, "sign_in", **short_lived)
+    response.delete_cookie(oauth_cookies.ORG, path="/")
     return response
 
 
 @router.get("/callback")
-async def callback(request: Request, db: AsyncSession = Depends(get_db)) -> RedirectResponse:
+async def callback(request: Request, db: AsyncSession = Depends(get_db)) -> Response:
+    if request.cookies.get(oauth_cookies.MODE) == "test":
+        # Settings → Sign-in testing Microsoft before saving it.
+        from app.routers.sign_in_settings import finish_test
+
+        cookies = oauth_cookies.read(request)
+        if cookies is not None and cookies.org_id:
+            return await finish_test(request, db, cookies)
     ip_address, user_agent = client_network_info(request)
 
     if request.query_params.get("error"):

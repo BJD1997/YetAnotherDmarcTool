@@ -42,7 +42,7 @@ def _fernet() -> MultiFernet:
 
 
 def fernet() -> MultiFernet:
-    """For short-lived encrypted tokens with a TTL (see auth/oidc_test.py)."""
+    """For short-lived encrypted tokens with a TTL (see auth/sign_in_test.py)."""
     return _fernet()
 
 

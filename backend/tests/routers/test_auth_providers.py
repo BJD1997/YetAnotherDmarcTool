@@ -279,3 +279,9 @@ async def test_config_says_whether_company_sign_in_exists(api):
     assert (await client.get("/api/auth/config")).json()["company_sign_in_enabled"] is False
     await _oidc_org(owner_factory)
     assert (await client.get("/api/auth/config")).json()["company_sign_in_enabled"] is True
+
+
+async def test_link_lookups_are_rate_limited(api):
+    client, _ = api
+    statuses = [(await client.get("/api/auth/org/nope")).status_code for _ in range(61)]
+    assert statuses[:60] == [404] * 60 and statuses[60] == 429
