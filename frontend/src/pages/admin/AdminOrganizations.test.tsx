@@ -48,6 +48,31 @@ describe("AdminOrganizations", () => {
     expect(screen.queryByPlaceholderText("tenant GUID")).not.toBeInTheDocument(); // detail hidden until expanded
   });
 
+  it("shows an org's mailbox read-only, with only consent to change", async () => {
+    getMock.mockResolvedValue({
+      organizations: [
+        org("Alpha", {
+          mailbox_connection: {
+            id: "m1", kind: "imap", mailbox_address: "dmarc@alpha.example", consent_status: "granted", consent_granted_at: null,
+            last_sync_at: null, last_sync_status: null, last_sync_error: null,
+          },
+        }),
+      ],
+      has_more: false,
+      summary: { total: 1, active: 1, suspended: 0, orgs_with_job_errors_7d: 0 },
+    });
+    vi.mocked(api.patch).mockResolvedValueOnce({});
+
+    renderWithAppProviders(<AdminOrganizations />);
+    fireEvent.click(await screen.findByText("Alpha"));
+
+    expect(await screen.findByText("dmarc@alpha.example")).toBeInTheDocument();
+    expect(screen.getByText("(IMAP)")).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("dmarc-reports@org.com")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Revoke" }));
+    await waitFor(() => expect(api.patch).toHaveBeenCalledWith("/admin/organizations/Alpha/mailbox-connection", { consent_status: "revoked" }));
+  });
+
   it("expands a row's detail on click", async () => {
     getMock.mockResolvedValueOnce({
       organizations: [org("Alpha")],

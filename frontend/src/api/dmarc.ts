@@ -7,23 +7,6 @@ export interface DmarcSummary {
   current_policy: string | null;
 }
 
-export interface DmarcOutboundService {
-  service_label: string;
-  match_method: "pattern" | "ptr_domain" | "ip_fallback";
-  volume: number;
-  source_ip_count: number;
-  spf_aligned_pct: number | null;
-  dkim_aligned_pct: number | null;
-  dmarc_pass_pct: number | null;
-  accepted: number;
-  quarantined: number;
-  rejected: number;
-  // Forward-confirmed reverse DNS roll-up across the service's sending IPs.
-  fcrdns_status: "pass" | "partial" | "fail";
-  // True if any of the service's sending IPs is IPv6.
-  sends_ipv6: boolean;
-}
-
 export interface InboundHostRow {
   host: string;
   priority: number | null;

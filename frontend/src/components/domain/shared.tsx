@@ -59,7 +59,7 @@ export function StatusBadge({ status }: { status: CheckStatus }) {
 
 /** Estimated failed-message count (volume x fail rate) — used as the
  * default sort/"worst first" ordering anywhere a list of senders is shown
- * (OutboundTable, SenderInventory), so the worst combination of "sends a
+ * (SenderInventory), so the worst combination of "sends a
  * lot" and "mostly fails" surfaces first instead of just the biggest
  * sender regardless of health. */
 export function riskScore(row: { volume: number; dmarc_pass_pct: number | null }): number {

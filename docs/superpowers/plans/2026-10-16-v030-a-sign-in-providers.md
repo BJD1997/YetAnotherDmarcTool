@@ -2348,7 +2348,7 @@ export default function SignInTab() {
 {canManage && <AddLocalTeammate />}
 ```
 
-and `ShareSignInLink` shows the org's `login_link` (from `useSignInSettings`) instead of the bare login URL if it currently shows one. Add `sign_in_provider: "none" | "microsoft" | "google" | "oidc"` to `Organization` in `types.ts`, and return it from the backend's current-organization JSON (`app/routers/organizations.py`, the function building the current org response) — add a backend assertion for it in an existing organizations test.
+and `ShareSignInLink` shows the org's `login_link` (from `useSignInSettings`) instead of the bare login URL if it currently shows one. Its text "anyone in your Microsoft tenant who signs in at this link will appear here" becomes provider-neutral: "There's no invite-by-email step: anyone who signs in with your organization's {provider name} account at this link appears here as a member." with `{provider name}` = Microsoft / Google Workspace / company (for OIDC). Add `sign_in_provider: "none" | "microsoft" | "google" | "oidc"` to `Organization` in `types.ts`, and return it from the backend's current-organization JSON (`app/routers/organizations.py`, the function building the current org response) — add a backend assertion for it in an existing organizations test.
 
 - [ ] **Step 7: Run frontend checks — expect PASS**
 

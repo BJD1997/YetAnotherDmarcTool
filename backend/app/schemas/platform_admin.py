@@ -42,9 +42,8 @@ class OrganizationUpdateRequest(BaseModel):
     expected_admin_email: EmailStr | None = None
 
 
-class MailboxConnectionRequest(BaseModel):
-    mailbox_address: str
-    consent_status: ConsentStatus | None = None
+class MailboxConsentRequest(BaseModel):
+    consent_status: ConsentStatus
 
 
 class LocalUserCreateRequest(BaseModel):

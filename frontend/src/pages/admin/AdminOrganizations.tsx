@@ -7,7 +7,7 @@ import { ReportFreshnessValue } from "../../components/overview/widgets";
 import { Stat } from "../../components/domain/shared";
 import {
   useAdminOrganizations, useAdminOrgUsers, useAdminResetUser, useChangeAdminPassword, useCreateAdminOrganization,
-  useCreateAdminUser, useDeleteAdminOrganization, useSetAdminMailboxConnection, useUpdateAdminOrganization,
+  useCreateAdminUser, useDeleteAdminOrganization, useSetAdminMailboxConsent, useUpdateAdminOrganization,
   type AdminOrganization, type AdminOrganizationsPage, type AdminOrgUser,
 } from "../../hooks/useAdmin";
 import { useClipboardFeedback } from "../../hooks/useClipboardFeedback";
@@ -203,10 +203,9 @@ function OrgRow({ org, expanded, onToggle }: { org: AdminOrganization; expanded:
 
 function OrgDetail({ org }: { org: AdminOrganization }) {
   const [tenantId, setTenantId] = useState(org.entra_tenant_id ?? "");
-  const [mailbox, setMailbox] = useState(org.mailbox_connection?.mailbox_address ?? "");
 
   const updateOrg = useUpdateAdminOrganization(org.id);
-  const setMailboxConnection = useSetAdminMailboxConnection(org.id);
+  const setMailboxConsent = useSetAdminMailboxConsent(org.id);
 
   const connection = org.mailbox_connection;
   const consentRole = connection
@@ -249,24 +248,23 @@ function OrgDetail({ org }: { org: AdminOrganization }) {
           <div className="muted" style={{ fontSize: "0.78rem" }}>
             Mailbox
           </div>
-          <div className="field-row" style={{ marginTop: "0.3rem" }}>
-            <input className="input" value={mailbox} onChange={(e) => setMailbox(e.target.value)} placeholder="dmarc-reports@org.com" style={{ width: "220px" }} />
-            <button
-              className="btn btn--secondary btn--sm"
-              onClick={() => setMailboxConnection.mutate({ mailbox_address: mailbox })}
-              disabled={!mailbox || setMailboxConnection.isPending}
-            >
-              Save
-            </button>
-          </div>
+          {!connection && (
+            <div className="muted" style={{ marginTop: "0.3rem", fontSize: "0.85rem" }}>
+              None yet. The org admin connects one in Settings.
+            </div>
+          )}
           {connection && (
-            <div style={{ marginTop: "0.5rem", fontSize: "0.85rem" }}>
+            <div style={{ marginTop: "0.3rem", fontSize: "0.85rem" }}>
+              <div style={{ marginBottom: "0.3rem" }}>
+                <strong>{connection.mailbox_address}</strong>{" "}
+                <span className="muted">({connection.kind === "imap" ? "IMAP" : "Microsoft 365"})</span>
+              </div>
               <span className={`badge badge--${consentRole}`}>{connection.consent_status}</span>
               {connection.consent_status !== "granted" ? (
                 <button
                   className="btn btn--ghost btn--sm"
                   style={{ marginLeft: "0.5rem" }}
-                  onClick={() => setMailboxConnection.mutate({ mailbox_address: connection.mailbox_address, consent_status: "granted" })}
+                  onClick={() => setMailboxConsent.mutate("granted")}
                 >
                   Mark granted
                 </button>
@@ -274,7 +272,7 @@ function OrgDetail({ org }: { org: AdminOrganization }) {
                 <button
                   className="btn btn--ghost btn--sm"
                   style={{ marginLeft: "0.5rem" }}
-                  onClick={() => setMailboxConnection.mutate({ mailbox_address: connection.mailbox_address, consent_status: "revoked" })}
+                  onClick={() => setMailboxConsent.mutate("revoked")}
                 >
                   Revoke
                 </button>

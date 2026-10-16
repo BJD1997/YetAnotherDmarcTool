@@ -45,7 +45,7 @@ from app.schemas.platform_admin import (
     AdminVerifyOtpRequest,
     ChangePasswordRequest,
     LocalUserCreateRequest,
-    MailboxConnectionRequest,
+    MailboxConsentRequest,
     OrganizationCreateRequest,
     OrganizationUpdateRequest,
 )
@@ -70,6 +70,7 @@ async def _mailbox_out(db: AsyncSession, org_id: uuid.UUID) -> dict | None:
         return None
     return {
         "id": str(connection.id),
+        "kind": connection.kind.value,
         "mailbox_address": connection.mailbox_address,
         "consent_status": connection.consent_status.value,
         "consent_granted_at": connection.consent_granted_at.isoformat() if connection.consent_granted_at else None,
@@ -725,39 +726,32 @@ async def create_local_user(
     return {**_local_user_out(user), "setup_link": setup_link}
 
 
-@router.post("/organizations/{org_id}/mailbox-connection", status_code=status.HTTP_201_CREATED)
-async def upsert_mailbox_connection(
+@router.patch("/organizations/{org_id}/mailbox-connection")
+async def set_mailbox_consent(
     org_id: uuid.UUID,
-    body: MailboxConnectionRequest,
+    body: MailboxConsentRequest,
     db: AsyncSession = Depends(get_db),
     _admin: AdminPrincipal = Depends(get_current_platform_admin),
 ) -> dict:
+    """Marks an organization's mailbox as granted or revoked (revoked stops
+    polling it). The mailbox itself is the org admin's to set up, in
+    Settings, whichever kind it is."""
     org = await get_organization(db, org_id)
     if org is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "organization not found")
-
     connection = await get_org_mailbox_connection(db, org_id)
     if connection is None:
-        connection = MailboxConnection(organization_id=org_id, mailbox_address=body.mailbox_address)
-        db.add(connection)
-    else:
-        connection.mailbox_address = body.mailbox_address
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "this organization hasn't connected a mailbox")
 
-    if body.consent_status is not None and body.consent_status != connection.consent_status:
+    if body.consent_status != connection.consent_status:
         connection.consent_status = body.consent_status
         if body.consent_status == ConsentStatus.granted:
             connection.consent_granted_at = datetime.now(timezone.utc)
-
     await db.flush()
-    await db.refresh(connection)
+    # Read back before committing: the platform-admin context is per transaction.
+    out = await _mailbox_out(db, org_id)
     await db.commit()
-    return {
-        "id": str(connection.id),
-        "organization_id": str(connection.organization_id),
-        "mailbox_address": connection.mailbox_address,
-        "consent_status": connection.consent_status.value,
-        "consent_granted_at": connection.consent_granted_at.isoformat() if connection.consent_granted_at else None,
-    }
+    return out
 
 
 @router.get("/sign-in-events")
