@@ -474,6 +474,8 @@ function OrgUsersSection({ orgId }: { orgId: string }) {
                     <span className="muted"> · {user.role === "org_admin" ? "org admin" : "member"}</span>
                     {user.status === "disabled" && <span className="muted"> · disabled</span>}
                     {user.auth_method === "entra" && <span className="muted"> · Microsoft</span>}
+                    {user.auth_method === "google" && <span className="muted"> · Google</span>}
+                    {user.auth_method === "oidc" && <span className="muted"> · company sign-in</span>}
                     {user.auth_method === "local" && !user.mfa_enrolled && <span className="muted"> · no MFA yet</span>}
                   </td>
                   <td style={{ textAlign: "right" }}>

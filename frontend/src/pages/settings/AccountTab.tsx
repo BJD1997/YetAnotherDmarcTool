@@ -231,6 +231,12 @@ function ReplaceAuthenticatorSection() {
   );
 }
 
+const PROVIDER_NAME: Record<string, string> = {
+  entra: "Microsoft",
+  google: "Google",
+  oidc: "your organization's sign-in provider",
+};
+
 export default function AccountTab() {
   const { user } = useAuth();
   const org = useOutletContext<Organization | undefined>();
@@ -249,8 +255,8 @@ export default function AccountTab() {
       <section>
         <h3 className="section-title">Sign-in</h3>
         <p className="section-hint">
-          You sign in with Microsoft, so your password and two-factor authentication are managed by your organization's
-          Microsoft Entra account — change them there.
+          You sign in with {PROVIDER_NAME[user?.auth_method ?? "oidc"] ?? "your organization's sign-in provider"}, so your
+          password and two-factor authentication are managed there, not here.
         </p>
       </section>
     );

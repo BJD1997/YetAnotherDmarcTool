@@ -533,7 +533,7 @@ async def enroll_otp_confirm(
 # change re-checks the current password so a hijacked session alone can't
 # lock the real owner out, and signs out every other session.
 
-_SSO_MANAGED = "your password and two-factor authentication are managed by your organization's Microsoft sign-in"
+_SSO_MANAGED = "your password and two-factor authentication are managed by your organization's sign-in provider"
 
 
 async def _require_current_password(

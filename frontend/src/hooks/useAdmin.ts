@@ -45,7 +45,7 @@ export interface AdminOrgUser {
   email: string;
   display_name: string | null;
   role: "org_admin" | "member";
-  auth_method: "entra" | "local";
+  auth_method: "entra" | "local" | "google" | "oidc";
   status: "active" | "disabled";
   mfa_enrolled: boolean;
   last_login_at: string | null;

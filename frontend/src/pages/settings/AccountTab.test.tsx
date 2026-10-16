@@ -27,11 +27,15 @@ beforeEach(() => {
 });
 
 describe("AccountTab", () => {
-  it("points SSO users to Microsoft instead of showing credential forms", () => {
+  it("points SSO users to their provider instead of showing credential forms", () => {
     authMethod.value = "entra";
-    renderWithAppProviders(<AccountTab />);
+    const { unmount } = renderWithAppProviders(<AccountTab />);
+    expect(screen.getByText(/You sign in with Microsoft, so your/)).toBeInTheDocument();
+    unmount();
 
-    expect(screen.getByText(/managed by your organization's Microsoft Entra account/)).toBeInTheDocument();
+    authMethod.value = "oidc";
+    renderWithAppProviders(<AccountTab />);
+    expect(screen.getByText(/You sign in with your organization's sign-in provider/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Change password" })).not.toBeInTheDocument();
   });
 

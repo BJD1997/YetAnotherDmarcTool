@@ -29,6 +29,8 @@ const RESULT_BADGE: Record<SignInEvent["result"], { className: string; label: st
 const METHOD_LABELS: Record<SignInEvent["auth_method"], string> = {
   entra: "Microsoft",
   local: "local",
+  google: "Google",
+  oidc: "company sign-in",
   platform_admin: "break-glass",
 };
 
@@ -69,6 +71,8 @@ export default function SignInEventsSection({ endpoint = "/sign-in-events" }: { 
           <select className="input" value={authMethodFilter} onChange={(e) => setAuthMethodFilter(e.target.value)}>
             <option value="">Any method</option>
             <option value="entra">Microsoft</option>
+            <option value="google">Google</option>
+            <option value="oidc">Company sign-in</option>
             <option value="local">Local</option>
           </select>
         )}

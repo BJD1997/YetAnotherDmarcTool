@@ -3,7 +3,7 @@ export interface CurrentUser {
   email: string;
   display_name: string | null;
   role: "org_admin" | "member";
-  auth_method: "entra" | "local";
+  auth_method: "entra" | "local" | "google" | "oidc";
   organization_id: string;
 }
 
@@ -86,7 +86,7 @@ export interface TeamMember {
   display_name: string | null;
   role: "org_admin" | "member";
   status: "active" | "disabled";
-  auth_method: "entra" | "local";
+  auth_method: "entra" | "local" | "google" | "oidc";
   mfa_enrolled: boolean;
   last_login_at: string | null;
 }
