@@ -10,7 +10,7 @@ from app.db.rls import set_org_context
 from app.db.session import get_db, get_read_db
 from app.middleware.tenant_context import get_current_user, require_org_admin
 from app.models.dmarc_aggregate import DmarcAggregateReport
-from app.models.enums import AuthResult, Disposition, DomainVerificationStatus
+from app.models.enums import AuthResult, Disposition, DomainMailProfile, DomainVerificationStatus
 from app.models.sender_review import SenderReview
 from app.models.tls_rpt import TlsRptReport
 from app.models.user import User
@@ -153,7 +153,10 @@ async def domain_rating(
     domain = await get_owned_domain(db, domain_id, user.organization_id)
 
     if domain.verification_status != DomainVerificationStatus.verified:
-        return {"not_verified": True, "insufficient_data": True, "score": None, "grade": None, "factors": []}
+        return {
+            "not_verified": True, "insufficient_data": True, "score": None, "grade": None, "factors": [],
+            "setup": None, "delivery": None, "sends_mail": domain.mail_profile == DomainMailProfile.sends_mail,
+        }
 
     rating, _total, _failed = await compute_domain_rating(db, domain)
     return {
@@ -161,10 +164,21 @@ async def domain_rating(
         "insufficient_data": rating.insufficient_data,
         "score": rating.score,
         "grade": rating.grade,
-        "factors": [
-            {"factor": f.factor, "weight": f.weight, "score_pct": f.score_pct, "detail": f.detail} for f in rating.factors
-        ],
+        "factors": _factors_out(rating.factors),
+        "setup": _part_out(rating.setup),
+        "delivery": _part_out(rating.delivery),
+        "sends_mail": domain.mail_profile == DomainMailProfile.sends_mail,
     }
+
+
+def _factors_out(factors) -> list[dict]:
+    return [{"factor": f.factor, "weight": f.weight, "score_pct": f.score_pct, "detail": f.detail} for f in factors]
+
+
+def _part_out(part) -> dict | None:
+    if part is None:
+        return None
+    return {"score": part.score, "grade": part.grade, "factors": _factors_out(part.factors)}
 
 
 @router.get("/domains/{domain_id}/dmarc/sources")

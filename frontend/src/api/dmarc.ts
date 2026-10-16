@@ -219,12 +219,22 @@ export interface RatingFactor {
   detail: string;
 }
 
+// One half of the rating: setup (DNS records) or delivery (from reports).
+export interface RatingPart {
+  score: number;
+  grade: string;
+  factors: RatingFactor[];
+}
+
 export interface DomainRating {
   not_verified: boolean;
   insufficient_data: boolean;
   score: number | null;
   grade: string | null;
   factors: RatingFactor[];
+  setup: RatingPart | null;
+  delivery: RatingPart | null;
+  sends_mail: boolean;
 }
 
 export interface MailboxSyncStats {

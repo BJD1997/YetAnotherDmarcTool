@@ -1109,3 +1109,54 @@ select.input {
   top: 6px;
   right: 6px;
 }
+
+/* Domain rating: the overall grade, with setup and delivery as compact
+   lines beside it whose breakdown opens on click. */
+.rating-card {
+  display: flex;
+  gap: 1.5rem;
+  align-items: flex-start;
+}
+.rating-card__overall {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 4.5rem;
+  height: 4.5rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.rating-part + .rating-part {
+  border-top: 1px solid var(--border);
+}
+.rating-part__head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.55rem 0;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  flex-wrap: wrap;
+}
+.rating-part__head:disabled {
+  cursor: default;
+}
+.rating-factors {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 0.35rem 1.5rem;
+  font-size: 0.85rem;
+  padding: 0 0 0.7rem 1.4rem;
+}
+@media (max-width: 560px) {
+  .rating-card {
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+}
