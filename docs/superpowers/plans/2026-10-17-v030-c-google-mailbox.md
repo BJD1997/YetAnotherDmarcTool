@@ -18,9 +18,9 @@
 
 ## Tasks
 
-- [ ] **1. Gmail client (backend)**: `app/services/gmail/client.py` (service-account token with caching per mailbox, list unread, fetch raw, mark read, mark read and move with label creation, inbox count for the test); settings and parsing of the key (file or JSON); tests against an httpx MockTransport and a locally generated RSA key.
-- [ ] **2. Organization Google mailbox (backend)**: migration 0045; `PUT /mailbox-connection/google {mailbox_address}` (tests the connection first, address on a verified domain), `POST /mailbox-connection/google/test`; poll job dispatch for `kind=google`; `/organizations/current` exposes `google_mailbox` (available + client ID for the delegation instructions); tests.
-- [ ] **3. Hosted mailbox from Google (backend)**: `HOSTED_REPORTS_SOURCE=google`, readiness, poll path sharing `_store`, setup checks/tips; tests.
-- [ ] **4. Frontend**: third mailbox choice "Google Workspace mailbox" with the delegation steps (client ID, scope), Test connection, Save; status shows the kind. Tests.
-- [ ] **5. Deployment**: `.env.example`, Portainer compose, Azure template (Google mail key + hosted IMAP), rebuild `azuredeploy.json`.
+- [x] **1. Gmail client (backend)**: `app/services/gmail/client.py` (service-account token with caching per mailbox, list unread, fetch raw, mark read, mark read and move with label creation, inbox count for the test); settings and parsing of the key (file or JSON); tests against an httpx MockTransport and a locally generated RSA key.
+- [x] **2. Organization Google mailbox (backend)**: migration 0045; `PUT /mailbox-connection/google {mailbox_address}` (tests the connection first, address on a verified domain), `POST /mailbox-connection/google/test`; poll job dispatch for `kind=google`; `/organizations/current` exposes `google_mailbox` (available + client ID for the delegation instructions); tests.
+- [x] **3. Hosted mailbox from Google (backend)**: `HOSTED_REPORTS_SOURCE=google`, readiness, poll path sharing `_store`, setup checks/tips; tests.
+- [x] **4. Frontend**: third mailbox choice "Google Workspace mailbox" with the delegation steps (client ID, scope), Test connection, Save; status shows the kind. Tests.
+- [x] **5. Deployment**: `.env.example`, Portainer compose, Azure template (Google mail key + hosted IMAP), rebuild `azuredeploy.json`.
 - [ ] **6. Verify, docs, release**: full suites; wiki (Connecting a Google Workspace Mailbox page, Configuration Reference); release v0.3.0-beta15.
