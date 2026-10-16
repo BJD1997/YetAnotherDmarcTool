@@ -21,7 +21,8 @@ def clean_settings(monkeypatch):
         "public_base_url": "https://dmarc.example.com",
         "entra_sso_client_id": None, "entra_sso_client_secret": None,
         "entra_mail_client_id": None, "entra_mail_client_secret": None,
-        "hosted_reports_mailbox_address": None, "hosted_reports_tenant_id": None,
+        "hosted_reports_mailbox_address": None, "hosted_reports_tenant_id": None, "hosted_reports_source": "microsoft",
+        "google_mail_service_account_file": None, "google_mail_service_account_json": None,
         "cloudflare_api_token": None, "cloudflare_zone_id": None,
         "deployment_platform": None,
         "updater_url": None, "updater_shared_secret": None, "starttls_check_mode": "tls_rpt",
@@ -141,7 +142,7 @@ def test_updater_secret(clean_settings):
 
 def test_tips_for_optional_integrations(clean_settings):
     tips = "\n".join(setup_checks.config_tips())
-    for name in ("ENTRA_SSO_CLIENT_ID", "ENTRA_MAIL_CLIENT_ID", "HOSTED_REPORTS_MAILBOX_ADDRESS"):
+    for name in ("ENTRA_SSO_CLIENT_ID", "ENTRA_MAIL_CLIENT_ID", "HOSTED_REPORTS_MAILBOX_ADDRESS", "GOOGLE_MAIL_SERVICE_ACCOUNT_FILE"):
         assert name in tips
     assert "CLOUDFLARE" not in tips  # only useful with the hosted mailbox
 
@@ -149,6 +150,7 @@ def test_tips_for_optional_integrations(clean_settings):
         "entra_sso_client_id": "a", "entra_sso_client_secret": "b",
         "entra_mail_client_id": "c", "entra_mail_client_secret": "d",
         "hosted_reports_mailbox_address": "reports@hosted.example", "hosted_reports_tenant_id": "t",
+        "google_mail_service_account_file": "/run/secrets/google-mail.json",
     }.items():
         clean_settings.setattr(settings, name, value)
     assert "CLOUDFLARE_API_TOKEN" in "\n".join(setup_checks.config_tips())
