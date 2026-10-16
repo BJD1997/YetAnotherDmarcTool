@@ -115,6 +115,13 @@ class Settings(BaseSettings):
     # organization on this server is trusted. Also allows http:// issuers.
     oidc_allow_private_issuers: bool = False
 
+    # "Sign in with Google": one Google OAuth client for the whole server
+    # (Google Cloud console → APIs & Services → Credentials → OAuth client
+    # ID, type "Web application", redirect URI
+    # <PUBLIC_BASE_URL>/api/auth/google/callback).
+    google_sso_client_id: str | None = None
+    google_sso_client_secret: str | None = None
+
     # Bootstraps the first platform_admins row if the table is empty
     # (see app/scripts/bootstrap_platform_admin.py, run by the `migrate` container).
     platform_admin_bootstrap_email: str | None = None
@@ -221,6 +228,14 @@ class Settings(BaseSettings):
     @property
     def entra_sso_redirect_uri(self) -> str:
         return f"{self.public_base_url}/api/auth/callback"
+
+    @property
+    def google_sso_redirect_uri(self) -> str:
+        return f"{self.public_base_url}/api/auth/google/callback"
+
+    @property
+    def oidc_redirect_uri(self) -> str:
+        return f"{self.public_base_url}/api/auth/oidc/callback"
 
     @property
     def self_update_available(self) -> bool:
