@@ -67,9 +67,10 @@ function AddLocalTeammate() {
         Invite teammates
       </div>
       <p className="section-hint">
-        There's no Microsoft SSO for this organization — add a teammate's email below and share the one-time setup
-        link it generates with them yourself. They'll set a password and enroll two-factor authentication the first
-        time they use it.
+        Add a teammate's email and share the one-time setup link with them yourself; they set a password and an
+        authenticator the first time they use it. These are local accounts. Once your organization signs in through
+        Microsoft, Google or its own provider (Settings → Sign-in), people join that way instead, and only the
+        break-glass account stays local.
       </p>
       <form
         onSubmit={(e) => {
