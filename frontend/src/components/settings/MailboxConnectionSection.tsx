@@ -214,8 +214,11 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
             <Mail size={15} />
             {isImap && imap ? (
               <>
-                IMAP mailbox: <strong>{imap.username}</strong>
-                <span className="muted">{`on ${imap.host}, ${imap.folder} → ${imap.processed_folder}`}</span>
+                IMAP mailbox: <strong>{connection.mailbox_address}</strong>
+                <span className="muted">
+                  {connection.mailbox_address !== imap.username.toLowerCase() && `signed in as ${imap.username}, `}
+                  {`on ${imap.host}, ${imap.folder} → ${imap.processed_folder}`}
+                </span>
               </>
             ) : (
               <>
@@ -244,7 +247,7 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
                       onClick={() =>
                         confirmId.mutate({
                           host: imap.host, port: imap.port, security: imap.security, username: imap.username,
-                          folder: imap.folder, processed_folder: imap.processed_folder,
+                          report_address: imap.report_address, folder: imap.folder, processed_folder: imap.processed_folder,
                           authserv_id: imap.detected_authserv_id,
                         })
                       }

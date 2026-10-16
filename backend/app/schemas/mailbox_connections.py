@@ -23,8 +23,8 @@ class ImapConnectionRequest(BaseModel):
     # Left out: keep the stored password (only for the same server and user).
     password: str | None = Field(default=None, min_length=1, max_length=512)
     # The address reports are sent to (the DMARC rua= target). Left out: the
-    # username, which is usually that address. Some providers (iCloud) sign
-    # in with a different one.
+    # username, which is usually that address. Some providers sign in with a
+    # different name.
     report_address: str | None = Field(default=None, max_length=320)
     folder: str = "INBOX"
     processed_folder: str = "DMARC processed"

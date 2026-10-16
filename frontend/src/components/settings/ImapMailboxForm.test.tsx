@@ -59,7 +59,7 @@ describe("ImapMailboxForm", () => {
       <ImapMailboxForm
         onSaved={vi.fn()}
         current={{
-          host: "imap.mail.me.com", port: 993, security: "ssl", username: "someone@icloud.com", report_address: "dmarc@example.com",
+          host: "imap.provider.example", port: 993, security: "ssl", username: "someone@provider.example", report_address: "dmarc@example.com",
           folder: "INBOX", processed_folder: "DMARC processed", authserv_id: null, detected_authserv_id: null, password_set: true,
         }}
       />,
@@ -69,6 +69,6 @@ describe("ImapMailboxForm", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save & start syncing" }));
 
     await waitFor(() => expect(putMock).toHaveBeenCalled());
-    expect(putMock.mock.calls[0][1]).toMatchObject({ username: "someone@icloud.com", report_address: "dmarc@example.com" });
+    expect(putMock.mock.calls[0][1]).toMatchObject({ username: "someone@provider.example", report_address: "dmarc@example.com" });
   });
 });

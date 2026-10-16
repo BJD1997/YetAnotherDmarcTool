@@ -236,17 +236,17 @@ async def test_the_stored_password_is_only_reused_for_the_same_server_and_user(a
 
 
 async def test_the_report_address_can_differ_from_the_username(api, server_works):
-    # iCloud signs in with the Apple ID, while reports go to a custom domain.
+    # Some providers sign in with an account name, while reports go to a custom domain.
     client, owner_factory = api
     await _admin(client, owner_factory)
 
     saved = await client.put(
-        "/api/mailbox-connection/imap", json=_body(username="someone@icloud.example", report_address="DMARC@Example.com")
+        "/api/mailbox-connection/imap", json=_body(username="someone@provider.example", report_address="DMARC@Example.com")
     )
     assert saved.status_code == 200, saved.text
     assert saved.json()["mailbox_address"] == "dmarc@example.com"
     assert saved.json()["imap"]["report_address"] == "dmarc@example.com"
-    assert server_works[-1].username == "someone@icloud.example"
+    assert server_works[-1].username == "someone@provider.example"
 
     # Left out: the username is the address.
     default = await client.put("/api/mailbox-connection/imap", json=_body(password="app-password"))

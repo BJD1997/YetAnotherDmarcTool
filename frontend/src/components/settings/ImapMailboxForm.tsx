@@ -127,7 +127,7 @@ export default function ImapMailboxForm({
           placeholder="same as the username"
         />
         <span className="section-hint" style={{ margin: 0 }}>
-          The address in your DMARC rua= record. Only needed when you sign in with something else, as with iCloud.
+          The address in your DMARC rua= record. Only needed when you sign in with something other than this address.
         </span>
       </label>
       <div className="field-row">
