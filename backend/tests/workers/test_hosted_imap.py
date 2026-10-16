@@ -109,3 +109,25 @@ async def test_nothing_is_read_before_the_server_id_is_set(api, monkeypatch, hos
         state = (await db.execute(select(HostedReportsPollState))).scalar_one()
         assert state.last_sync_status == SyncStatus.error and "HOSTED_REPORTS_IMAP_AUTHSERV_ID" in state.last_sync_error
         assert "mx.mail.example" in state.last_sync_error  # what the server says it is
+
+
+async def test_the_hosted_mailbox_from_google(api, monkeypatch):
+    from tests.services.test_gmail_mailbox import FakeGmail
+
+    _client, owner_factory = api
+    org = await _customer(owner_factory)
+    monkeypatch.setattr(settings, "hosted_reports_source", "google")
+    monkeypatch.setattr(settings, "hosted_reports_mailbox_address", "rua@hosted.example")
+    monkeypatch.setattr(settings, "google_mail_service_account_json", '{"type": "service_account"}')
+    monkeypatch.setattr(hosted_reports_poll_job, "async_session_factory", session_module.async_session_factory)
+    gmail = FakeGmail({"g1": _raw("r1", to=ADDRESS).replace(OWN.encode(), b"mx.google.com"), "g2": _raw("lost", to="x@else.example")})
+    monkeypatch.setattr(hosted_reports_poll_job, "gmail_mailbox_for", lambda address: gmail)
+    _serve(monkeypatch, FakeMailbox({}), {"r1": _aggregate("report-g1"), "lost": _aggregate("report-g2")})
+
+    assert settings.hosted_mailbox_ready is True
+    await hosted_reports_poll_job._do_google_poll()
+
+    assert gmail.moved == ["g1"] and gmail.read == {"g1", "g2"}
+    async with owner_factory() as db:
+        rows = (await db.execute(select(DmarcAggregateReport).execution_options(include_unverified_reports=True))).scalars().all()
+        assert [(r.report_id, r.organization_id) for r in rows] == [("report-g1", org.id)]

@@ -22,6 +22,9 @@ from app.models.enums import ImapSecurity, SyncStatus
 from app.repositories.domains import list_domains_with_hosted_report_address
 from app.repositories.mailbox_connections import get_or_create_hosted_reports_poll_state
 from app.services.graph.mailbox_poller import MessageTooLargeError, fetch_message_raw_mime, fetch_new_message_ids
+from app.services.gmail.client import AUTHSERV_ID as GMAIL_AUTHSERV_ID
+from app.services.gmail.poll import mailbox_for as gmail_mailbox_for
+from app.services.gmail.poll import message_id as gmail_message_id
 from app.services.imap.client import MAX_MESSAGE_BYTES, ImapError, ImapMailbox, ImapSettings, resolve_address
 from app.services.imap.poll import message_id as imap_message_id
 from app.services.ingestion import report_writer
@@ -52,7 +55,8 @@ async def poll_hosted_reports_mailbox() -> None:
             logger.info("hosted reports poll already running elsewhere — skipping this trigger")
             return
         try:
-            await (_do_imap_poll() if settings.hosted_reports_source == "imap" else _do_poll())
+            readers = {"imap": _do_imap_poll, "google": _do_google_poll}
+            await readers.get(settings.hosted_reports_source, _do_poll)()
         finally:
             await lock_conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": _ADVISORY_LOCK_KEY})
             await lock_conn.commit()
@@ -170,66 +174,154 @@ def _imap_settings() -> ImapSettings:
     )
 
 
+class _ImapReader:
+    """The hosted mailbox over IMAP, as the async calls _read_hosted uses."""
+
+    def __init__(self, mailbox: ImapMailbox):
+        self._mailbox = mailbox
+
+    async def unread_ids(self):
+        await asyncio.to_thread(self._mailbox.select_folder)
+        return await asyncio.to_thread(self._mailbox.unread_message_uids)
+
+    async def server_id(self):
+        return await asyncio.to_thread(self._mailbox.newest_authserv_id)
+
+    async def size(self, uid):
+        return await asyncio.to_thread(self._mailbox.message_size, uid)
+
+    async def fetch(self, uid):
+        return await asyncio.to_thread(self._mailbox.fetch_message, uid)
+
+    async def mark_read(self, uid):
+        await asyncio.to_thread(self._mailbox.mark_read, uid)
+
+    async def file_away(self, uid):
+        await asyncio.to_thread(self._mailbox.mark_read_and_move, uid)
+
+    def message_id(self, raw, uid):
+        return imap_message_id(raw)
+
+
+class _GmailReader:
+    """The hosted mailbox in Google Workspace (the server's service account)."""
+
+    def __init__(self, mailbox):
+        self._mailbox = mailbox
+
+    async def unread_ids(self):
+        return await self._mailbox.unread_ids()
+
+    async def server_id(self):
+        return GMAIL_AUTHSERV_ID
+
+    async def size(self, gmail_id):
+        return await self._mailbox.size(gmail_id)
+
+    async def fetch(self, gmail_id):
+        return await self._mailbox.fetch_raw(gmail_id)
+
+    async def mark_read(self, gmail_id):
+        await self._mailbox.mark_read(gmail_id)
+
+    async def file_away(self, gmail_id):
+        await self._mailbox.mark_read_and_move(gmail_id)
+
+    def message_id(self, raw, gmail_id):
+        return gmail_message_id(raw, gmail_id)
+
+
+def _imap_settings() -> ImapSettings:
+    return ImapSettings(
+        host=settings.hosted_reports_imap_host or "",
+        port=settings.hosted_reports_imap_port,
+        security=ImapSecurity(settings.hosted_reports_imap_security),
+        username=settings.hosted_reports_imap_username or "",
+        password=settings.hosted_reports_imap_password or "",
+        folder=settings.hosted_reports_imap_folder,
+        processed_folder=settings.hosted_reports_imap_processed_folder,
+    )
+
+
 async def _do_imap_poll() -> None:
-    """The hosted mailbox over IMAP: unread messages in the folder, routed by
-    recipient. A stored report is marked read and moved to the processed
-    folder (after it's committed, so an interruption can't lose it); mail
-    that isn't a report, or isn't for a known address, is only marked read."""
-    started_at = datetime.now(timezone.utc)
-    stats = {"messages_seen": 0, "unmatched": 0, "unverified": 0, "errors": 0}
-    trusted_id = (settings.hosted_reports_imap_authserv_id or "").strip().lower()
-    imap = _imap_settings()
-    try:
+    async def _open():
+        imap = _imap_settings()
         address = await resolve_address(imap, allow_private=True)
         mailbox = await asyncio.to_thread(ImapMailbox.connect, imap, address)
+        return _ImapReader(mailbox), lambda: asyncio.to_thread(mailbox.close)
+
+    await _poll_with(_open, (settings.hosted_reports_imap_authserv_id or "").strip().lower(), "IMAP")
+
+
+async def _do_google_poll() -> None:
+    async def _open():
+        mailbox = gmail_mailbox_for(settings.hosted_reports_mailbox_address or "")
+
+        async def _close():
+            return None
+
+        return _GmailReader(mailbox), _close
+
+    await _poll_with(_open, GMAIL_AUTHSERV_ID, "Google")
+
+
+async def _poll_with(open_reader, trusted_id: str, source: str) -> None:
+    """The hosted mailbox over IMAP or from Google: unread messages, routed
+    by recipient. A stored report is filed away (after it's committed, so an
+    interruption can't lose it); mail that isn't a report, or isn't for a
+    known address, is only marked read. Nothing is read until the mail
+    server's ID is known (always, for Google)."""
+    started_at = datetime.now(timezone.utc)
+    stats = {"messages_seen": 0, "unmatched": 0, "unverified": 0, "errors": 0}
+    try:
+        reader, close = await open_reader()
         try:
-            await asyncio.to_thread(mailbox.select_folder)
-            uids = await asyncio.to_thread(mailbox.unread_message_uids)
+            ids = await reader.unread_ids()
             if not trusted_id:
-                if uids:
-                    detected = await asyncio.to_thread(mailbox.newest_authserv_id)
+                if ids:
+                    detected = await reader.server_id()
                     raise ImapError(
                         f"set HOSTED_REPORTS_IMAP_AUTHSERV_ID to your mail server's ID ({detected or 'none found'}) "
                         "before reports are read"
                     )
                 return
-            stats["messages_seen"] = len(uids)
+            stats["messages_seen"] = len(ids)
             async with async_session_factory() as db:
                 await set_platform_admin_context(db, is_admin=True)
                 address_map = {
                     d.hosted_report_address.lower(): (d.id, d.organization_id)
                     for d in await list_domains_with_hosted_report_address(db)
                 }
-                for uid in uids:
-                    if await asyncio.to_thread(mailbox.message_size, uid) > MAX_MESSAGE_BYTES:
-                        logger.warning("skipped hosted IMAP message %s: larger than 25 MB", uid)
-                        await asyncio.to_thread(mailbox.mark_read, uid)
+                for message in ids:
+                    if await reader.size(message) > MAX_MESSAGE_BYTES:
+                        logger.warning("skipped hosted message %s: larger than 25 MB", message)
+                        await reader.mark_read(message)
                         stats["errors"] += 1
                         continue
-                    raw = await asyncio.to_thread(mailbox.fetch_message, uid)
+                    raw = await reader.fetch(message)
                     outcome = await _store(
-                        db, address_map, raw, imap_message_id(raw), authenticate_report_sender(raw, imap_authserv_id=trusted_id),
-                        stats,
+                        db, address_map, raw, reader.message_id(raw, message),
+                        authenticate_report_sender(raw, imap_authserv_id=trusted_id), stats,
                     )
                     if outcome == "stored":
                         await db.commit()
                         await set_platform_admin_context(db, is_admin=True)
-                        await asyncio.to_thread(mailbox.mark_read_and_move, uid)
+                        await reader.file_away(message)
                     else:
-                        await asyncio.to_thread(mailbox.mark_read, uid)
+                        await reader.mark_read(message)
                 state = await get_or_create_hosted_reports_poll_state(db)
                 state.last_sync_at = datetime.now(timezone.utc)
                 state.last_sync_status = SyncStatus.success
                 state.last_sync_error = None
                 await db.commit()
         finally:
-            await asyncio.to_thread(mailbox.close)
+            await close()
         logger.info(
-            "hosted reports poll (IMAP): %d message(s) seen, %d unmatched, %d unverified sender(s), %d error(s) since %s",
-            stats["messages_seen"], stats["unmatched"], stats["unverified"], stats["errors"], started_at.isoformat(),
+            "hosted reports poll (%s): %d message(s) seen, %d unmatched, %d unverified sender(s), %d error(s) since %s",
+            source, stats["messages_seen"], stats["unmatched"], stats["unverified"], stats["errors"], started_at.isoformat(),
         )
     except Exception as exc:
-        logger.exception("hosted reports poll (IMAP) failed")
+        logger.exception("hosted reports poll (%s) failed", source)
         async with async_session_factory() as db:
             await set_platform_admin_context(db, is_admin=True)
             state = await get_or_create_hosted_reports_poll_state(db)
@@ -242,7 +334,7 @@ async def _do_imap_poll() -> None:
 async def _store(db, address_map: dict, raw: bytes, message_id: str, sender, stats: dict) -> str:
     """Routes one message by recipient and stores its report in that
     organization: "stored", "unmatched", "unparseable" or "error". Used by
-    the IMAP reader; one bad report never stops the others."""
+    the IMAP and Google readers; one bad report never stops the others."""
     matched_org_id = None
     for addr in _recipient_addresses(raw):
         if addr in address_map:

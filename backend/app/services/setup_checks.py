@@ -14,6 +14,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 from app.config import settings
+from app.services.gmail.client import GmailError, load_service_account
 from app.repositories.platform_admin import count_platform_admins
 from app.services.auth.admin_access import admin_access_problem
 from app.services.crypto.secrets import fernet_key_problem
@@ -106,7 +107,16 @@ def config_problems() -> list[str]:
             "The mailbox app is half set up: ENTRA_MAIL_CLIENT_ID and ENTRA_MAIL_CLIENT_SECRET go together. "
             f"Set both, or neither, {_ENV_HINT}."
         )
-    if settings.hosted_reports_source == "imap":
+    if settings.hosted_reports_source == "google":
+        hosted_needs = (
+            ("HOSTED_REPORTS_MAILBOX_ADDRESS", settings.hosted_reports_mailbox_address),
+            (
+                "GOOGLE_MAIL_SERVICE_ACCOUNT_FILE or GOOGLE_MAIL_SERVICE_ACCOUNT_JSON",
+                settings.google_mail_service_account_file or settings.google_mail_service_account_json,
+            ),
+        )
+        hosted_started = True
+    elif settings.hosted_reports_source == "imap":
         hosted_needs = (
             ("HOSTED_REPORTS_MAILBOX_ADDRESS", settings.hosted_reports_mailbox_address),
             ("HOSTED_REPORTS_IMAP_HOST", settings.hosted_reports_imap_host),
@@ -128,6 +138,11 @@ def config_problems() -> list[str]:
                 f"The hosted reporting mailbox is half set up: it also needs {', '.join(missing)}. "
                 f"Set them {_ENV_HINT}, or remove the hosted mailbox settings."
             )
+    if settings.google_mail_service_account_file or settings.google_mail_service_account_json:
+        try:
+            load_service_account()
+        except GmailError as exc:
+            found.append(f"{exc}. Fix GOOGLE_MAIL_SERVICE_ACCOUNT_FILE or GOOGLE_MAIL_SERVICE_ACCOUNT_JSON {_ENV_HINT}.")
     if settings.cloudflare_api_token or settings.cloudflare_zone_id:
         if not (settings.cloudflare_api_token and settings.cloudflare_zone_id):
             found.append(
@@ -188,12 +203,19 @@ def config_tips() -> list[str]:
             "Reading DMARC reports from an organization's own Microsoft 365 mailbox isn't set up. To offer it, "
             f"set ENTRA_MAIL_CLIENT_ID and ENTRA_MAIL_CLIENT_SECRET. See {_CONFIG_DOCS}"
         )
+    if not (settings.google_mail_service_account_file or settings.google_mail_service_account_json):
+        tips.append(
+            "Reading DMARC reports from Google Workspace mailboxes isn't set up. To offer it, create a service "
+            "account with domain-wide delegation and set GOOGLE_MAIL_SERVICE_ACCOUNT_FILE (its JSON key, mounted "
+            f"read-only) or GOOGLE_MAIL_SERVICE_ACCOUNT_JSON. See {_CONFIG_DOCS}"
+        )
     if not settings.hosted_reports_mailbox_address:
         tips.append(
             "There's no hosted reporting mailbox, so every organization needs a mailbox of its own for reports. "
             "To give each domain a ready-made reporting address instead, set HOSTED_REPORTS_MAILBOX_ADDRESS and "
-            "either HOSTED_REPORTS_TENANT_ID (a Microsoft 365 mailbox, through the mailbox app above) or "
-            f"HOSTED_REPORTS_SOURCE=imap with the HOSTED_REPORTS_IMAP_* settings. See {_CONFIG_DOCS}"
+            "either HOSTED_REPORTS_TENANT_ID (a Microsoft 365 mailbox, through the mailbox app above), "
+            "HOSTED_REPORTS_SOURCE=imap with the HOSTED_REPORTS_IMAP_* settings, or HOSTED_REPORTS_SOURCE=google "
+            f"(a Google Workspace mailbox, through the service account below). See {_CONFIG_DOCS}"
         )
     elif settings.hosted_reports_source == "imap" and not settings.hosted_reports_imap_authserv_id:
         tips.append(

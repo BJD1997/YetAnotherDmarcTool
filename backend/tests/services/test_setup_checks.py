@@ -205,3 +205,11 @@ def test_a_half_set_up_hosted_imap_mailbox(clean_settings):
     clean_settings.setattr(settings, "hosted_reports_imap_password", "pw")
     assert "hosted reporting mailbox" not in problems()
     assert any("HOSTED_REPORTS_IMAP_AUTHSERV_ID" in tip for tip in setup_checks.config_tips())
+
+
+def test_hosted_mailbox_from_google_needs_the_service_account(clean_settings):
+    clean_settings.setattr(settings, "hosted_reports_source", "google")
+    clean_settings.setattr(settings, "hosted_reports_mailbox_address", "rua@hosted.example")
+    assert "GOOGLE_MAIL_SERVICE_ACCOUNT_FILE or GOOGLE_MAIL_SERVICE_ACCOUNT_JSON" in problems()
+    clean_settings.setattr(settings, "google_mail_service_account_json", '{"type": "authorized_user"}')
+    assert "isn't a valid JSON key" in problems()
