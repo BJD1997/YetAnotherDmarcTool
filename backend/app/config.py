@@ -83,7 +83,7 @@ class Settings(BaseSettings):
     hosted_reports_mailbox_address: str | None = None
     # How the hosted mailbox is read: Microsoft 365 (HOSTED_REPORTS_TENANT_ID
     # and the mail app) or IMAP (the HOSTED_REPORTS_IMAP_* settings below).
-    hosted_reports_source: Literal["microsoft", "imap"] = "microsoft"
+    hosted_reports_source: Literal["microsoft", "imap", "google"] = "microsoft"
     # IMAP: set by the platform admin, so a private address is allowed here.
     hosted_reports_imap_host: str | None = None
     hosted_reports_imap_port: int = 993
@@ -136,6 +136,14 @@ class Settings(BaseSettings):
     # <PUBLIC_BASE_URL>/api/auth/google/callback).
     google_sso_client_id: str | None = None
     google_sso_client_secret: str | None = None
+
+    # Reading report mailboxes in Google Workspace (organizations' and the
+    # hosted one): a service account with domain-wide delegation, granted by
+    # each customer's Workspace admin for scope gmail.modify. Its JSON key,
+    # as a file path (mounted read-only) or the JSON itself (e.g. from Key
+    # Vault); the file wins when both are set.
+    google_mail_service_account_file: str | None = None
+    google_mail_service_account_json: str | None = None
 
     # Bootstraps the first platform_admins row if the table is empty
     # (see app/scripts/bootstrap_platform_admin.py, run by the `migrate` container).
@@ -275,6 +283,8 @@ class Settings(BaseSettings):
             return False
         if self.hosted_reports_source == "imap":
             return bool(self.hosted_reports_imap_host and self.hosted_reports_imap_username and self.hosted_reports_imap_password)
+        if self.hosted_reports_source == "google":
+            return bool(self.google_mail_service_account_file or self.google_mail_service_account_json)
         return bool(self.hosted_reports_tenant_id and self.entra_mail_client_id and self.entra_mail_client_secret)
 
     @property
