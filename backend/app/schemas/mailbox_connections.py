@@ -7,6 +7,9 @@ from app.models.enums import ImapSecurity
 
 class MailboxConnectionSetRequest(BaseModel):
     mailbox_address: str
+    # For an organization without Microsoft sign-in: the ticket from a
+    # passed test sign-in with Microsoft, which names the mailbox's tenant.
+    ticket: str | None = Field(default=None, max_length=4096)
 
 
 _HOST_RE = re.compile(r"^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))+$")

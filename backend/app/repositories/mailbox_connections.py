@@ -49,3 +49,22 @@ async def get_or_create_hosted_reports_poll_state(db: AsyncSession) -> HostedRep
         db.add(state)
         await db.flush()
     return state
+
+
+async def other_org_using_microsoft_tenant(db: AsyncSession, tenant_id, organization_id) -> bool:
+    """Whether another organization signs in with, or reads a mailbox in,
+    this Microsoft tenant. Reads across organizations, so the caller must
+    have the platform-admin context on (and switch it off again)."""
+    from app.models.organization import Organization
+
+    sign_in = await db.execute(
+        select(Organization.id).where(Organization.entra_tenant_id == tenant_id, Organization.id != organization_id).limit(1)
+    )
+    if sign_in.first() is not None:
+        return True
+    mailbox = await db.execute(
+        select(MailboxConnection.id)
+        .where(MailboxConnection.ms_tenant_id == tenant_id, MailboxConnection.organization_id != organization_id)
+        .limit(1)
+    )
+    return mailbox.first() is not None

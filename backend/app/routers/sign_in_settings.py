@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.db.rls import set_org_context
+from app.db.rls import set_org_context, set_platform_admin_context
 from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user, require_break_glass
 from app.models.enums import AuthMethod, UserStatus
@@ -26,6 +26,7 @@ from app.models.organization import Organization
 from app.models.user import User
 from app.repositories.auth import get_organization_by_entra_tenant_id, get_organization_by_google_domain
 from app.repositories.domains import verified_domain_names
+from app.repositories.mailbox_connections import other_org_using_microsoft_tenant
 from app.repositories.organizations import get_organization
 from app.repositories.users import list_users_for_org
 from app.routers.auth_providers import checked_claims, email_on_domains, google_provider, redirect_to_provider
@@ -211,8 +212,12 @@ async def finish_test(request: Request, db: AsyncSession, cookies: oauth_cookies
     passed = Passed()
     if pending.provider == "microsoft":
         passed = Passed(tenant_id=str(claims["tid"]))
-        other = await get_organization_by_entra_tenant_id(db, passed.tenant_id)
-        if other is not None and other.id != org_id:
+        if pending.purpose == "mailbox":
+            taken = await microsoft_tenant_taken(db, uuid.UUID(passed.tenant_id), org_id)
+        else:
+            other = await get_organization_by_entra_tenant_id(db, passed.tenant_id)
+            taken = other is not None and other.id != org_id
+        if taken:
             return _report({"ok": False, "error": "This Microsoft tenant is already used by another organization."})
     elif pending.provider == "google":
         workspace = str(claims.get("hd") or "").lower()
@@ -226,6 +231,18 @@ async def finish_test(request: Request, db: AsyncSession, cookies: oauth_cookies
         "ok": True, "ticket": sign_in_test.ticket_for(pending, passed), "email": email,
         "tenant_id": passed.tenant_id, "workspace": passed.workspace,
     })
+
+
+async def microsoft_tenant_taken(db: AsyncSession, tenant_id: uuid.UUID, org_id: uuid.UUID) -> bool:
+    """For a report mailbox: whether another organization signs in with, or
+    reads a mailbox in, this tenant. Then it's refused, so no organization
+    can read another's reports through a mail-app consent that tenant gave."""
+    await set_platform_admin_context(db, is_admin=True)
+    try:
+        return await other_org_using_microsoft_tenant(db, tenant_id, org_id)
+    finally:
+        await set_platform_admin_context(db, is_admin=False)
+        await set_org_context(db, org_id)
 
 
 async def _end_provider_sessions(db: AsyncSession, org: Organization) -> None:

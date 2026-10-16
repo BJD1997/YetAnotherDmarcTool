@@ -1,8 +1,10 @@
+import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user, require_org_admin
 from app.models.enums import ConsentStatus, MailboxKind
@@ -12,6 +14,10 @@ from app.repositories.dmarc_reports import last_report_received_at_for_org
 from app.repositories.mailbox_connections import get_org_mailbox_connection, list_mailbox_job_runs
 from app.repositories.organizations import get_organization
 from app.schemas.mailbox_connections import ImapConnectionRequest, MailboxConnectionSetRequest
+from app.routers.sign_in_settings import microsoft_tenant_taken
+from app.services.auth import sign_in_test
+from app.services.auth.session_manager import cookie_kwargs
+from app.services.auth.sign_in_test import PendingSignIn
 from app.services.imap.client import ImapError, ImapSettings
 from app.services.imap.poll import test_connection
 from app.services.jobs import queue
@@ -132,14 +138,23 @@ async def set_mailbox_connection(
     worker (see _queue_sync)."""
     org = await get_organization(db, user.organization_id)
     connection = await get_org_mailbox_connection(db, user.organization_id)
-    # The mailbox's own tenant: the organization's Microsoft sign-in tenant,
-    # or the one this mailbox already had (the organization may have moved
-    # its sign-in elsewhere since).
-    tenant_id = org.entra_tenant_id or (
-        connection.ms_tenant_id if connection is not None and connection.kind == MailboxKind.microsoft else None
-    )
+    # The mailbox's tenant: the organization's Microsoft sign-in tenant; or
+    # one proven by a test sign-in with Microsoft (organizations that sign
+    # in another way); or the one this mailbox already had.
+    tenant_id = org.entra_tenant_id
+    if tenant_id is None and body.ticket:
+        passed = sign_in_test.read_ticket(body.ticket, PendingSignIn(org_id=str(org.id), provider="microsoft", purpose="mailbox"))
+        if passed is None or not passed.tenant_id:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "the test sign-in expired or doesn't match: run it again")
+        tenant_id = uuid.UUID(passed.tenant_id)
+        if await microsoft_tenant_taken(db, tenant_id, org.id):
+            raise HTTPException(status.HTTP_409_CONFLICT, "this Microsoft tenant is already used by another organization")
+    if tenant_id is None and connection is not None and connection.kind == MailboxKind.microsoft:
+        tenant_id = connection.ms_tenant_id
     if tenant_id is None:
-        raise HTTPException(status.HTTP_409_CONFLICT, "organization has no Entra tenant ID set yet — contact your platform administrator")
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "run Test sign-in with Microsoft first, with an account on one of your verified domains"
+        )
 
     if connection is None:
         connection = MailboxConnection(organization_id=user.organization_id, mailbox_address=body.mailbox_address)
@@ -169,6 +184,22 @@ async def set_mailbox_connection(
     await _queue_sync(db, org.id, tenant_id)
 
     return _connection_out(connection)
+
+
+@router.post("/microsoft/test")
+async def start_microsoft_test(
+    response: Response, db: AsyncSession = Depends(get_db), user: User = Depends(require_org_admin)
+) -> dict:
+    """For an organization that doesn't sign in with Microsoft: a test
+    sign-in with a Microsoft account on one of its verified domains proves
+    which tenant its report mailbox is in (see sign_in_settings.finish_test)."""
+    if not (settings.entra_sso_client_id and settings.entra_mail_client_id):
+        raise HTTPException(status.HTTP_409_CONFLICT, "this server isn't set up for Microsoft 365 mailboxes; ask the platform admin")
+    pending = PendingSignIn(org_id=str(user.organization_id), provider="microsoft", purpose="mailbox")
+    response.set_cookie(
+        sign_in_test.COOKIE, sign_in_test.pending_cookie(pending), **{**cookie_kwargs(), "max_age": sign_in_test.TTL_SECONDS}
+    )
+    return {"start_url": "/api/auth/sign-in-test/start"}
 
 
 @router.post("/resync", status_code=status.HTTP_202_ACCEPTED)

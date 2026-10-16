@@ -20,6 +20,10 @@ COOKIE = "sign_in_test"
 class PendingSignIn:
     org_id: str
     provider: str  # microsoft | google | oidc
+    # What the test proves something for: switching sign-in, or connecting
+    # a Microsoft 365 report mailbox. Part of the ticket, so one can't be
+    # used for the other.
+    purpose: str = "sign_in"  # sign_in | mailbox
     # OIDC only:
     issuer: str = ""
     client_id: str = ""
