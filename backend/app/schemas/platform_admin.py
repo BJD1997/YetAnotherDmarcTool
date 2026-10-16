@@ -33,9 +33,8 @@ class OrganizationUpdateRequest(BaseModel):
     is_operator: bool | None = None
 
 
-class MailboxConnectionRequest(BaseModel):
-    mailbox_address: str
-    consent_status: ConsentStatus | None = None
+class MailboxConsentRequest(BaseModel):
+    consent_status: ConsentStatus
 
 
 class LocalUserCreateRequest(BaseModel):

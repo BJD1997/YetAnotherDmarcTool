@@ -307,24 +307,29 @@ async def test_create_local_user_rejects_entra_org(api):
     assert response.status_code == 409
 
 
-async def test_upsert_mailbox_connection(api):
+async def test_platform_admin_can_only_change_mailbox_consent(api):
+    from app.models.mailbox_connection import MailboxConnection
+
     client, owner_factory = api
     await login_as_platform_admin(client, owner_factory)
     org_id = (await client.post("/api/admin/organizations", json={"name": "Mailbox Org"})).json()["id"]
 
-    response = await client.post(
-        f"/api/admin/organizations/{org_id}/mailbox-connection", json={"mailbox_address": "reports@example.com"}
-    )
+    missing = await client.patch(f"/api/admin/organizations/{org_id}/mailbox-connection", json={"consent_status": "revoked"})
+    assert missing.status_code == 404
 
-    assert response.status_code == 201
-    assert response.json()["mailbox_address"] == "reports@example.com"
+    async with owner_factory() as db:
+        db.add(MailboxConnection(organization_id=org_id, mailbox_address="reports@example.com"))
+        await db.commit()
 
-    update_response = await client.post(
-        f"/api/admin/organizations/{org_id}/mailbox-connection",
-        json={"mailbox_address": "reports@example.com", "consent_status": "granted"},
+    granted = await client.patch(f"/api/admin/organizations/{org_id}/mailbox-connection", json={"consent_status": "granted"})
+    assert granted.status_code == 200
+    assert granted.json()["consent_status"] == "granted" and granted.json()["mailbox_address"] == "reports@example.com"
+
+    # The address isn't the platform admin's to change.
+    ignored = await client.patch(
+        f"/api/admin/organizations/{org_id}/mailbox-connection", json={"consent_status": "revoked", "mailbox_address": "x@evil.example"}
     )
-    assert update_response.status_code == 201
-    assert update_response.json()["consent_status"] == "granted"
+    assert ignored.json()["mailbox_address"] == "reports@example.com"
 
 
 async def test_list_organizations_includes_aggregates(api):
