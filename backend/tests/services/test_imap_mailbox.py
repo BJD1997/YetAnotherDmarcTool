@@ -65,6 +65,38 @@ def test_without_the_servers_own_check_nothing_is_trusted():
     assert authenticate_report_sender(only_forged, imap_authserv_id="").origin == "unrecognized"
 
 
+def test_a_server_that_signs_each_check_separately():
+    # One header per check, each with its own ID under the provider's domain;
+    # the top one (BIMI) has no DMARC result.
+    split = _raw(
+        "d",
+        "Authentication-Results: bimi.provider.example; bimi=skipped reason=insufficient dmarc",
+        "Authentication-Results: dmarc.provider.example; dmarc=pass header.from=google.com",
+        "Authentication-Results: dkim-verifier.provider.example; dkim=pass header.d=google.com",
+        "Authentication-Results: dmarc.provider.example; dmarc=pass header.from=evil.example",
+    )
+    sender = authenticate_report_sender(split, imap_authserv_id="bimi.provider.example")
+    assert (sender.origin, sender.dmarc, sender.domain) == ("external", "pass", "google.com")
+
+
+def test_a_fake_header_below_another_servers_is_not_believed():
+    # Only the run at the top counts: a header further down with the right ID is the sender's.
+    forged = _raw(
+        "e",
+        "Authentication-Results: bimi.provider.example; bimi=skipped",
+        "Authentication-Results: mx.elsewhere.example; dmarc=fail header.from=evil.example",
+        "Authentication-Results: dmarc.provider.example; dmarc=pass header.from=google.com",
+    )
+    sender = authenticate_report_sender(forged, imap_authserv_id="bimi.provider.example")
+    assert sender.dmarc == "missing"
+
+
+def test_a_short_server_id_only_matches_itself():
+    # "provider.example" mustn't make every *.example ID trusted.
+    other = _raw("f", "Authentication-Results: mx.other.example; dmarc=pass header.from=google.com")
+    assert authenticate_report_sender(other, imap_authserv_id="provider.example").origin == "unrecognized"
+
+
 # --- a poll -----------------------------------------------------------------
 
 class FakeMailbox:

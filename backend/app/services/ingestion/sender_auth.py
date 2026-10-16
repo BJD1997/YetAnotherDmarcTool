@@ -195,19 +195,43 @@ def top_authserv_id(raw_mime: bytes) -> str | None:
     return authserv_id(str(results[0])) if results else None
 
 
+def _same_server(header_id: str | None, confirmed: str) -> bool:
+    """Whether an Authentication-Results ID belongs to the confirmed mail
+    server. Some providers sign each check with its own ID under one domain
+    (bimi.provider.example, dmarc.provider.example, ...), so siblings of the
+    confirmed ID count too, as long as they share at least two labels."""
+    if not header_id:
+        return False
+    if header_id == confirmed:
+        return True
+    parent = confirmed.partition(".")[2]
+    return "." in parent and header_id.endswith("." + parent)
+
+
+def _own_checks(results: list[str], confirmed: str) -> list[str]:
+    """The headers the mailbox's own server added: the run at the top with
+    its ID. A sender's fake ones can only sit below them."""
+    own = []
+    for header in results:
+        if not _same_server(authserv_id(header), confirmed):
+            break
+        own.append(header)
+    return own
+
+
 def authenticate_report_sender(raw_mime: bytes, *, imap_authserv_id: str | None = None) -> SenderAuth:
     """imap_authserv_id: for a message read over IMAP, the ID of the
-    mailbox's own mail server. Only the top Authentication-Results header
-    with that ID is believed: a sender can put fake ones in their message,
-    but the receiving server adds its own on top (RFC 8601 section 5)."""
+    mailbox's own mail server. Only the Authentication-Results headers at
+    the top with that ID are believed: a sender can put fake ones in their
+    message, but the receiving server adds its own on top (RFC 8601
+    section 5). Within them, the first DMARC result counts."""
     msg = email.message_from_bytes(raw_mime)
-    results = msg.get_all("Authentication-Results") or []
-    first = str(results[0]) if results else ""
+    results = [str(h) for h in msg.get_all("Authentication-Results") or []]
+    first = results[0] if results else ""
 
     if imap_authserv_id is not None:
-        trusted = bool(imap_authserv_id) and authserv_id(first) == imap_authserv_id.lower()
-        if not trusted:
-            first = ""
+        own = _own_checks(results, imap_authserv_id.lower()) if imap_authserv_id else []
+        first = next((h for h in own if _DMARC_RE.search(h)), own[0] if own else "")
 
     header_from = _HEADER_FROM_RE.search(first)
     if header_from:
