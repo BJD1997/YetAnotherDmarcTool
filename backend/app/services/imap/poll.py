@@ -55,7 +55,7 @@ async def test_connection(settings: ImapSettings) -> tuple[int, str | None]:
     return await asyncio.to_thread(_run)
 
 
-def _message_id(raw: bytes) -> str:
+def message_id(raw: bytes) -> str:
     """Stable across polls and folder moves: the email's own Message-ID, so a
     re-delivered or re-read message is recognized as the same report."""
     header = email.message_from_bytes(raw).get("Message-ID", "").strip()
@@ -105,7 +105,7 @@ async def poll_imap_mailbox(db: AsyncSession, organization_id: uuid.UUID, connec
             try:
                 async with db.begin_nested():
                     written = await report_writer.write_report(
-                        db, organization_id, parsed, _message_id(raw),
+                        db, organization_id, parsed, message_id(raw),
                         authenticate_report_sender(raw, imap_authserv_id=trusted_id),
                     )
             except Exception:

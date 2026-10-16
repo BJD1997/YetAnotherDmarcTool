@@ -81,6 +81,21 @@ class Settings(BaseSettings):
     # until both are configured (see app/workers/scheduler.py).
     hosted_reports_tenant_id: str | None = None
     hosted_reports_mailbox_address: str | None = None
+    # How the hosted mailbox is read: Microsoft 365 (HOSTED_REPORTS_TENANT_ID
+    # and the mail app) or IMAP (the HOSTED_REPORTS_IMAP_* settings below).
+    hosted_reports_source: Literal["microsoft", "imap"] = "microsoft"
+    # IMAP: set by the platform admin, so a private address is allowed here.
+    hosted_reports_imap_host: str | None = None
+    hosted_reports_imap_port: int = 993
+    hosted_reports_imap_security: Literal["ssl", "starttls"] = "ssl"
+    hosted_reports_imap_username: str | None = None
+    hosted_reports_imap_password: str | None = None
+    hosted_reports_imap_folder: str = "INBOX"
+    hosted_reports_imap_processed_folder: str = "DMARC processed"
+    # The mail server's Authentication-Results ID (RFC 8601): only its checks
+    # count for the report sender check. Nothing is read until it's set; the
+    # poll's error names the ID it found.
+    hosted_reports_imap_authserv_id: str | None = None
     # Optional, and normally left unset: the domain new addresses are
     # generated under defaults to the mailbox address's own domain — which it
     # has to be anyway, since plus-addressing only delivers <local>+<tag>@domain
@@ -256,12 +271,11 @@ class Settings(BaseSettings):
         it, organizations that sign in without Microsoft can't receive
         reports at all. Only that it's filled in, not that it works: a
         failing poll shows under Job runs."""
-        return bool(
-            self.hosted_reports_mailbox_address
-            and self.hosted_reports_tenant_id
-            and self.entra_mail_client_id
-            and self.entra_mail_client_secret
-        )
+        if not self.hosted_reports_mailbox_address:
+            return False
+        if self.hosted_reports_source == "imap":
+            return bool(self.hosted_reports_imap_host and self.hosted_reports_imap_username and self.hosted_reports_imap_password)
+        return bool(self.hosted_reports_tenant_id and self.entra_mail_client_id and self.entra_mail_client_secret)
 
     @property
     def hosted_reports_domain(self) -> str | None:

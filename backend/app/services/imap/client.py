@@ -11,6 +11,7 @@ Python's own imaplib, run in a worker thread (it blocks). Every connection:
 After a report is stored it's marked as read and moved to the processed
 folder, which is created when it doesn't exist yet."""
 
+import asyncio
 import imaplib
 import re
 import socket
@@ -189,7 +190,17 @@ class ImapMailbox:
             self._client.expunge()
 
 
-async def resolve_address(settings: ImapSettings) -> str:
+async def resolve_address(settings: ImapSettings, *, allow_private: bool = False) -> str:
+    """The address to connect to. Organizations' mailboxes must be on a
+    public address; the hosted mailbox (set by the platform admin) may be
+    on the server's own network."""
+    if allow_private:
+        loop = asyncio.get_running_loop()
+        try:
+            infos = await loop.getaddrinfo(settings.host, settings.port, proto=socket.IPPROTO_TCP)
+        except socket.gaierror as exc:
+            raise ImapError(f"could not resolve {settings.host}: {exc}") from exc
+        return infos[0][4][0]
     try:
         return await resolve_public_address(settings.host, settings.port)
     except BlockedAddressError as exc:
