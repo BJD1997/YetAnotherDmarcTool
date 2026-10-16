@@ -9,7 +9,7 @@ vi.mock("../../api/client", () => ({
   api: { post: vi.fn() },
   ApiError: class ApiError extends Error {},
 }));
-const authMethod = vi.hoisted(() => ({ value: "local" as "local" | "entra" }));
+const authMethod = vi.hoisted(() => ({ value: "local" as "local" | "entra" | "google" | "oidc" }));
 vi.mock("../../auth/AuthContext", () => ({
   useAuth: () => ({ user: { auth_method: authMethod.value } }),
 }));
