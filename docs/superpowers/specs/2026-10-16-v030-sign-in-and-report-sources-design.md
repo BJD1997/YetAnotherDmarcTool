@@ -1,7 +1,8 @@
 # v0.3.0: sign-in with Google and OIDC, report source of your choice
 
 Status: design, waiting for review. Delivered in three betas (A, B, C), each
-usable on its own.
+usable on its own. The hosted mailbox (D) is built into B (IMAP) and C
+(Google).
 
 ## Decisions (2026-10-16)
 
@@ -12,6 +13,7 @@ usable on its own.
 | Local accounts after an org gets a provider | Keep working next to the provider. Org admins can add local teammates in every org. |
 | Google Workspace mailbox | One service account for the server, with domain-wide delegation granted by the customer's Workspace admin. |
 | IMAP with OAuth2 | Not in v0.3.0; app passwords cover it. |
+| Hosted mailbox | Can also be read over IMAP or from Google Workspace, not only Microsoft 365. |
 
 ## A. Sign-in
 
@@ -138,6 +140,29 @@ The Microsoft mailbox no longer requires Microsoft sign-in.
   confirmation step.
 - "Test connection" lists the inbox once and shows the count, or the exact
   error (delegation not granted, wrong mailbox).
+
+## D. The hosted mailbox on IMAP or Google Workspace
+
+The server's shared hosted mailbox can be read from any of the three
+sources. Routing doesn't change: each domain's address is
+`<mailbox name>+<random>@<hosted domain>`, and the `To:` address says which
+organization a report belongs to.
+
+- `HOSTED_REPORTS_SOURCE=microsoft|imap|google`, default `microsoft`, so
+  existing installs keep working unchanged.
+- IMAP: `HOSTED_REPORTS_IMAP_HOST`, `_PORT`, `_SECURITY` (ssl|starttls),
+  `_USERNAME`, `_PASSWORD`, `_FOLDER`, `_PROCESSED_FOLDER`, `_AUTHSERV_ID`.
+  Set by the platform admin, so a private address is allowed here (unlike
+  organization mailboxes). Without `_AUTHSERV_ID` nothing is read; the
+  platform admin's setup checks show the detected ID to fill in.
+- Google: `HOSTED_REPORTS_MAILBOX_ADDRESS` with the service account from C;
+  sender check ID fixed to `mx.google.com`.
+- The provider must deliver `name+anything@domain` to `name@domain` (plus
+  addressing): Gmail, Microsoft 365, Fastmail and most Dovecot/Postfix
+  setups do. To be tested for iCloud custom domains before it's documented.
+- Reading a mailbox becomes one interface (list new messages, fetch one,
+  mark it done) with three implementations (Graph, IMAP, Gmail), used by
+  both the organization poll and the hosted poll.
 
 ## Security notes
 
