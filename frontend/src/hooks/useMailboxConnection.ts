@@ -69,3 +69,23 @@ export function useStartMicrosoftMailboxTest() {
     mutationFn: () => api.post<{ start_url: string }>("/mailbox-connection/microsoft/test"),
   });
 }
+
+export function useTestGoogleMailbox() {
+  return useMutation({
+    mutationFn: (mailbox_address: string) =>
+      api.post<{ ok: true; messages: number }>("/mailbox-connection/google/test", { mailbox_address }),
+  });
+}
+
+export function useSetGoogleMailbox(onSuccess?: () => void, onError?: (error: Error) => void) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (mailbox_address: string) => api.put<MailboxConnectionStatus>("/mailbox-connection/google", { mailbox_address }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.mailboxConnection.current });
+      queryClient.invalidateQueries({ queryKey: queryKeys.onboarding.status });
+      onSuccess?.();
+    },
+    onError,
+  });
+}

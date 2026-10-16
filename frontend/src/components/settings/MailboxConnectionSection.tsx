@@ -11,6 +11,7 @@ import {
   useSetMailboxConnection,
   useStartMicrosoftMailboxTest,
 } from "../../hooks/useMailboxConnection";
+import GoogleMailboxForm from "./GoogleMailboxForm";
 import ImapMailboxForm from "./ImapMailboxForm";
 import { useCurrentOrganization } from "../../hooks/useOrganization";
 import { queryKeys } from "../../hooks/queryKeys";
@@ -60,7 +61,12 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
   // sign-in (TenantProof), unless their Microsoft mailbox already has one.
   const canUseMicrosoft = !!org?.entra_tenant_id || !!org?.microsoft_mailbox_available;
   const [ticket, setTicket] = useState<string | null>(null);
-  const [choice, setChoice] = useState<"microsoft" | "imap">("microsoft");
+  const googleDelegation = org?.google_mailbox ?? null;
+  const kinds: Kind[] = [...(canUseMicrosoft ? (["microsoft"] as const) : []), "imap", ...(googleDelegation ? (["google"] as const) : [])];
+  const showChoice = kinds.length > 1;
+  const [choice, setChoice] = useState<Kind>("microsoft");
+  // The first choice offered when the organization can't use Microsoft.
+  const choiceShown: Kind = kinds.includes(choice) ? choice : kinds[0];
   const confirmId = useSetImapConnection(startWaiting, (err) =>
     setSaveError(err instanceof ApiError ? err.message : "couldn't save the mail server ID"),
   );
@@ -123,7 +129,7 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
         </div>
       );
     }
-    const imapOnly = !canUseMicrosoft || choice === "imap";
+
     return (
       <div className="alert alert--warning">
         <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
@@ -131,11 +137,15 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
           No mailbox connection configured yet.
         </div>
 
-        {canUseMicrosoft && <MailboxChoice choice={choice} onChange={setChoice} />}
+        {showChoice && <MailboxChoice kinds={kinds} choice={choiceShown} onChange={setChoice} />}
 
-        {imapOnly ? (
+        {choiceShown === "imap" ? (
           <div style={{ marginTop: "0.75rem" }}>
             <ImapMailboxForm onSaved={startWaiting} />
+          </div>
+        ) : choiceShown === "google" && googleDelegation ? (
+          <div style={{ marginTop: "0.75rem" }}>
+            <GoogleMailboxForm delegation={googleDelegation} onSaved={startWaiting} />
           </div>
         ) : (
         <>
@@ -188,15 +198,29 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
   if (!connection) return null;
 
   const isImap = connection.kind === "imap";
+  const isMicrosoft = connection.kind === "microsoft";
   const imap = connection.imap;
   const idUnconfirmed = isImap && !!imap && !imap.authserv_id;
   const ok = connection.consent_status === "granted" && connection.last_sync_status !== "error" && !idUnconfirmed;
-  const editingImap = editing && (!canUseMicrosoft || choice === "imap");
+  const editingImap = editing && choiceShown === "imap";
+  const editingGoogle = editing && choiceShown === "google" && !!googleDelegation;
   return (
     <div className={`alert ${ok ? "alert--good" : "alert--warning"}`}>
-      {editing && canUseMicrosoft && <MailboxChoice choice={choice} onChange={setChoice} />}
-      {editingImap ? (
-        <div style={{ marginTop: canUseMicrosoft ? "0.75rem" : 0 }}>
+      {editing && showChoice && <MailboxChoice kinds={kinds} choice={choiceShown} onChange={setChoice} />}
+      {editingGoogle && googleDelegation ? (
+        <div style={{ marginTop: "0.75rem" }}>
+          <GoogleMailboxForm
+            delegation={googleDelegation}
+            current={connection.kind === "google" ? connection.mailbox_address : undefined}
+            onSaved={() => {
+              setEditing(false);
+              startWaiting();
+            }}
+            onCancel={() => setEditing(false)}
+          />
+        </div>
+      ) : editingImap ? (
+        <div style={{ marginTop: showChoice ? "0.75rem" : 0 }}>
           <ImapMailboxForm
             current={imap}
             onSaved={() => {
@@ -208,7 +232,7 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
         </div>
       ) : editing ? (
         <>
-        {!org?.entra_tenant_id && isImap && (
+        {!org?.entra_tenant_id && !isMicrosoft && (
           <div style={{ marginTop: "0.75rem", marginBottom: "0.5rem" }}>
             <TenantProof onPassed={setTicket} />
           </div>
@@ -224,7 +248,7 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
           <button
             type="submit"
             className="btn btn--primary btn--sm"
-            disabled={setConnection.isPending || (!org?.entra_tenant_id && isImap && !ticket)}
+            disabled={setConnection.isPending || (!org?.entra_tenant_id && !isMicrosoft && !ticket)}
           >
             Save
           </button>
@@ -244,6 +268,10 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
                   {connection.mailbox_address !== imap.username.toLowerCase() && `signed in as ${imap.username}, `}
                   {`on ${imap.host}, ${imap.folder} → ${imap.processed_folder}`}
                 </span>
+              </>
+            ) : connection.kind === "google" ? (
+              <>
+                Google Workspace mailbox: <strong>{connection.mailbox_address}</strong>
               </>
             ) : (
               <>
@@ -317,7 +345,7 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
               actually completed, so the links that matter for fixing that
               need to stay reachable here too, not just before the mailbox
               was first configured. */}
-          {canManage && !isImap && connection.last_sync_status === "error" && consentCta}
+          {canManage && isMicrosoft && connection.last_sync_status === "error" && consentCta}
           {canManage && (
             <div className="chip-row" style={{ marginTop: "0.6rem" }}>
               <button className="btn btn--secondary btn--sm" onClick={() => resync.mutate()} disabled={resync.isPending || syncing}>
@@ -327,30 +355,30 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
               <button
                 className="btn btn--ghost btn--sm"
                 onClick={() => {
-                  setMailbox(isImap ? "" : connection.mailbox_address);
-                  setChoice(isImap ? "imap" : "microsoft");
+                  setMailbox(isMicrosoft ? connection.mailbox_address : "");
+                  setChoice(connection.kind);
                   setEditing(true);
                 }}
               >
                 Change mailbox
               </button>
-              {canUseMicrosoft && (
+              {showChoice && (
                 <button
                   className="btn btn--ghost btn--sm"
                   onClick={() => {
                     setMailbox("");
-                    setChoice(isImap ? "microsoft" : "imap");
+                    setChoice(kinds.find((k) => k !== connection.kind) ?? connection.kind);
                     setEditing(true);
                   }}
                 >
-                  {isImap ? "Use Microsoft 365 instead" : "Use IMAP instead"}
+                  Use another kind of mailbox
                 </button>
               )}
               <button className="btn btn--ghost btn--sm" onClick={() => setShowHistory((v) => !v)}>
                 <History />
                 {showHistory ? "Hide" : "Recent syncs"}
               </button>
-              {!isImap && connection.last_sync_status !== "error" && (
+              {isMicrosoft && connection.last_sync_status !== "error" && (
                 <button className="btn btn--ghost btn--sm" onClick={() => setShowLinks((v) => !v)}>
                   {showLinks ? <ChevronUp /> : <ChevronDown />}
                   Entra links
@@ -421,18 +449,21 @@ function TenantProof({ onPassed }: { onPassed: (ticket: string) => void }) {
   );
 }
 
-function MailboxChoice({ choice, onChange }: { choice: "microsoft" | "imap"; onChange: (c: "microsoft" | "imap") => void }) {
+type Kind = "microsoft" | "imap" | "google";
+
+const KIND_LABEL: Record<Kind, string> = {
+  microsoft: "Microsoft 365 mailbox",
+  imap: "Another mailbox (IMAP)",
+  google: "Google Workspace mailbox",
+};
+
+function MailboxChoice({ kinds, choice, onChange }: { kinds: Kind[]; choice: Kind; onChange: (c: Kind) => void }) {
   return (
     <div className="chip-row" role="radiogroup" aria-label="Report mailbox" style={{ marginTop: "0.6rem" }}>
-      {(
-        [
-          ["microsoft", "Microsoft 365 mailbox"],
-          ["imap", "Another mailbox (IMAP)"],
-        ] as const
-      ).map(([value, label]) => (
+      {kinds.map((value) => (
         <label key={value} className="chip-row" style={{ gap: "0.3rem", cursor: "pointer" }}>
           <input type="radio" name="mailbox-kind" checked={choice === value} onChange={() => onChange(value)} />
-          {label}
+          {KIND_LABEL[value]}
         </label>
       ))}
     </div>

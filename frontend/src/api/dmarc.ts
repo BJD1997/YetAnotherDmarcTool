@@ -260,7 +260,7 @@ export interface ImapSettingsIn {
 
 export interface MailboxConnectionStatus {
   id: string;
-  kind: "microsoft" | "imap";
+  kind: "microsoft" | "imap" | "google";
   imap: ImapSettingsOut | null;
   mailbox_address: string;
   consent_status: "pending" | "granted" | "revoked";

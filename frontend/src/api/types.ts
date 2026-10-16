@@ -38,6 +38,9 @@ export interface Organization {
   // A Microsoft 365 report mailbox can be connected (with a test sign-in
   // when the organization doesn't sign in with Microsoft).
   microsoft_mailbox_available: boolean;
+  // A Google Workspace mailbox can be connected: the service account's
+  // client ID and scope for the Workspace admin's domain-wide delegation.
+  google_mailbox: { client_id: string; scope: string } | null;
 }
 
 export type DomainMailProfile = "sends_mail" | "receive_only" | "parked";

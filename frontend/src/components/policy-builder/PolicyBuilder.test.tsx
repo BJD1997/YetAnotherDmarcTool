@@ -29,6 +29,7 @@ const ORG: Organization = {
   ask_ai_enabled: false,
   entra_consent_urls: null,
   microsoft_mailbox_available: false,
+  google_mailbox: null,
 };
 
 function builderData(overrides: Partial<PolicyBuilderData> = {}): PolicyBuilderData {
