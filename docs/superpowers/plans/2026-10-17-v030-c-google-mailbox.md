@@ -23,4 +23,4 @@
 - [x] **3. Hosted mailbox from Google (backend)**: `HOSTED_REPORTS_SOURCE=google`, readiness, poll path sharing `_store`, setup checks/tips; tests.
 - [x] **4. Frontend**: third mailbox choice "Google Workspace mailbox" with the delegation steps (client ID, scope), Test connection, Save; status shows the kind. Tests.
 - [x] **5. Deployment**: `.env.example`, Portainer compose, Azure template (Google mail key + hosted IMAP), rebuild `azuredeploy.json`.
-- [ ] **6. Verify, docs, release**: full suites; wiki (Connecting a Google Workspace Mailbox page, Configuration Reference); release v0.3.0-beta15.
+- [x] **6. Verify, docs, release**: full suites; wiki (Connecting a Google Workspace Mailbox page, Configuration Reference); release v0.3.0-beta15.
