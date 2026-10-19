@@ -38,6 +38,12 @@ class _SignInFields(BaseModel):
     # through the provider (otherwise the break-glass account promotes).
     expected_admin_email: EmailStr | None = None
 
+    @field_validator("oidc_client_id", "oidc_client_secret")
+    @classmethod
+    def _no_surrounding_spaces(cls, value: str | None) -> str | None:
+        value = (value or "").strip()
+        return value or None
+
     @field_validator("google_workspace_domain")
     @classmethod
     def _workspace(cls, value: str | None) -> str | None:

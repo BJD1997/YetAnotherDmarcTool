@@ -14,7 +14,7 @@ import uuid
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -46,6 +46,14 @@ class ProviderRequest(BaseModel):
     client_id: str | None = Field(default=None, max_length=255)
     # Left out: keep the stored secret (same issuer and client only).
     client_secret: str | None = Field(default=None, min_length=1, max_length=1024)
+
+    @field_validator("client_id", "client_secret")
+    @classmethod
+    def _no_surrounding_spaces(cls, value: str | None) -> str | None:
+        # A copied secret easily brings a space or line break along; the
+        # provider then refuses it as a wrong secret.
+        value = (value or "").strip()
+        return value or None
 
 
 class ProviderSaveRequest(ProviderRequest):

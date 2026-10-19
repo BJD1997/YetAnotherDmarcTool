@@ -237,3 +237,13 @@ async def test_platform_admin_slugs_are_random_unless_chosen_and_unique(api):
     assert (await client.patch(f"/api/admin/organizations/{first['id']}", json={"slug": "acme"})).json()["slug"] == "acme"
     taken = await client.patch(f"/api/admin/organizations/{second['id']}", json={"slug": "acme"})
     assert taken.status_code == 409
+
+
+async def test_spaces_around_a_pasted_secret_are_ignored(api, fake_provider):
+    client, owner_factory = api
+    org, _ = await _break_glass(client, owner_factory)
+    body = {**OIDC, "client_id": " yadt ", "client_secret": "s3cret\n "}
+    result = await _run_test(client, body, "/api/auth/oidc/callback")
+    assert fake_provider["provider"].client_secret == "s3cret" and fake_provider["provider"].client_id == "yadt"
+    saved = await client.put("/api/organizations/current/sign-in", json={**body, "ticket": result["ticket"]})
+    assert saved.status_code == 200, saved.text

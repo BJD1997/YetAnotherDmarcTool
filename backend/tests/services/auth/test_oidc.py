@@ -147,3 +147,15 @@ async def test_the_authorization_url_carries_pkce_nonce_and_hint():
     assert url.startswith(f"{ISSUER}/auth?")
     for part in ("code_challenge_method=S256", "nonce=n", "login_hint=jan%40acme.example", "scope=openid+email+profile"):
         assert part in url
+
+
+async def test_the_providers_own_error_is_passed_on(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/.well-known/openid-configuration"):
+            return httpx.Response(200, json=DISCOVERY)
+        return httpx.Response(400, json={"error": "invalid_client", "error_description": "Client authentication failed"})
+
+    monkeypatch.setattr(oidc, "client_factory", lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    doc = await oidc.discover(PROVIDER)
+    with pytest.raises(oidc.OidcError, match=r"HTTP 400 \(invalid_client: Client authentication failed\)"):
+        await oidc.exchange_code(doc, PROVIDER, code="c", code_verifier="v", redirect_uri="https://yadt.example/cb")

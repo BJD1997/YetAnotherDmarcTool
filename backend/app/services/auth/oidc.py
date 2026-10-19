@@ -71,7 +71,7 @@ async def _checked_url(url: str, provider: Provider) -> str:
 
 def _json(response: httpx.Response, what: str) -> dict:
     if response.status_code != 200:
-        raise OidcError(f"{what} answered HTTP {response.status_code}")
+        raise OidcError(f"{what} answered HTTP {response.status_code}{_oauth_error(response)}")
     if len(response.content) > MAX_RESPONSE_BYTES:
         raise OidcError(f"{what} is too large")
     try:
@@ -81,6 +81,20 @@ def _json(response: httpx.Response, what: str) -> dict:
     if not isinstance(data, dict):
         raise OidcError(f"{what} isn't a JSON object")
     return data
+
+
+def _oauth_error(response: httpx.Response) -> str:
+    """The provider's own reason (RFC 6749 section 5.2), e.g. invalid_client
+    for a wrong client secret: it says what to fix."""
+    try:
+        data = response.json() if len(response.content) <= 10_000 else {}
+    except ValueError:
+        return ""
+    if not isinstance(data, dict) or not isinstance(data.get("error"), str):
+        return ""
+    detail = data.get("error_description")
+    reason = data["error"][:100] + (f": {detail[:200]}" if isinstance(detail, str) and detail else "")
+    return f" ({reason})"
 
 
 async def _get(url: str, provider: Provider, what: str) -> dict:
