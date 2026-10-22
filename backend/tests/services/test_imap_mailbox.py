@@ -349,3 +349,17 @@ def test_move_falls_back_to_copy_and_delete():
     imap_client.ImapMailbox(Client(), settings).mark_read_and_move(b"7")
 
     assert calls == ["STORE", "CREATE", "SUBSCRIBE", "COPY", "STORE", "EXPUNGE"]
+
+
+def test_imap_checks_certificates_against_certifis_list():
+    # The same list as every HTTPS call, not the container's system list
+    # (which still trusted the emSign roots after certifi dropped them).
+    import ssl
+
+    import certifi
+
+    context = imap_client.tls_context()
+    assert context.verify_mode == ssl.CERT_REQUIRED and context.check_hostname
+    loaded = {c["serialNumber"] for c in context.get_ca_certs()}
+    expected = {c["serialNumber"] for c in ssl.create_default_context(cafile=certifi.where()).get_ca_certs()}
+    assert loaded == expected and loaded

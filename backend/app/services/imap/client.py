@@ -18,6 +18,8 @@ import socket
 import ssl
 from dataclasses import dataclass
 
+import certifi
+
 from app.models.enums import ImapSecurity
 from app.services.dns_checks.ssrf_guard import BlockedAddressError, resolve_public_address
 from app.services.ingestion.sender_auth import top_authserv_id
@@ -76,6 +78,15 @@ def _check(response: tuple, what: str) -> list:
     return data
 
 
+def tls_context() -> ssl.SSLContext:
+    """Certificates checked against certifi's list, like every HTTPS call
+    (httpx), instead of the container's system list: one list that follows
+    Mozilla's trust decisions and is refreshed with every build. (In October
+    2026 certifi dropped the emSign roots after eMudhra's intermediate keys
+    were stolen, while Debian's list still trusted them.)"""
+    return ssl.create_default_context(cafile=certifi.where())
+
+
 class ImapMailbox:
     """One open, logged-in connection. Use connect() and close()."""
 
@@ -88,7 +99,7 @@ class ImapMailbox:
     @classmethod
     def connect(cls, settings: ImapSettings, address: str) -> "ImapMailbox":
         """Blocking: run in a thread. `address` comes from resolve_address()."""
-        context = ssl.create_default_context()
+        context = tls_context()
         try:
             if settings.security == ImapSecurity.ssl:
                 client = _PinnedIMAP4_SSL(settings.host, settings.port, address, CONNECT_TIMEOUT_SECONDS, context)
