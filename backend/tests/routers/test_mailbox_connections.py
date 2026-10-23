@@ -95,3 +95,30 @@ async def test_connect_and_resync_hand_the_sync_to_the_worker(api, monkeypatch):
     async with owner_factory() as db:
         await db.execute(text("DELETE FROM background_jobs WHERE dedupe_key = :k"), {"k": f"mailbox_poll:{org.id}"})
         await db.commit()
+
+
+async def test_a_microsoft_mailbox_keeps_its_tenant_when_sign_in_moves(api):
+    from sqlalchemy import select, text
+
+    from app.models.mailbox_connection import MailboxConnection
+    from app.models.organization import Organization
+
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory, role=UserRole.org_admin, entra=True)
+    await login_as(client, owner_factory, user)
+    assert (await client.put("/api/mailbox-connection", json={"mailbox_address": "reports@example.com"})).status_code == 200
+    tenant = org.entra_tenant_id
+
+    # The organization switches its sign-in away from Microsoft.
+    async with owner_factory() as db:
+        o = await db.get(Organization, org.id)
+        o.entra_tenant_id = None
+        await db.execute(text("DELETE FROM background_jobs WHERE dedupe_key = :k"), {"k": f"mailbox_poll:{org.id}"})
+        await db.commit()
+
+    assert (await client.post("/api/mailbox-connection/resync")).status_code == 202
+    # Changing the address keeps the mailbox's tenant too.
+    assert (await client.put("/api/mailbox-connection", json={"mailbox_address": "dmarc@example.com"})).status_code == 200
+    async with owner_factory() as db:
+        connection = (await db.execute(select(MailboxConnection).where(MailboxConnection.organization_id == org.id))).scalar_one()
+        assert connection.ms_tenant_id == tenant

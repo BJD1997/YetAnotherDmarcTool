@@ -152,6 +152,8 @@ async def ranked_domains(db: AsyncSession = Depends(get_db), user: User = Depend
         dmarc_configured: bool | None = None
         rua_status: str | None = None
         last_dns_check_at = None
+        setup_grade: str | None = None
+        delivery_grade: str | None = None
 
         if not not_verified:
             findings_by_type = await latest_findings_by_type(db, domain.id)
@@ -159,6 +161,8 @@ async def ranked_domains(db: AsyncSession = Depends(get_db), user: User = Depend
             rating, message_volume, failed_volume = await compute_domain_rating(db, domain, findings_by_type=findings_by_type)
             score = rating.score
             grade = rating.grade
+            setup_grade = rating.setup.grade if rating.setup else None
+            delivery_grade = rating.delivery.grade if rating.delivery else None
             insufficient_data = rating.insufficient_data
 
             readiness = await domain_policy_readiness(db, domain, rating=rating, total_volume=message_volume)
@@ -195,6 +199,8 @@ async def ranked_domains(db: AsyncSession = Depends(get_db), user: User = Depend
                 "insufficient_data": insufficient_data,
                 "score": score,
                 "grade": grade,
+                "setup_grade": setup_grade,
+                "delivery_grade": delivery_grade,
                 "message_volume": message_volume,
                 "failed_volume": int(failed_volume),
                 "current_policy": current_policy,

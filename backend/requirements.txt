@@ -28,5 +28,7 @@ dnspython==2.8.0
 
 # HTTP client (Graph API calls, MTA-STS policy fetch)
 httpx==0.28.1
+# The trusted certificate list for HTTPS (via httpx) and IMAP
+certifi==2026.10.19
 
 python-multipart==0.0.32

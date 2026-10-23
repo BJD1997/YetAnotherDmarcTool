@@ -7,6 +7,7 @@ import { useAuth } from "../../auth/AuthContext";
 import { ASK_AI_EXPLANATION, AskAiToggle } from "../../components/settings/AskAiToggle";
 import MailboxConnectionSection from "../../components/settings/MailboxConnectionSection";
 import { useUpdateOrganization } from "../../hooks/useOrganization";
+import { useRemoveTrustedReporter, useTrustedReporters } from "../../hooks/useTrustedReporters";
 
 const SPF_MODES: { key: SpfAllQualifierMode; label: string; description: string }[] = [
   {
@@ -28,15 +29,16 @@ const SENDER_CHECKS: { key: ReportSenderCheck; label: string; description: strin
     key: "standard",
     label: "Standard (recommended)",
     description:
-      "Leaves out reports that failed DMARC, came from someone other than the reporter they name, or were sent from inside " +
-      "your Microsoft 365 organization. Genuine reports only drop out if they fail DMARC, which is rare.",
+      "Counts reports from known mail providers (Google, Microsoft, Yahoo, Mail.ru) and reporters you trust. Leaves out " +
+      "reports that failed DMARC, came from someone other than the reporter they name, or were sent from inside your " +
+      "Microsoft 365 organization.",
   },
   {
     key: "strict",
     label: "Strict",
     description:
-      "Counts only reports whose sender passed DMARC. Best protection against fake reports, but also drops genuine " +
-      "reports from senders that have no DMARC record.",
+      "Like Standard, but the sender must also have passed DMARC. Drops genuine reports from senders that have no " +
+      "DMARC record.",
   },
   {
     key: "off",
@@ -52,25 +54,16 @@ export default function GeneralTab() {
 
   return (
     <section>
-      {/* Local-auth orgs (no entra_tenant_id) have no Entra tenant to grant
-          Mail Access consent from, so this section is never functional for
-          them — "grant access" has no links to show, and the mailbox-address
-          form is a dead end. They get a hosted address per domain instead
-          (see the "Hosted reporting mailbox" section below), which already
-          explains their situation — no need to also show this. */}
-      {org.entra_tenant_id && (
-        <>
-          <h3 className="section-title">Mailbox connection</h3>
-          <p className="section-hint">The shared mailbox this organization's DMARC/TLS-RPT reports arrive at.</p>
-          <MailboxConnectionSection canManage={canManage} />
-        </>
-      )}
+      {/* Every organization connects one mailbox of its own: Microsoft 365
+          (with a tenant test when it doesn't sign in with Microsoft) or any
+          IMAP mailbox. */}
+      <h3 className="section-title">Mailbox connection</h3>
+      <p className="section-hint">The shared mailbox this organization's DMARC/TLS-RPT reports arrive at.</p>
+      <MailboxConnectionSection canManage={canManage} />
 
       {canManage && (
         <>
-          {/* Only between sections: without the mailbox section above, a
-              leading divider pushed this tab's content below the others'. */}
-          {org.entra_tenant_id && <hr className="divider" />}
+          <hr className="divider" />
           <h3 className="section-title">SPF "all" recommendation</h3>
           <p className="section-hint">How the SPF check scores a record ending in -all (hardfail) vs ~all (softfail).</p>
           <SpfModeSection org={org} />
@@ -96,6 +89,7 @@ export default function GeneralTab() {
             applies to reports you've already received.
           </p>
           <SenderCheckSection org={org} />
+          <TrustedReportersSection />
 
           <hr className="divider" />
           <h3 className="section-title">Hosted reporting mailbox</h3>
@@ -180,6 +174,44 @@ function SenderCheckSection({ org }: { org: Organization }) {
   );
 }
 
+function TrustedReportersSection() {
+  const [error, setError] = useState<string | null>(null);
+  const { data } = useTrustedReporters();
+  const remove = useRemoveTrustedReporter((err) => setError(err instanceof ApiError ? err.message : "failed to remove"));
+  if (!data) return null;
+
+  return (
+    <div style={{ marginTop: "0.8rem" }}>
+      <strong style={{ fontWeight: 600 }}>Reporters you trust</strong>
+      <p className="section-hint" style={{ margin: "0.2rem 0 0.5rem" }}>
+        Reports can claim anything, so only reports from known mail providers count by default. Trust another reporter
+        from a domain's left-out reports list.
+      </p>
+      {data.length === 0 ? (
+        <p className="section-hint" style={{ margin: 0 }}>None yet.</p>
+      ) : (
+        <div className="chip-row">
+          {data.map((r) => (
+            <span key={r.domain} className="badge">
+              {r.domain}
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                aria-label={`Stop trusting ${r.domain}`}
+                disabled={remove.isPending}
+                onClick={() => remove.mutate(r.domain)}
+              >
+                Remove
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      {error && <div className="alert alert--critical" style={{ marginTop: "0.5rem" }}>{error}</div>}
+    </div>
+  );
+}
+
 function SpfModeSection({ org }: { org: Organization }) {
   const [error, setError] = useState<string | null>(null);
 
@@ -219,16 +251,15 @@ function HostedMailboxSection({ org }: { org: Organization }) {
     (err) => setError(err instanceof ApiError ? err.message : "failed to save"),
   );
 
-  // Local-auth orgs have no Entra tenant to grant Mail Access consent from
-  // — a hosted mailbox is their only way to receive reports at all, so
-  // there's nothing to toggle for them (see _hosted_mailbox_available in
-  // app/routers/domains.py).
+  // Organizations without Microsoft sign-in can always use the hosted
+  // mailbox, so there's nothing to toggle for them (see
+  // _hosted_mailbox_available in app/routers/domains.py).
   if (!org.entra_tenant_id) {
     return (
       <div className="card" style={{ padding: "1rem" }}>
         <p className="section-hint" style={{ margin: 0 }}>
-          Always available — your organization signs in without Microsoft Entra, so a YetAnotherDmarcTool-hosted mailbox is your only
-          reporting option.
+          Always available on servers that offer one: each domain can get a YetAnotherDmarcTool-hosted reporting address,
+          as well as or instead of your own mailbox above.
         </p>
       </div>
     );

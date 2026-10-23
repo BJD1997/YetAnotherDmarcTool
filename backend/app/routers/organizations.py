@@ -1,24 +1,31 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user, require_org_admin
 from app.models.organization import Organization
+from app.models.trusted_reporter import TrustedReporter
 from app.models.user import User
-from app.repositories.dmarc_reports import apply_report_sender_check
+from app.repositories.dmarc_reports import apply_report_sender_check, trust_reporter, untrust_reporter
+from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.repositories.organizations import get_organization
-from app.schemas.organizations import OrganizationUpdateRequest
+from app.schemas.organizations import OrganizationUpdateRequest, TrustedReporterRequest
 from app.services.auth.entra_links import entra_consent_urls
+from app.services.gmail.client import SCOPE as GMAIL_SCOPE
+from app.services.gmail.client import GmailError, load_service_account
 
 router = APIRouter(prefix="/organizations", tags=["organizations"])
 
 
-def _org_out(org: Organization) -> dict:
+def _org_out(org: Organization, mailbox_tenant_id=None) -> dict:
     return {
         "id": str(org.id),
         "name": org.name,
         "status": org.status.value,
         "entra_tenant_id": str(org.entra_tenant_id) if org.entra_tenant_id else None,
+        "sign_in_provider": org.sign_in_provider,
         "is_operator": org.is_operator,
         "spf_all_qualifier_mode": org.spf_all_qualifier_mode.value,
         "hosted_mailbox_opt_in": org.hosted_mailbox_opt_in,
@@ -28,8 +35,28 @@ def _org_out(org: Organization) -> dict:
         "is_demo_read_only": org.is_demo_read_only,
         # Self-service reference: e.g. if the SSO consent link is needed
         # later, or the Mail Access consent needs redoing after a lapse.
-        "entra_consent_urls": entra_consent_urls(org),
+        "entra_consent_urls": entra_consent_urls(org, mailbox_tenant_id),
+        # A Microsoft 365 report mailbox can be connected (with a test
+        # sign-in when the organization doesn't sign in with Microsoft).
+        "microsoft_mailbox_available": bool(settings.entra_sso_client_id and settings.entra_mail_client_id),
+        # For the Workspace admin's domain-wide delegation step.
+        "google_mailbox": _google_mailbox_out(),
     }
+
+
+def _google_mailbox_out() -> dict | None:
+    try:
+        account = load_service_account()
+    except GmailError:
+        account = None
+    if account is None:
+        return None
+    return {"client_id": account.client_id, "scope": GMAIL_SCOPE}
+
+
+async def _mailbox_tenant(db: AsyncSession, organization_id):
+    connection = await get_org_mailbox_connection(db, organization_id)
+    return connection.ms_tenant_id if connection is not None else None
 
 
 @router.get("/current")
@@ -37,7 +64,7 @@ async def get_current_organization(
     db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
 ) -> dict:
     org = await get_organization(db, user.organization_id)
-    return _org_out(org)
+    return _org_out(org, await _mailbox_tenant(db, org.id))
 
 
 @router.patch("/current")
@@ -62,4 +89,44 @@ async def update_current_organization(
         await apply_report_sender_check(db, org.id, body.report_sender_check)
     await db.commit()
     await db.refresh(org)
-    return _org_out(org)
+    return _org_out(org, await _mailbox_tenant(db, org.id))
+
+
+async def _trusted_reporters_out(db: AsyncSession, organization_id) -> list[dict]:
+    rows = await db.execute(
+        select(TrustedReporter).where(TrustedReporter.organization_id == organization_id).order_by(TrustedReporter.domain)
+    )
+    return [{"domain": r.domain, "created_at": r.created_at.isoformat()} for r in rows.scalars()]
+
+
+@router.get("/current/trusted-reporters")
+async def list_trusted_reporters(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)) -> list[dict]:
+    """Report senders the organization has chosen to believe, on top of the
+    built-in known reporters (sender_auth.KNOWN_REPORTERS)."""
+    return await _trusted_reporters_out(db, user.organization_id)
+
+
+@router.post("/current/trusted-reporters")
+async def add_trusted_reporter(
+    body: TrustedReporterRequest, db: AsyncSession = Depends(get_db), user: User = Depends(require_org_admin)
+) -> list[dict]:
+    org = await get_organization(db, user.organization_id)
+    await trust_reporter(db, org.id, body.domain, user.id)
+    # Counts its reports already received too, not just new ones.
+    await apply_report_sender_check(db, org.id, org.report_sender_check)
+    out = await _trusted_reporters_out(db, org.id)
+    await db.commit()
+    return out
+
+
+@router.delete("/current/trusted-reporters/{domain}")
+async def remove_trusted_reporter(
+    domain: str, db: AsyncSession = Depends(get_db), user: User = Depends(require_org_admin)
+) -> list[dict]:
+    org = await get_organization(db, user.organization_id)
+    if not await untrust_reporter(db, org.id, domain.strip().lower().rstrip(".")):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "not a trusted reporter")
+    await apply_report_sender_check(db, org.id, org.report_sender_check)
+    out = await _trusted_reporters_out(db, org.id)
+    await db.commit()
+    return out

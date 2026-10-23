@@ -6,10 +6,14 @@ import { useAuth } from "../auth/AuthContext";
 import { useCurrentOrganization } from "../hooks/useOrganization";
 import { useCreateUser, useResetUserMfa, useResetUserPassword, useUpdateUser, useUsers } from "../hooks/useUsers";
 import { useClipboardFeedback } from "../hooks/useClipboardFeedback";
+import { useSignInSettings } from "../hooks/useSignInSettings";
 
-function ShareSignInLink() {
+const PROVIDER_ACCOUNT = { microsoft: "Microsoft", google: "Google Workspace", oidc: "company" } as const;
+
+function ShareSignInLink({ provider }: { provider: keyof typeof PROVIDER_ACCOUNT }) {
   const { copied, copy: copyToClipboard } = useClipboardFeedback();
-  const signInUrl = `${window.location.origin}/login`;
+  const { data: signIn } = useSignInSettings();
+  const signInUrl = signIn?.login_link ?? `${window.location.origin}/login`;
 
   function copy() {
     void copyToClipboard(signInUrl);
@@ -21,8 +25,8 @@ function ShareSignInLink() {
         Invite teammates
       </div>
       <p className="section-hint">
-        There's no invite-by-email step — anyone in your Microsoft tenant who signs in at this link will appear here
-        automatically as a member.
+        There's no invite-by-email step: anyone who signs in with your organization's {PROVIDER_ACCOUNT[provider]} account
+        at this link appears here automatically as a member.
       </p>
       <div className="field-row">
         <code className="input" style={{ display: "inline-block" }}>
@@ -63,9 +67,10 @@ function AddLocalTeammate() {
         Invite teammates
       </div>
       <p className="section-hint">
-        There's no Microsoft SSO for this organization — add a teammate's email below and share the one-time setup
-        link it generates with them yourself. They'll set a password and enroll two-factor authentication the first
-        time they use it.
+        Add a teammate's email and share the one-time setup link with them yourself; they set a password and an
+        authenticator the first time they use it. These are local accounts. Once your organization signs in through
+        Microsoft, Google or its own provider (Settings → Sign-in), people join that way instead, and only the
+        break-glass account stays local.
       </p>
       <form
         onSubmit={(e) => {
@@ -172,14 +177,16 @@ export default function Team() {
         <div>
           <h1>Team</h1>
           <p className="page-subtitle">
-            The first person to sign in to a new organization automatically becomes an org admin. Everyone after
-            that starts as a member — promote them here if they need to manage domains, the mailbox connection, or
-            other team members.
+            New people start as members, except the admin named when the organization was set up. Promote them here
+            if they need to manage domains, the mailbox connection, or other team members.
           </p>
         </div>
       </div>
 
-      {org && (org.entra_tenant_id ? <ShareSignInLink /> : canManage ? <AddLocalTeammate /> : null)}
+      {org && org.sign_in_provider !== "none" && <ShareSignInLink provider={org.sign_in_provider} />}
+      {/* Once the organization has a provider, people join through it; the
+          break-glass account is then its only local account. */}
+      {canManage && org?.sign_in_provider === "none" && <AddLocalTeammate />}
 
       {resetLink && <ResetLinkNotice {...resetLink} onDismiss={() => setResetLink(null)} />}
       {notice && <div className="alert alert--good">{notice}</div>}
@@ -213,7 +220,7 @@ export default function Team() {
                       </span>
                       {member.auth_method === "local" && (
                         <span className="badge badge--neutral" style={{ marginLeft: "0.3rem" }}>
-                          local
+                          {member.is_break_glass ? "break-glass" : "local"}
                         </span>
                       )}
                       {member.auth_method === "local" && !member.mfa_enrolled && (
@@ -230,30 +237,35 @@ export default function Team() {
                       <td>
                         {!isSelf && (
                           <div className="chip-row">
-                            <button
-                              className="btn btn--ghost btn--sm"
-                              onClick={() =>
-                                updateMember.mutate({
-                                  id: member.id,
-                                  body: { role: member.role === "org_admin" ? "member" : "org_admin" },
-                                })
-                              }
-                              disabled={updateMember.isPending}
-                            >
-                              {member.role === "org_admin" ? "Demote to member" : "Promote to org admin"}
-                            </button>
-                            <button
-                              className="btn btn--ghost btn--sm"
-                              onClick={() =>
-                                updateMember.mutate({
-                                  id: member.id,
-                                  body: { status: member.status === "active" ? "disabled" : "active" },
-                                })
-                              }
-                              disabled={updateMember.isPending}
-                            >
-                              {member.status === "active" ? "Disable" : "Re-enable"}
-                            </button>
+                            {/* The break-glass account stays an active org admin. */}
+                            {!member.is_break_glass && (
+                              <>
+                                <button
+                                  className="btn btn--ghost btn--sm"
+                                  onClick={() =>
+                                    updateMember.mutate({
+                                      id: member.id,
+                                      body: { role: member.role === "org_admin" ? "member" : "org_admin" },
+                                    })
+                                  }
+                                  disabled={updateMember.isPending}
+                                >
+                                  {member.role === "org_admin" ? "Demote to member" : "Promote to org admin"}
+                                </button>
+                                <button
+                                  className="btn btn--ghost btn--sm"
+                                  onClick={() =>
+                                    updateMember.mutate({
+                                      id: member.id,
+                                      body: { status: member.status === "active" ? "disabled" : "active" },
+                                    })
+                                  }
+                                  disabled={updateMember.isPending}
+                                >
+                                  {member.status === "active" ? "Disable" : "Re-enable"}
+                                </button>
+                              </>
+                            )}
                             {member.auth_method === "local" && (
                               <>
                                 <button

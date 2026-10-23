@@ -10,6 +10,7 @@ const ACCOUNT_CHANGES: Record<string, string> = {
   mfa_reset_by_admin: "Two-factor authentication reset",
   password_reset_by_platform_admin: "Password reset by platform admin",
   mfa_reset_by_platform_admin: "Two-factor authentication reset by platform admin",
+  made_org_admin_by_platform_admin: "Made org admin by platform admin",
 };
 
 function reasonText(event: SignInEvent): string {
@@ -28,6 +29,8 @@ const RESULT_BADGE: Record<SignInEvent["result"], { className: string; label: st
 const METHOD_LABELS: Record<SignInEvent["auth_method"], string> = {
   entra: "Microsoft",
   local: "local",
+  google: "Google",
+  oidc: "company sign-in",
   platform_admin: "break-glass",
 };
 
@@ -68,6 +71,8 @@ export default function SignInEventsSection({ endpoint = "/sign-in-events" }: { 
           <select className="input" value={authMethodFilter} onChange={(e) => setAuthMethodFilter(e.target.value)}>
             <option value="">Any method</option>
             <option value="entra">Microsoft</option>
+            <option value="google">Google</option>
+            <option value="oidc">Company sign-in</option>
             <option value="local">Local</option>
           </select>
         )}

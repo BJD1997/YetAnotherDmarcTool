@@ -6,7 +6,10 @@ import pytest_asyncio
 from app.models.dmarc_aggregate import DmarcAggregateRecord, DmarcAggregateReport
 from app.models.dns_check import DnsCheckResult
 from app.models.domain import Domain
-from app.models.enums import AuthResult, CheckStatus, CheckType, Disposition, DomainVerificationStatus, UserRole
+from app.models.enums import (
+    AuthResult, CheckStatus, CheckType, ConsentStatus, Disposition, DomainVerificationStatus, SyncStatus, UserRole,
+)
+from app.models.mailbox_connection import MailboxConnection
 
 from tests.conftest import login_as, seed_org_and_user
 
@@ -91,6 +94,39 @@ async def test_action_queue_empty_org(api):
 
     assert response.status_code == 200
     assert response.json() == []
+
+
+async def _connect_mailbox(owner_factory, org, *, connected_days_ago: int) -> None:
+    now = datetime.now(timezone.utc)
+    async with owner_factory() as db:
+        db.add(
+            MailboxConnection(
+                organization_id=org.id, mailbox_address="reports@example.com", consent_status=ConsentStatus.granted,
+                consent_granted_at=now - timedelta(days=connected_days_ago), last_sync_at=now,
+                last_sync_status=SyncStatus.success,
+            )
+        )
+        await db.commit()
+
+
+async def test_a_new_mailbox_isnt_reported_as_stopped(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    await login_as(client, owner_factory, user)
+    await _connect_mailbox(owner_factory, org, connected_days_ago=1)
+
+    titles = [i["title"] for i in (await client.get("/api/action-queue")).json()]
+    assert not any("no reports in" in t for t in titles)
+
+
+async def test_a_mailbox_without_reports_for_long_is_reported(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    await login_as(client, owner_factory, user)
+    await _connect_mailbox(owner_factory, org, connected_days_ago=30)
+
+    titles = [i["title"] for i in (await client.get("/api/action-queue")).json()]
+    assert any("no reports in" in t for t in titles)
 
 
 async def test_action_queue_scoped_to_one_domain(api):

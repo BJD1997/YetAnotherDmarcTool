@@ -6,13 +6,16 @@ import itertools
 
 import pytest
 from sqlalchemy import Boolean, String, func, literal, select
+from sqlalchemy.dialects.postgresql import UUID as PgUUID
 
 from app.db.report_trust import INCLUDE_UNVERIFIED
 from app.models.dmarc_aggregate import DmarcAggregateRecord, DmarcAggregateReport
 from app.models.domain import Domain
 from app.models.enums import ConsentStatus
 from app.models.mailbox_connection import MailboxConnection
-from app.models.enums import ReportSenderCheck
+from app.models.enums import OrganizationStatus, ReportSenderCheck
+from app.models.organization import Organization
+from app.models.trusted_reporter import TrustedReporter
 from app.services.ingestion.sender_auth import (
     UNCHECKED,
     SenderAuth,
@@ -84,7 +87,7 @@ STANDARD, STRICT, OFF = ReportSenderCheck.standard, ReportSenderCheck.strict, Re
 @pytest.mark.parametrize(
     ("sender", "expected"),
     [
-        # (origin, dmarc, matches) -> (standard, strict, off)
+        # (origin, dmarc, matches) -> (standard, strict, off), from a known reporter
         (("external", "pass", True), (True, True, True)),
         (("external", "bestguesspass", None), (True, True, True)),
         (("external", "none", True), (True, False, True)),  # reporter without DMARC
@@ -95,8 +98,34 @@ STANDARD, STRICT, OFF = ReportSenderCheck.standard, ReportSenderCheck.strict, Re
     ],
 )
 def test_decide(sender, expected):
-    auth = SenderAuth(origin=sender[0], dmarc=sender[1], domain="x.example", matches_reporter=sender[2])
+    auth = SenderAuth(origin=sender[0], dmarc=sender[1], domain="google.com", matches_reporter=sender[2])
     assert (decide(STANDARD, auth), decide(STRICT, auth), decide(OFF, auth)) == expected
+
+
+def test_passing_dmarc_as_yourself_needs_a_known_or_trusted_reporter():
+    """Proving who sent a report isn't proving they ever saw the domain's
+    mail: a self-registered domain naming itself as reporter is left out
+    until the organization trusts it."""
+    own = SenderAuth(origin="external", dmarc="pass", domain="attacker.example", matches_reporter=True)
+    assert (decide(STANDARD, own), decide(STRICT, own), decide(OFF, own)) == (False, False, True)
+    trusted = frozenset({"attacker.example"})
+    assert (decide(STANDARD, own, trusted), decide(STRICT, own, trusted)) == (True, True)
+    # Trusting one organization's reporter doesn't trust another's.
+    assert decide(STANDARD, own, frozenset({"partner.example"})) is False
+
+
+def test_known_reporters_match_the_exact_sending_domain():
+    """yahoo.com and mail.ru are also free-mailbox domains anyone can pass
+    DMARC for; only their report systems' own domains are known."""
+    def from_(domain):
+        return SenderAuth(origin="external", dmarc="pass", domain=domain, matches_reporter=True)
+    assert decide(STANDARD, from_("dmarc.yahoo.com")) is True
+    assert decide(STANDARD, from_("yahoo.com")) is False
+    assert decide(STANDARD, from_("corp.mail.ru")) is True
+    assert decide(STANDARD, from_("mail.ru")) is False
+    assert decide(STANDARD, from_("gmail.com")) is False
+    assert decide(STANDARD, from_("attacker.google.com.example")) is False
+    assert decide(STANDARD, SenderAuth(origin="external", dmarc="pass", domain=None)) is False
 
 
 def test_unchecked_reports_always_count():
@@ -107,23 +136,36 @@ async def test_sql_rule_matches_python_rule(rls_sessions):
     """decide_sql re-evaluates stored reports; it must give the same answer
     as decide() does at ingestion, for every combination of facts."""
     owner, _ = rls_sessions
-    combos = list(itertools.product(["external", "internal", None], ["pass", "bestguesspass", "none", "missing", "fail", None], [True, False, None]))
+    org = Organization(name="Facts Org", status=OrganizationStatus.active)
+    owner.add(org)
+    await owner.flush()
+    owner.add(TrustedReporter(organization_id=org.id, domain="partner.example"))
+    await owner.flush()
+    trusted = frozenset({"partner.example"})
+    combos = list(itertools.product(
+        ["external", "internal", None],
+        ["pass", "bestguesspass", "none", "missing", "fail", None],
+        [True, False, None],
+        ["google.com", "partner.example", "attacker.example", None],
+    ))
     for mode in ReportSenderCheck:
-        for origin, dmarc, matches in combos:
-            auth = SenderAuth(origin=origin, dmarc=dmarc, domain="x.example", matches_reporter=matches)
+        for origin, dmarc, matches, domain in combos:
+            auth = SenderAuth(origin=origin, dmarc=dmarc, domain=domain, matches_reporter=matches)
             row = select(
-                decide_sql(mode, _Facts(origin, dmarc, matches))
+                decide_sql(mode, _Facts(origin, dmarc, matches, domain, org.id))
             )
-            assert (await owner.execute(row)).scalar_one() == decide(mode, auth), (mode, origin, dmarc, matches)
+            assert (await owner.execute(row)).scalar_one() == decide(mode, auth, trusted), (mode, origin, dmarc, matches, domain)
 
 
 class _Facts:
     """Literal stand-ins for a report table's sender_* columns."""
 
-    def __init__(self, origin, dmarc, matches):
+    def __init__(self, origin, dmarc, matches, domain, organization_id):
         self.sender_origin = literal(origin, String)
         self.sender_dmarc = literal(dmarc, String)
         self.sender_matches_reporter = literal(matches, Boolean)
+        self.sender_domain = literal(domain, String)
+        self.organization_id = literal(organization_id, PgUUID(as_uuid=True))
 
 
 # ---------- ingestion ----------
@@ -288,3 +330,19 @@ async def test_left_out_reports_can_be_reviewed(api, monkeypatch):
         ("DMARC", "google.com", "Sent by evil.example, not by the reporter it names"),
     ]
 
+
+
+async def test_free_email_domains_cant_be_trusted(api):
+    from app.models.enums import UserRole
+
+    client, owner_factory = api
+    _org, admin = await seed_org_and_user(owner_factory, role=UserRole.org_admin)
+    await login_as(client, owner_factory, admin)
+
+    refused = await client.post("/api/organizations/current/trusted-reporters", json={"domain": "Gmail.com"})
+    assert refused.status_code == 422
+    assert "free email domain" in refused.text
+
+    allowed = await client.post("/api/organizations/current/trusted-reporters", json={"domain": "dmarc.zoho.com"})
+    assert allowed.status_code == 200
+    assert [r["domain"] for r in allowed.json()] == ["dmarc.zoho.com"]

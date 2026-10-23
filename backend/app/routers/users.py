@@ -24,6 +24,7 @@ def _user_out(user: User) -> dict:
         "role": user.role.value,
         "status": user.status.value,
         "auth_method": user.auth_method.value,
+        "is_break_glass": user.is_break_glass,
         "mfa_enrolled": user.otp_enrolled_at is not None,
         "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
     }
@@ -41,15 +42,16 @@ async def create_local_user(
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_org_admin),
 ) -> dict:
-    """Lets a local-auth org's own admin add teammates the same way a
-    platform admin bootstraps that org's first user (see
-    platform_admin.create_local_user) — gives local-auth orgs the same
-    "admin shares a link, no operator involvement per teammate" parity
-    Entra orgs already have via Team.tsx's ShareSignInLink."""
+    """Lets an org admin add a local teammate the same way a platform admin
+    bootstraps an organization's first user (see
+    platform_admin.create_local_user): a one-time link the admin shares."""
+    # Local teammates only until the organization has a sign-in provider;
+    # after that its only local account is the break-glass account.
     org = await get_organization(db, admin.organization_id)
-    if org is None or org.entra_tenant_id is not None:
+    if org.sign_in_provider != "none":
         raise HTTPException(
-            status.HTTP_409_CONFLICT, "this organization uses Entra SSO — teammates join by signing in, not manual creation"
+            status.HTTP_409_CONFLICT,
+            "your organization signs in through its provider: people join by signing in there",
         )
 
     new_user = User(
@@ -92,6 +94,13 @@ async def update_user(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "cannot demote yourself")
     if target.id == admin.id and body.status is not None and body.status != UserStatus.active:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "cannot disable yourself")
+    if target.is_break_glass and (
+        (body.role is not None and body.role != UserRole.org_admin)
+        or (body.status is not None and body.status != UserStatus.active)
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "the break-glass account stays an active org admin; the platform admin can change it"
+        )
 
     if body.role is not None:
         target.role = body.role
@@ -114,7 +123,7 @@ async def _local_teammate(db: AsyncSession, admin: User, user_id: uuid.UUID) -> 
     if target.id == admin.id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "use Settings → Account to change your own sign-in")
     if target.auth_method != AuthMethod.local:
-        raise HTTPException(status.HTTP_409_CONFLICT, "this user signs in with Microsoft — reset it in Entra instead")
+        raise HTTPException(status.HTTP_409_CONFLICT, "this user signs in through your provider — reset it there instead")
     return target
 
 
