@@ -67,4 +67,6 @@ export const queryKeys = {
   policyBuilder: (domainId: string) => ["policy-builder", domainId] as const,
   tlsRptBuilder: (domainId: string) => ["tls-rpt-builder", domainId] as const,
   mtaStsBuilder: (domainId: string) => ["mta-sts-builder", domainId] as const,
+  spfBuilder: (domainId: string) => ["spf-builder", domainId] as const,
+  spfEvaluation: (domainId: string, record: string) => ["spf-evaluation", domainId, record] as const,
 } as const;

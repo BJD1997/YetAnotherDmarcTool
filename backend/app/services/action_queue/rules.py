@@ -462,9 +462,9 @@ async def spf_lookup_limit_risk(db: AsyncSession, domain: Domain) -> list[Action
                 severity="critical" if lookup_count > limit else "warning",
                 category=CATEGORY_DNS_BLOCKING,
                 title=f"{domain.name}: SPF near lookup limit ({lookup_count}/{limit})",
-                action_hint="Simplify SPF includes",
+                action_hint="Simplify SPF includes — open the SPF record builder",
                 domain_id=str(domain.id),
-                link_path=f"/domains/{domain.id}/dns",
+                link_path=f"/domains/{domain.id}/dns?open=spf-builder",
                 ask_ai={"kind": "dns_check", "subject": "spf"},
             )
         )

@@ -109,6 +109,8 @@ def _cross_org_requests(b) -> list[tuple[str, str]]:
         ("GET", f"/api/domains/{d}/dmarc/inbound"),
         ("GET", f"/api/domains/{d}/dns/mta-sts-builder"),
         ("GET", f"/api/domains/{d}/dns/tls-rpt-builder"),
+        ("GET", f"/api/domains/{d}/dns/spf-builder"),
+        ("POST", f"/api/domains/{d}/dns/spf-builder/evaluate"),
         ("GET", f"/api/domains/{d}/dmarc/rua-check"),
         ("GET", f"/api/domains/{d}/dmarc/summary"),
         ("GET", f"/api/domains/{d}/rating"),
