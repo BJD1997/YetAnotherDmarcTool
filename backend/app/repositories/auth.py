@@ -18,13 +18,6 @@ async def get_organization_by_entra_tenant_id(db: AsyncSession, tenant_id: str) 
     return result.scalar_one_or_none()
 
 
-async def get_user_by_org_and_entra_object_id(db: AsyncSession, organization_id: UUID, object_id: str) -> User | None:
-    result = await db.execute(
-        select(User).where(User.organization_id == organization_id, User.entra_object_id == object_id)
-    )
-    return result.scalar_one_or_none()
-
-
 async def count_users_for_org(db: AsyncSession, organization_id: UUID) -> int:
     result = await db.execute(select(func.count()).select_from(User).where(User.organization_id == organization_id))
     return result.scalar_one()
@@ -65,4 +58,25 @@ async def get_user_session_by_token_hash(db: AsyncSession, token_hash: str) -> U
 
 async def get_platform_admin_session_by_token_hash(db: AsyncSession, token_hash: str) -> PlatformAdminSession | None:
     result = await db.execute(select(PlatformAdminSession).where(PlatformAdminSession.session_token_hash == token_hash))
+    return result.scalar_one_or_none()
+
+
+async def get_user_by_subject(db: AsyncSession, organization_id: UUID, method: AuthMethod, subject: str) -> User | None:
+    """The user a provider's stable ID belongs to: entra_object_id for
+    Microsoft, external_subject for Google and OIDC."""
+    if method == AuthMethod.entra:
+        condition = User.entra_object_id == subject
+    else:
+        condition = (User.auth_method == method) & (User.external_subject == subject)
+    result = await db.execute(select(User).where(User.organization_id == organization_id, condition))
+    return result.scalar_one_or_none()
+
+
+async def get_organization_by_google_domain(db: AsyncSession, domain: str) -> Organization | None:
+    result = await db.execute(select(Organization).where(Organization.google_workspace_domain == domain.lower()))
+    return result.scalar_one_or_none()
+
+
+async def get_organization_by_slug(db: AsyncSession, slug: str) -> Organization | None:
+    result = await db.execute(select(Organization).where(Organization.slug == slug.lower()))
     return result.scalar_one_or_none()

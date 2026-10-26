@@ -6,7 +6,15 @@ import type { ActionItem, Posture, SenderInventoryRow, SenderReviewUpdate, Trend
 import { queryKeys } from "./queryKeys";
 
 export function useHealth() {
-  return useQuery({ queryKey: queryKeys.health, queryFn: () => api.get<{ version: string }>("/health"), staleTime: 5 * 60 * 1000 });
+  // Rechecked every 5 minutes and when the tab gets focus, so an open tab
+  // notices an update (see UpdatedBanner).
+  return useQuery({
+    queryKey: queryKeys.health,
+    queryFn: () => api.get<{ version: string }>("/health"),
+    staleTime: 5 * 60 * 1000,
+    refetchInterval: 5 * 60 * 1000,
+    refetchOnWindowFocus: true,
+  });
 }
 
 export function useTrend(domainId: string | null, days: number) {

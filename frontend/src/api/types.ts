@@ -3,7 +3,9 @@ export interface CurrentUser {
   email: string;
   display_name: string | null;
   role: "org_admin" | "member";
-  auth_method: "entra" | "local";
+  auth_method: "entra" | "local" | "google" | "oidc";
+  // The organization's one break-glass account (local, org admin).
+  is_break_glass: boolean;
   organization_id: string;
 }
 
@@ -23,6 +25,7 @@ export interface Organization {
   name: string;
   status: "active" | "suspended";
   entra_tenant_id: string | null;
+  sign_in_provider: "none" | "microsoft" | "google" | "oidc";
   is_operator: boolean;
   spf_all_qualifier_mode: SpfAllQualifierMode;
   hosted_mailbox_opt_in: boolean;
@@ -32,6 +35,12 @@ export interface Organization {
   ask_ai_enabled: boolean | null;
   is_demo_read_only: boolean;
   entra_consent_urls: EntraConsentUrls | null;
+  // A Microsoft 365 report mailbox can be connected (with a test sign-in
+  // when the organization doesn't sign in with Microsoft).
+  microsoft_mailbox_available: boolean;
+  // A Google Workspace mailbox can be connected: the service account's
+  // client ID and scope for the Workspace admin's domain-wide delegation.
+  google_mailbox: { client_id: string; scope: string } | null;
 }
 
 export type DomainMailProfile = "sends_mail" | "receive_only" | "parked";
@@ -85,7 +94,11 @@ export interface TeamMember {
   display_name: string | null;
   role: "org_admin" | "member";
   status: "active" | "disabled";
-  auth_method: "entra" | "local";
+  auth_method: "entra" | "local" | "google" | "oidc";
+  is_break_glass: boolean;
   mfa_enrolled: boolean;
   last_login_at: string | null;
+  // Nobody can sign in with it any more (an account of a provider the
+  // organization no longer uses, or a disabled local account).
+  removable: boolean;
 }

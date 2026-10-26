@@ -70,7 +70,7 @@ export default function OverviewTab() {
                 two disagreeing pass rates. Score keeps its own "/100" unit (matching
                 DomainRatingCard below) instead of "%" so it can't be mistaken for one. */}
             {rating && !rating.not_verified && !rating.insufficient_data && rating.score !== null && (
-              <Stat label="Configuration score" value={`${rating.score}/100 (${rating.grade})`} />
+              <Stat label="Overall score" value={`${rating.score}/100 (${rating.grade})`} />
             )}
             <Stat
               label="DMARC pass rate"

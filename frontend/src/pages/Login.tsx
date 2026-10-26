@@ -8,7 +8,11 @@ import RecoveryCodesStep from "../components/auth/RecoveryCodesStep";
 
 const ERROR_MESSAGES: Record<string, string> = {
   invalid_state: "Login session expired or was tampered with. Please try again.",
-  token_invalid: "Microsoft's response could not be verified. Please try again.",
+  token_invalid: "Your provider's response could not be verified. Please try again.",
+  email_not_verified: "Your provider didn't confirm your email address.",
+  hd_mismatch: "Use your company Google Workspace account, not a personal Google account.",
+  email_domain_not_verified: "Your email address isn't on one of your organization's verified domains.",
+  provider_unavailable: "Your organization's sign-in provider can't be reached right now. Please try again later.",
   organization_not_provisioned:
     "Your organization hasn't been set up in this dashboard yet. Contact your administrator.",
   organization_suspended: "This organization's access has been suspended. Contact your administrator.",
@@ -26,7 +30,26 @@ function MicrosoftMark() {
   );
 }
 
-type Phase = "entra" | "password" | "otp" | "enroll" | "recovery";
+function GoogleMark() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
+      <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.5l6.7-6.7C35.6 2.4 30.2 0 24 0 14.6 0 6.6 5.4 2.7 13.3l7.8 6.1C12.4 13.6 17.7 9.5 24 9.5z" />
+      <path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.4c-.5 2.9-2.2 5.3-4.6 6.9l7.4 5.8c4.3-4 6.9-9.9 6.9-17.2z" />
+      <path fill="#FBBC05" d="M10.5 28.6c-.5-1.4-.8-3-.8-4.6s.3-3.2.8-4.6l-7.8-6.1C1 16.6 0 20.2 0 24s1 7.4 2.7 10.7l7.8-6.1z" />
+      <path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.4-5.8c-2.1 1.4-4.8 2.3-8.5 2.3-6.3 0-11.6-4.1-13.5-9.8l-7.8 6.1C6.6 42.6 14.6 48 24 48z" />
+    </svg>
+  );
+}
+
+interface AuthConfig {
+  entra_sso_enabled: boolean;
+  google_sso_enabled: boolean;
+  company_sign_in_enabled: boolean;
+}
+
+const NO_PROVIDERS: AuthConfig = { entra_sso_enabled: false, google_sso_enabled: false, company_sign_in_enabled: false };
+
+type Phase = "start" | "password" | "otp" | "enroll" | "recovery";
 
 export default function Login() {
   const [params] = useSearchParams();
@@ -34,8 +57,10 @@ export default function Login() {
   const navigate = useNavigate();
   const { refetch } = useAuth();
 
-  const [phase, setPhase] = useState<Phase>("entra");
-  const [entraEnabled, setEntraEnabled] = useState<boolean | null>(null);
+  const [phase, setPhase] = useState<Phase>("start");
+  const [config, setConfig] = useState<AuthConfig | null>(null);
+  const [companyEmail, setCompanyEmail] = useState("");
+  const [companyError, setCompanyError] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
@@ -46,15 +71,15 @@ export default function Login() {
   useEffect(() => {
     let cancelled = false;
     api
-      .get<{ entra_sso_enabled: boolean }>("/auth/config")
-      .then((config) => {
+      .get<AuthConfig>("/auth/config")
+      .then((result) => {
         if (cancelled) return;
-        setEntraEnabled(config.entra_sso_enabled);
-        if (!config.entra_sso_enabled) setPhase("password");
+        setConfig(result);
+        if (!result.entra_sso_enabled && !result.google_sso_enabled && !result.company_sign_in_enabled) setPhase("password");
       })
       .catch(() => {
         if (cancelled) return;
-        setEntraEnabled(false);
+        setConfig(NO_PROVIDERS);
         setPhase("password");
       });
     return () => {
@@ -78,6 +103,21 @@ export default function Login() {
       setPhase(result.needs_enrollment ? "enroll" : "otp");
     } catch (err) {
       setFormError(err instanceof ApiError ? err.message : "sign-in failed");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleCompanySubmit(e: FormEvent) {
+    e.preventDefault();
+    setCompanyError(null);
+    setSubmitting(true);
+    try {
+      const { url } = await api.post<{ url: string | null }>("/auth/discover", { email: companyEmail.trim() });
+      if (url) window.location.assign(url);
+      else setCompanyError("There's no company sign-in for this email address. Use one of the other options.");
+    } catch (err) {
+      setCompanyError(err instanceof ApiError ? err.message : "Couldn't check this address. Please try again.");
     } finally {
       setSubmitting(false);
     }
@@ -118,22 +158,58 @@ export default function Login() {
           </span>
         </div>
 
-        {phase === "entra" && entraEnabled && (
+        {error && (phase === "start" || phase === "password") && (
+          <div className="alert alert--critical" style={{ marginTop: "1.25rem", marginBottom: 0 }}>
+            {ERROR_MESSAGES[error] ?? "Sign-in failed. Please try again."}
+          </div>
+        )}
+
+        {phase === "start" && config && (
           <>
             <p className="page-subtitle" style={{ marginBottom: 0 }}>
               Sign in to view your organization's DMARC reports and email-authentication status.
             </p>
 
-            {error && (
-              <div className="alert alert--critical" style={{ marginTop: "1.25rem", marginBottom: 0 }}>
-                {ERROR_MESSAGES[error] ?? "Sign-in failed. Please try again."}
-              </div>
+            {config.entra_sso_enabled && (
+              <a href="/api/auth/login" className="btn btn--primary" style={{ width: "100%", marginTop: "1.5rem", padding: "0.65rem" }}>
+                <MicrosoftMark />
+                Sign in with Microsoft
+              </a>
+            )}
+            {config.google_sso_enabled && (
+              <a
+                href="/api/auth/google/login"
+                className="btn btn--secondary"
+                style={{ width: "100%", marginTop: config.entra_sso_enabled ? "0.6rem" : "1.5rem", padding: "0.65rem" }}
+              >
+                <GoogleMark />
+                Sign in with Google
+              </a>
             )}
 
-            <a href="/api/auth/login" className="btn btn--primary" style={{ width: "100%", marginTop: "1.5rem", padding: "0.65rem" }}>
-              <MicrosoftMark />
-              Sign in with Microsoft
-            </a>
+            {config.company_sign_in_enabled && (
+              <form onSubmit={handleCompanySubmit} className="auth-form" style={{ marginTop: "1.25rem" }}>
+                <label className="field-label">
+                  Company account
+                  <input
+                    className="input"
+                    type="email"
+                    placeholder="you@company.com"
+                    value={companyEmail}
+                    onChange={(e) => setCompanyEmail(e.target.value)}
+                    required
+                  />
+                </label>
+                {companyError && (
+                  <div className="alert alert--warning" style={{ margin: 0 }}>
+                    {companyError}
+                  </div>
+                )}
+                <button type="submit" className="btn btn--secondary" disabled={submitting} style={{ padding: "0.65rem" }}>
+                  Continue with company account
+                </button>
+              </form>
+            )}
 
             <button
               className="btn btn--ghost btn--sm"
@@ -172,8 +248,8 @@ export default function Login() {
             <button type="submit" className="btn btn--primary" disabled={submitting} style={{ padding: "0.65rem" }}>
               Continue
             </button>
-            {entraEnabled && (
-              <button type="button" className="btn btn--ghost btn--sm" onClick={() => setPhase("entra")} style={{ justifyContent: "center" }}>
+            {config && (config.entra_sso_enabled || config.google_sso_enabled || config.company_sign_in_enabled) && (
+              <button type="button" className="btn btn--ghost btn--sm" onClick={() => setPhase("start")} style={{ justifyContent: "center" }}>
                 Back
               </button>
             )}

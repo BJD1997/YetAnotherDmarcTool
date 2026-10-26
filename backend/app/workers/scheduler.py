@@ -81,7 +81,8 @@ def _ignoring_payload(coro_fn):
 
 
 async def _handle_mailbox_poll(payload: dict) -> None:
-    await poll_org_mailbox(uuid.UUID(payload["org_id"]), payload["tenant_id"])
+    # tenant_id is None for an IMAP mailbox.
+    await poll_org_mailbox(uuid.UUID(payload["org_id"]), payload.get("tenant_id"))
 
 
 def _register_handlers() -> None:
@@ -105,7 +106,7 @@ async def _enqueue_mailbox_polls(db) -> None:
         await queue.enqueue(
             db,
             "mailbox_poll",
-            {"org_id": str(org_id), "tenant_id": str(tenant_id)},
+            {"org_id": str(org_id), "tenant_id": str(tenant_id) if tenant_id else None},
             dedupe_key=f"mailbox_poll:{org_id}",
         )
 

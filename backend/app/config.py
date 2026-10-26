@@ -81,6 +81,21 @@ class Settings(BaseSettings):
     # until both are configured (see app/workers/scheduler.py).
     hosted_reports_tenant_id: str | None = None
     hosted_reports_mailbox_address: str | None = None
+    # How the hosted mailbox is read: Microsoft 365 (HOSTED_REPORTS_TENANT_ID
+    # and the mail app) or IMAP (the HOSTED_REPORTS_IMAP_* settings below).
+    hosted_reports_source: Literal["microsoft", "imap", "google"] = "microsoft"
+    # IMAP: set by the platform admin, so a private address is allowed here.
+    hosted_reports_imap_host: str | None = None
+    hosted_reports_imap_port: int = 993
+    hosted_reports_imap_security: Literal["ssl", "starttls"] = "ssl"
+    hosted_reports_imap_username: str | None = None
+    hosted_reports_imap_password: str | None = None
+    hosted_reports_imap_folder: str = "INBOX"
+    hosted_reports_imap_processed_folder: str = "DMARC processed"
+    # The mail server's Authentication-Results ID (RFC 8601): only its checks
+    # count for the report sender check. Nothing is read until it's set; the
+    # poll's error names the ID it found.
+    hosted_reports_imap_authserv_id: str | None = None
     # Optional, and normally left unset: the domain new addresses are
     # generated under defaults to the mailbox address's own domain — which it
     # has to be anyway, since plus-addressing only delivers <local>+<tag>@domain
@@ -108,6 +123,27 @@ class Settings(BaseSettings):
     # Entra App B — Dashboard SSO (delegated, OIDC) (Phase 1)
     entra_sso_client_id: str | None = None
     entra_sso_client_secret: str | None = None
+
+    # OpenID Connect providers on a private address (10.x, 192.168.x, ...)
+    # are refused unless this is on: an org admin could otherwise make the
+    # server contact internal addresses. Turn on only when every
+    # organization on this server is trusted. Also allows http:// issuers.
+    oidc_allow_private_issuers: bool = False
+
+    # "Sign in with Google": one Google OAuth client for the whole server
+    # (Google Cloud console → APIs & Services → Credentials → OAuth client
+    # ID, type "Web application", redirect URI
+    # <PUBLIC_BASE_URL>/api/auth/google/callback).
+    google_sso_client_id: str | None = None
+    google_sso_client_secret: str | None = None
+
+    # Reading report mailboxes in Google Workspace (organizations' and the
+    # hosted one): a service account with domain-wide delegation, granted by
+    # each customer's Workspace admin for scope gmail.modify. Its JSON key,
+    # as a file path (mounted read-only) or the JSON itself (e.g. from Key
+    # Vault); the file wins when both are set.
+    google_mail_service_account_file: str | None = None
+    google_mail_service_account_json: str | None = None
 
     # Bootstraps the first platform_admins row if the table is empty
     # (see app/scripts/bootstrap_platform_admin.py, run by the `migrate` container).
@@ -217,6 +253,14 @@ class Settings(BaseSettings):
         return f"{self.public_base_url}/api/auth/callback"
 
     @property
+    def google_sso_redirect_uri(self) -> str:
+        return f"{self.public_base_url}/api/auth/google/callback"
+
+    @property
+    def oidc_redirect_uri(self) -> str:
+        return f"{self.public_base_url}/api/auth/oidc/callback"
+
+    @property
     def self_update_available(self) -> bool:
         return bool(self.updater_url and self.updater_shared_secret) or self.azure_self_update_available
 
@@ -235,12 +279,13 @@ class Settings(BaseSettings):
         it, organizations that sign in without Microsoft can't receive
         reports at all. Only that it's filled in, not that it works: a
         failing poll shows under Job runs."""
-        return bool(
-            self.hosted_reports_mailbox_address
-            and self.hosted_reports_tenant_id
-            and self.entra_mail_client_id
-            and self.entra_mail_client_secret
-        )
+        if not self.hosted_reports_mailbox_address:
+            return False
+        if self.hosted_reports_source == "imap":
+            return bool(self.hosted_reports_imap_host and self.hosted_reports_imap_username and self.hosted_reports_imap_password)
+        if self.hosted_reports_source == "google":
+            return bool(self.google_mail_service_account_file or self.google_mail_service_account_json)
+        return bool(self.hosted_reports_tenant_id and self.entra_mail_client_id and self.entra_mail_client_secret)
 
     @property
     def hosted_reports_domain(self) -> str | None:
