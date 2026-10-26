@@ -52,6 +52,8 @@ export interface AdminOrgUser {
   status: "active" | "disabled";
   mfa_enrolled: boolean;
   last_login_at: string | null;
+  // Nobody can sign in with it any more (see the Team page).
+  removable: boolean;
 }
 
 export interface AdminOrganizationsPage {
@@ -241,7 +243,12 @@ export function useAdminResetUser(orgId: string) {
       invalidateOrgs();
     },
   });
-  return { resetPassword, resetMfa, makeOrgAdmin, makeBreakGlass };
+  // An account nobody can sign in with any more, e.g. left by a provider switch.
+  const removeUser = useMutation({
+    mutationFn: (userId: string) => api.delete<void>(`/admin/organizations/${orgId}/users/${userId}`),
+    onSuccess: invalidate,
+  });
+  return { resetPassword, resetMfa, makeOrgAdmin, makeBreakGlass, removeUser };
 }
 
 export function useDeleteAdminOrganization(orgId: string) {

@@ -58,3 +58,15 @@ export function useResetUserMfa(onSuccess?: () => void, onError?: (error: Error)
     onError,
   });
 }
+
+export function useRemoveUser(onSuccess?: () => void, onError?: (error: Error) => void) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete<void>(`/users/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.users.all });
+      onSuccess?.();
+    },
+    onError,
+  });
+}

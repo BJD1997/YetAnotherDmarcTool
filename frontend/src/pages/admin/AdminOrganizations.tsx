@@ -434,7 +434,7 @@ function ExpectedAdminField({ org }: { org: AdminOrganization }) {
 
 function OrgUsersSection({ orgId }: { orgId: string }) {
   const { data: users, isPending } = useAdminOrgUsers(orgId);
-  const { resetPassword, resetMfa, makeOrgAdmin, makeBreakGlass } = useAdminResetUser(orgId);
+  const { resetPassword, resetMfa, makeOrgAdmin, makeBreakGlass, removeUser } = useAdminResetUser(orgId);
   const { copied, copy } = useClipboardFeedback();
   const [resetLink, setResetLink] = useState<{ email: string; link: string } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -468,6 +468,16 @@ function OrgUsersSection({ orgId }: { orgId: string }) {
     setResetLink(null);
     makeBreakGlass.mutate(user.id, {
       onSuccess: () => setMessage(`${user.email} is now the break-glass account.`),
+      onError,
+    });
+  }
+
+  function handleRemove(user: AdminOrgUser) {
+    if (!window.confirm(`Remove this account of ${user.email}? Its sign-in history stays. This can't be undone.`)) return;
+    setError(null);
+    setResetLink(null);
+    removeUser.mutate(user.id, {
+      onSuccess: () => setMessage(`Removed the account of ${user.email}.`),
       onError,
     });
   }
@@ -507,6 +517,7 @@ function OrgUsersSection({ orgId }: { orgId: string }) {
                     {user.auth_method === "entra" && <span className="muted"> · Microsoft</span>}
                     {user.auth_method === "google" && <span className="muted"> · Google</span>}
                     {user.auth_method === "oidc" && <span className="muted"> · company sign-in</span>}
+                    {user.auth_method !== "local" && user.removable && <span className="muted"> · previous provider</span>}
                     {user.auth_method === "local" && !user.mfa_enrolled && <span className="muted"> · no MFA yet</span>}
                   </td>
                   <td style={{ textAlign: "right" }}>
@@ -532,6 +543,11 @@ function OrgUsersSection({ orgId }: { orgId: string }) {
                           </button>
                         )}
                       </>
+                    )}
+                    {user.removable && (
+                      <button className="btn btn--ghost btn--sm" onClick={() => handleRemove(user)} disabled={removeUser.isPending}>
+                        Remove
+                      </button>
                     )}
                     </div>
                   </td>

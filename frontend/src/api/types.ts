@@ -98,4 +98,7 @@ export interface TeamMember {
   is_break_glass: boolean;
   mfa_enrolled: boolean;
   last_login_at: string | null;
+  // Nobody can sign in with it any more (an account of a provider the
+  // organization no longer uses, or a disabled local account).
+  removable: boolean;
 }

@@ -6,7 +6,7 @@ import { renderWithAppProviders } from "../test/render";
 import Team from "./Team";
 
 vi.mock("../api/client", () => ({
-  api: { get: vi.fn(), post: vi.fn(), patch: vi.fn() },
+  api: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() },
   ApiError: class ApiError extends Error {},
 }));
 vi.mock("../auth/AuthContext", () => ({
@@ -20,7 +20,7 @@ vi.mock("../hooks/useOrganization", () => ({
 function member(id: string, overrides: Record<string, unknown> = {}) {
   return {
     id, email: `${id}@example.com`, display_name: null, role: "member", status: "active",
-    auth_method: "local", mfa_enrolled: true, last_login_at: null, ...overrides,
+    auth_method: "local", mfa_enrolled: true, last_login_at: null, removable: false, ...overrides,
   };
 }
 
@@ -46,6 +46,29 @@ describe("Team credential resets", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Reset password" })[0]);
     await waitFor(() => expect(api.post).toHaveBeenCalledWith("/users/alice/reset-password"));
     expect(await screen.findByText("https://dmarc.example/set-password?token=abc")).toBeInTheDocument();
+  });
+});
+
+describe("Team account removal", () => {
+  it("labels the account a provider switch left behind and removes only that one", async () => {
+    vi.mocked(api.get).mockResolvedValue([
+      member("me", { role: "org_admin", auth_method: "entra" }),
+      member("old", { email: "me@example.com", auth_method: "oidc", removable: true }),
+      member("dave", { auth_method: "entra" }),
+    ]);
+    vi.mocked(api.delete).mockResolvedValueOnce(undefined);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    renderWithAppProviders(<Team />);
+    await screen.findByText("dave@example.com");
+
+    expect(screen.getByText("OpenID Connect")).toBeInTheDocument();
+    expect(screen.getByText("previous provider")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Remove" })).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(api.delete).toHaveBeenCalledWith("/users/old"));
+    expect(await screen.findByText("Removed the account of me@example.com.")).toBeInTheDocument();
   });
 });
 

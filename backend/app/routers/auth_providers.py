@@ -19,7 +19,7 @@ from app.models.domain import Domain
 from app.models.enums import AuthMethod, DomainVerificationStatus, OrganizationStatus, SignInResult
 from app.models.organization import Organization
 from app.repositories.auth import get_organization_by_google_domain, get_organization_by_slug
-from app.repositories.domains import verified_domain_names
+from app.repositories.domains import email_on_domains, verified_domain_names
 from app.repositories.organizations import get_organization
 from app.services.auth import oauth_cookies, oidc, pkce
 from app.services.auth.rate_limit import rate_limiter, sign_in_lookup_limiter
@@ -47,11 +47,6 @@ def org_provider(org: Organization) -> oidc.Provider:
         client_secret=org.oidc_client_secret or "",
         allow_private=settings.oidc_allow_private_issuers,
     )
-
-
-def email_on_domains(email: str, domains: list[str]) -> bool:
-    domain = email.rpartition("@")[2].strip().lower().rstrip(".")
-    return bool(domain) and any(domain == d or domain.endswith("." + d) for d in domains)
 
 
 def _back_to_login(error: str) -> RedirectResponse:

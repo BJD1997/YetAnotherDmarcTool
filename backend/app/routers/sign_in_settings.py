@@ -25,11 +25,11 @@ from app.models.enums import AuthMethod, UserStatus
 from app.models.organization import Organization
 from app.models.user import User
 from app.repositories.auth import get_organization_by_entra_tenant_id, get_organization_by_google_domain
-from app.repositories.domains import verified_domain_names
+from app.repositories.domains import email_on_domains, verified_domain_names
 from app.repositories.mailbox_connections import other_org_using_microsoft_tenant
 from app.repositories.organizations import get_organization
 from app.repositories.users import list_users_for_org
-from app.routers.auth_providers import checked_claims, email_on_domains, google_provider, redirect_to_provider
+from app.routers.auth_providers import checked_claims, google_provider, redirect_to_provider
 from app.services.auth import entra_oidc, oauth_cookies, oidc, pkce, session_manager, sign_in_test
 from app.services.auth.session_manager import cookie_kwargs
 from app.services.auth.sign_in_test import Passed, PendingSignIn

@@ -7,16 +7,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user, require_org_admin
 from app.models.enums import AuthMethod, UserRole, UserStatus
+from app.models.organization import Organization
 from app.models.user import User
 from app.repositories.organizations import get_organization
 from app.repositories.users import get_user_in_org, list_users_for_org
 from app.schemas.users import LocalUserCreateRequest, UserUpdateRequest
 from app.services.auth import account_reset, session_manager
+from app.services.auth.account_removal import removal_blocker
 
 router = APIRouter(prefix="/users", tags=["users"])
 
 
-def _user_out(user: User) -> dict:
+def _user_out(user: User, org: Organization) -> dict:
     return {
         "id": str(user.id),
         "email": user.email,
@@ -27,13 +29,15 @@ def _user_out(user: User) -> dict:
         "is_break_glass": user.is_break_glass,
         "mfa_enrolled": user.otp_enrolled_at is not None,
         "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
+        "removable": removal_blocker(org, user) is None,
     }
 
 
 @router.get("")
 async def list_users(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)) -> list[dict]:
+    org = await get_organization(db, user.organization_id)
     users = await list_users_for_org(db, user.organization_id)
-    return [_user_out(u) for u in users]
+    return [_user_out(u, org) for u in users]
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -77,7 +81,7 @@ async def create_local_user(
     await db.refresh(new_user)
     await db.commit()
 
-    return {**_user_out(new_user), "setup_link": setup_link}
+    return {**_user_out(new_user, org), "setup_link": setup_link}
 
 
 @router.patch("/{user_id}")
@@ -107,10 +111,36 @@ async def update_user(
     if body.status is not None:
         target.status = body.status
 
+    org = await get_organization(db, admin.organization_id)
     await db.flush()
     await db.refresh(target)
     await db.commit()
-    return _user_out(target)
+    return _user_out(target, org)
+
+
+@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_user(
+    user_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_org_admin),
+) -> None:
+    """Removes an account nobody can sign in with any more (see
+    account_removal), e.g. the old one left behind when the organization
+    switched sign-in provider."""
+    target = await get_user_in_org(db, user_id, admin.organization_id)
+    if target is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
+    if target.id == admin.id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "you can't remove yourself")
+    blocker = removal_blocker(await get_organization(db, admin.organization_id), target)
+    if blocker is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, blocker)
+    # Logged first, while the account still exists; deleting it then clears
+    # the log entry's link but keeps the email address.
+    await account_reset.log_account_change(db, request, target, "account_removed", actor_email=admin.email)
+    await db.delete(target)
+    await db.commit()
 
 
 async def _local_teammate(db: AsyncSession, admin: User, user_id: uuid.UUID) -> User:

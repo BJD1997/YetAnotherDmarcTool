@@ -94,3 +94,9 @@ async def verified_domain_names(db: AsyncSession, organization_id: UUID) -> list
         )
     )
     return [name.lower() for name in result.scalars()]
+
+
+def email_on_domains(email: str, domains: list[str]) -> bool:
+    """Whether the address is on one of `domains` or a subdomain of one."""
+    domain = email.rpartition("@")[2].strip().lower().rstrip(".")
+    return bool(domain) and any(domain == d or domain.endswith("." + d) for d in domains)

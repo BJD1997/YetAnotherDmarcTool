@@ -52,6 +52,7 @@ from app.schemas.platform_admin import (
     OrganizationUpdateRequest,
 )
 from app.services.auth import account_reset, oidc, session_manager, totp
+from app.services.auth.account_removal import removal_blocker
 from app.services.auth.rate_limit import login_limiter, otp_account_limiter, otp_limiter, rate_limiter
 from app.services.auth.entra_links import entra_consent_urls
 from app.services.auth.password import dummy_verify, hash_password, verify_password
@@ -652,7 +653,8 @@ async def list_org_users(
     db: AsyncSession = Depends(get_db),
     _admin: AdminPrincipal = Depends(get_current_platform_admin),
 ) -> list[dict]:
-    if await get_organization(db, org_id) is None:
+    org = await get_organization(db, org_id)
+    if org is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "organization not found")
     return [
         {
@@ -660,9 +662,34 @@ async def list_org_users(
             "status": user.status.value,
             "mfa_enrolled": user.otp_enrolled_at is not None,
             "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
+            "removable": removal_blocker(org, user) is None,
         }
         for user in await list_users_for_org(db, org_id)
     ]
+
+
+@router.delete("/organizations/{org_id}/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def admin_remove_user(
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin: AdminPrincipal = Depends(get_current_platform_admin),
+) -> None:
+    """Same rule as an org admin's removal (account_removal): only accounts
+    nobody can sign in with any more."""
+    org = await get_organization(db, org_id)
+    target = await get_user_in_org(db, user_id, org_id) if org is not None else None
+    if target is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
+    if admin.auth_type == "operator_org" and target.id == admin.id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "you can't remove yourself")
+    blocker = removal_blocker(org, target)
+    if blocker is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, blocker)
+    await account_reset.log_account_change(db, request, target, "account_removed_by_platform_admin", actor_email=admin.email)
+    await db.delete(target)
+    await db.commit()
 
 
 async def _resettable_user(db: AsyncSession, admin: AdminPrincipal, org_id: uuid.UUID, user_id: uuid.UUID) -> User:

@@ -339,6 +339,28 @@ async def test_platform_admin_can_move_the_break_glass_to_another_local_account(
     assert users["keys@local.example"]["is_break_glass"] is False
 
 
+async def test_platform_admin_removes_an_account_left_by_a_provider_switch(api):
+    from app.models.enums import AuthMethod, UserRole, UserStatus
+    from app.models.user import User
+
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+    org_id = (await client.post("/api/admin/organizations", json={"name": "Entra Org", "entra_tenant_id": str(uuid.uuid4())})).json()["id"]
+    async with owner_factory() as db:
+        old = User(organization_id=uuid.UUID(org_id), email="me@entra.example", auth_method=AuthMethod.oidc,
+                   external_subject="authentik-sub", role=UserRole.org_admin, status=UserStatus.active)
+        current = User(organization_id=uuid.UUID(org_id), email="me@entra.example", auth_method=AuthMethod.entra,
+                       entra_object_id="oid", role=UserRole.org_admin, status=UserStatus.active)
+        db.add_all([old, current])
+        await db.commit()
+
+    users = {u["id"]: u["removable"] for u in (await client.get(f"/api/admin/organizations/{org_id}/users")).json()}
+    assert users == {str(old.id): True, str(current.id): False}
+    assert (await client.delete(f"/api/admin/organizations/{org_id}/users/{current.id}")).status_code == 409
+    assert (await client.delete(f"/api/admin/organizations/{org_id}/users/{old.id}")).status_code == 204
+    assert [u["id"] for u in (await client.get(f"/api/admin/organizations/{org_id}/users")).json()] == [str(current.id)]
+
+
 async def test_platform_admin_can_only_change_mailbox_consent(api):
     from app.models.mailbox_connection import MailboxConnection
 

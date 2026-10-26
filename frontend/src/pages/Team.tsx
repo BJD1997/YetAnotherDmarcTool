@@ -4,7 +4,7 @@ import { ApiError } from "../api/client";
 import type { TeamMember } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { useCurrentOrganization } from "../hooks/useOrganization";
-import { useCreateUser, useResetUserMfa, useResetUserPassword, useUpdateUser, useUsers } from "../hooks/useUsers";
+import { useCreateUser, useRemoveUser, useResetUserMfa, useResetUserPassword, useUpdateUser, useUsers } from "../hooks/useUsers";
 import { useClipboardFeedback } from "../hooks/useClipboardFeedback";
 import { useSignInSettings } from "../hooks/useSignInSettings";
 
@@ -139,6 +139,12 @@ function ResetLinkNotice({ email, link, onDismiss }: { email: string; link: stri
   );
 }
 
+const PROVIDER_NAMES: Record<Exclude<TeamMember["auth_method"], "local">, string> = {
+  entra: "Microsoft",
+  google: "Google Workspace",
+  oidc: "OpenID Connect",
+};
+
 export default function Team() {
   const { user } = useAuth();
   const { data: org } = useCurrentOrganization();
@@ -154,6 +160,15 @@ export default function Team() {
   const updateMember = useUpdateUser(() => setError(null), onError("failed to update user"));
   const resetPassword = useResetUserPassword(undefined, onError("failed to reset password"));
   const resetMfa = useResetUserMfa(undefined, onError("failed to reset two-factor authentication"));
+  const removeMember = useRemoveUser(undefined, onError("failed to remove the account"));
+
+  function handleRemove(member: TeamMember) {
+    if (!window.confirm(`Remove this account of ${member.email}? Its sign-in history stays. This can't be undone.`)) return;
+    setError(null);
+    setNotice(null);
+    setResetLink(null);
+    removeMember.mutate(member.id, { onSuccess: () => setNotice(`Removed the account of ${member.email}.`) });
+  }
 
   function handleResetPassword(member: TeamMember) {
     if (!window.confirm(`Reset ${member.email}'s password? Their current password stops working immediately and they're signed out everywhere.`)) return;
@@ -223,6 +238,20 @@ export default function Team() {
                           {member.is_break_glass ? "break-glass" : "local"}
                         </span>
                       )}
+                      {member.auth_method !== "local" && (
+                        <span className="badge badge--neutral" style={{ marginLeft: "0.3rem" }}>
+                          {PROVIDER_NAMES[member.auth_method]}
+                        </span>
+                      )}
+                      {member.auth_method !== "local" && member.removable && (
+                        <span
+                          className="badge badge--warning"
+                          style={{ marginLeft: "0.3rem" }}
+                          title="Your organization no longer signs in through this provider, so nobody can sign in with this account."
+                        >
+                          previous provider
+                        </span>
+                      )}
                       {member.auth_method === "local" && !member.mfa_enrolled && (
                         <span className="badge badge--warning" style={{ marginLeft: "0.3rem" }}>
                           no MFA yet
@@ -285,6 +314,11 @@ export default function Team() {
                                   </button>
                                 )}
                               </>
+                            )}
+                            {member.removable && (
+                              <button className="btn btn--ghost btn--sm" onClick={() => handleRemove(member)} disabled={removeMember.isPending}>
+                                Remove
+                              </button>
                             )}
                           </div>
                         )}

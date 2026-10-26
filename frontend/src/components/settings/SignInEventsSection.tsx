@@ -9,6 +9,8 @@ const ACCOUNT_CHANGES: Record<string, string> = {
   password_reset_by_admin: "Password reset",
   mfa_reset_by_admin: "Two-factor authentication reset",
   password_reset_by_platform_admin: "Password reset by platform admin",
+  account_removed: "Account removed",
+  account_removed_by_platform_admin: "Account removed by platform admin",
   mfa_reset_by_platform_admin: "Two-factor authentication reset by platform admin",
   made_org_admin_by_platform_admin: "Made org admin by platform admin",
 };

@@ -13,8 +13,7 @@ from app.models.user import User
 from app.repositories.dmarc_reports import last_report_received_at_for_org
 from app.repositories.mailbox_connections import get_org_mailbox_connection, list_mailbox_job_runs
 from app.repositories.organizations import get_organization
-from app.repositories.domains import verified_domain_names
-from app.routers.auth_providers import email_on_domains
+from app.repositories.domains import email_on_domains, verified_domain_names
 from app.schemas.mailbox_connections import GoogleMailboxRequest, ImapConnectionRequest, MailboxConnectionSetRequest
 from app.services.gmail.client import GmailError
 from app.services.gmail.poll import test_mailbox as test_gmail_mailbox
