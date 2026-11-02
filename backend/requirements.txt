@@ -24,7 +24,7 @@ qrcode==8.2
 parsedmarc==11.0.2
 
 # DNS checks
-dnspython==2.8.0
+dnspython==2.9.0
 
 # HTTP client (Graph API calls, MTA-STS policy fetch)
 httpx==0.28.1
