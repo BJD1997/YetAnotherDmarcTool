@@ -19,8 +19,9 @@ from app.models.organization import Organization
 from app.models.enums import CheckType, DomainVerificationStatus
 from app.repositories.dmarc_reports import (
     latest_published_policy_for_domain,
+    AuthCounts,
     policy_p_by_day_since,
-    windowed_totals_excluding_blocked,
+    windowed_auth_counts_excluding_blocked,
 )
 from app.repositories.dns_checks import list_dns_check_results_at_latest_run
 from app.services.rating.score import DomainRating, compute_rating
@@ -43,15 +44,21 @@ async def rating_window_days(db: AsyncSession, organization_id: uuid.UUID) -> in
     return days or RATING_WINDOW_DAYS
 
 
-async def _windowed_totals(db: AsyncSession, domain: Domain) -> tuple[int, int]:
-    """(total_count, dmarc_pass_count) over the organization's rating window,
-    excluding traffic from senders explicitly marked blocked (SenderReview)
-    — confirmed spoofing/abuse a domain owner has already dealt with
+async def _windowed_counts(db: AsyncSession, domain: Domain) -> AuthCounts:
+    """Message counts over the organization's rating window, excluding
+    traffic from senders explicitly marked blocked (SenderReview) —
+    confirmed spoofing/abuse a domain owner has already dealt with
     shouldn't keep dragging the score down forever. Pending/unreviewed
     traffic still counts normally (only an explicit "blocked" excludes)."""
     days = await rating_window_days(db, domain.organization_id)
     since = datetime.now(timezone.utc) - timedelta(days=days)
-    return await windowed_totals_excluding_blocked(db, domain.id, since)
+    return await windowed_auth_counts_excluding_blocked(db, domain.id, since)
+
+
+async def _windowed_totals(db: AsyncSession, domain: Domain) -> tuple[int, int]:
+    """(total_count, dmarc_pass_count): see _windowed_counts."""
+    counts = await _windowed_counts(db, domain)
+    return counts.total, counts.dmarc_pass
 
 
 async def latest_findings_by_type(db: AsyncSession, domain_id: uuid.UUID) -> dict[CheckType, list[DnsCheckResult]]:
@@ -75,7 +82,8 @@ async def compute_domain_rating(
     `findings_by_type` can be passed in by a caller that already fetched it
     (e.g. for check_status_counts on /domains/ranked) to avoid querying it
     twice."""
-    total_count, pass_count = await _windowed_totals(db, domain)
+    counts = await _windowed_counts(db, domain)
+    total_count, pass_count = counts.total, counts.dmarc_pass
 
     if findings_by_type is None:
         findings_by_type = await latest_findings_by_type(db, domain.id)
@@ -85,6 +93,8 @@ async def compute_domain_rating(
         dmarc_pass_count=pass_count,
         total_message_count=total_count,
         mail_profile=domain.mail_profile,
+        spf_pass_count=counts.spf_pass,
+        dkim_pass_count=counts.dkim_pass,
     )
     return rating, total_count, total_count - pass_count
 

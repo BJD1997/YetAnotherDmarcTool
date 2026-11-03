@@ -294,17 +294,71 @@ async def test_create_local_user_for_org(api):
     assert "setup_link" in body
 
 
-async def test_create_local_user_rejects_entra_org(api):
+async def test_an_entra_org_gets_one_break_glass_account_and_no_more_locals(api):
     client, owner_factory = api
     await login_as_platform_admin(client, owner_factory)
     entra_tenant_id = str(uuid.uuid4())
-    org_id = (
-        await client.post("/api/admin/organizations", json={"name": "Entra Org", "entra_tenant_id": entra_tenant_id})
-    ).json()["id"]
+    org_id = (await client.post("/api/admin/organizations", json={"name": "Entra Org", "entra_tenant_id": entra_tenant_id})).json()["id"]
 
-    response = await client.post(f"/api/admin/organizations/{org_id}/users", json={"email": "someone@example.com"})
+    first = await client.post(f"/api/admin/organizations/{org_id}/users", json={"email": "keys@example.com", "role": "member"})
+    assert first.status_code == 201, first.text
+    assert first.json()["is_break_glass"] is True and first.json()["role"] == "org_admin"
 
-    assert response.status_code == 409
+    second = await client.post(f"/api/admin/organizations/{org_id}/users", json={"email": "someone@example.com"})
+    assert second.status_code == 409
+
+
+async def test_creating_an_org_with_its_break_glass_account(api):
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+    created = await client.post("/api/admin/organizations", json={"name": "New Org", "break_glass_email": "keys@new.example"})
+    assert created.status_code == 201, created.text
+    assert created.json()["has_break_glass"] is True and "token=" in created.json()["break_glass_setup_link"]
+    users = (await client.get(f"/api/admin/organizations/{created.json()['id']}/users")).json()
+    assert [(u["email"], u["is_break_glass"], u["role"]) for u in users] == [("keys@new.example", True, "org_admin")]
+
+
+async def test_a_local_org_keeps_adding_teammates(api):
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+    org_id = (await client.post("/api/admin/organizations", json={"name": "Local Org", "break_glass_email": "keys@local.example"})).json()["id"]
+    teammate = await client.post(f"/api/admin/organizations/{org_id}/users", json={"email": "two@local.example", "role": "member"})
+    assert teammate.status_code == 201 and teammate.json()["is_break_glass"] is False
+
+
+async def test_platform_admin_can_move_the_break_glass_to_another_local_account(api):
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+    org_id = (await client.post("/api/admin/organizations", json={"name": "Local Org", "break_glass_email": "keys@local.example"})).json()["id"]
+    two = (await client.post(f"/api/admin/organizations/{org_id}/users", json={"email": "two@local.example", "role": "member"})).json()
+
+    moved = await client.post(f"/api/admin/organizations/{org_id}/users/{two['id']}/make-break-glass")
+    assert moved.status_code == 200, moved.text
+    users = {u["email"]: u for u in (await client.get(f"/api/admin/organizations/{org_id}/users")).json()}
+    assert users["two@local.example"]["is_break_glass"] is True and users["two@local.example"]["role"] == "org_admin"
+    assert users["keys@local.example"]["is_break_glass"] is False
+
+
+async def test_platform_admin_removes_an_account_left_by_a_provider_switch(api):
+    from app.models.enums import AuthMethod, UserRole, UserStatus
+    from app.models.user import User
+
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+    org_id = (await client.post("/api/admin/organizations", json={"name": "Entra Org", "entra_tenant_id": str(uuid.uuid4())})).json()["id"]
+    async with owner_factory() as db:
+        old = User(organization_id=uuid.UUID(org_id), email="me@entra.example", auth_method=AuthMethod.oidc,
+                   external_subject="authentik-sub", role=UserRole.org_admin, status=UserStatus.active)
+        current = User(organization_id=uuid.UUID(org_id), email="me@entra.example", auth_method=AuthMethod.entra,
+                       entra_object_id="oid", role=UserRole.org_admin, status=UserStatus.active)
+        db.add_all([old, current])
+        await db.commit()
+
+    users = {u["id"]: u["removable"] for u in (await client.get(f"/api/admin/organizations/{org_id}/users")).json()}
+    assert users == {str(old.id): True, str(current.id): False}
+    assert (await client.delete(f"/api/admin/organizations/{org_id}/users/{current.id}")).status_code == 409
+    assert (await client.delete(f"/api/admin/organizations/{org_id}/users/{old.id}")).status_code == 204
+    assert [u["id"] for u in (await client.get(f"/api/admin/organizations/{org_id}/users")).json()] == [str(current.id)]
 
 
 async def test_platform_admin_can_only_change_mailbox_consent(api):
@@ -714,3 +768,39 @@ async def test_admin_sign_in_events_filter_by_date_range(api):
 
     assert response.status_code == 200
     assert [e["email"] for e in response.json()["events"]] == ["inside@example.com"]
+
+
+async def test_the_admin_email_is_optional_and_kept_lowercase(api):
+    # The break-glass account promotes people; an admin email is optional.
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+    tenant = str(uuid.uuid4())
+
+    without = await client.post("/api/admin/organizations", json={"name": "No Admin Org", "entra_tenant_id": str(uuid.uuid4())})
+    assert without.status_code == 201
+
+    created = await client.post(
+        "/api/admin/organizations",
+        json={"name": "Admin Org", "entra_tenant_id": tenant, "expected_admin_email": "Boss@Example.com"},
+    )
+    assert created.status_code == 201
+    assert created.json()["expected_admin_email"] == "boss@example.com"
+    assert created.json()["has_org_admin"] is False
+
+    org_id = created.json()["id"]
+    changed = await client.patch(f"/api/admin/organizations/{org_id}", json={"expected_admin_email": "new@example.com"})
+    assert changed.json()["expected_admin_email"] == "new@example.com"
+
+
+async def test_platform_admin_can_make_a_member_org_admin(api):
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+    org, member = await seed_org_and_user(owner_factory, role=UserRole.member, entra=True)
+
+    org_before = (await client.get(f"/api/admin/organizations/{org.id}")).json()
+    assert org_before["has_org_admin"] is False
+
+    response = await client.post(f"/api/admin/organizations/{org.id}/users/{member.id}/make-org-admin")
+
+    assert response.status_code == 200 and response.json()["role"] == "org_admin"
+    assert (await client.get(f"/api/admin/organizations/{org.id}")).json()["has_org_admin"] is True

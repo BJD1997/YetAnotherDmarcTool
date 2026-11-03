@@ -206,7 +206,7 @@ async def test_duplicate_tenant_id_is_a_409(api):
     org, _ = await seed_org_and_user(owner_factory, entra=True)
     await login_as_platform_admin(client, owner_factory)
 
-    create = await client.post("/api/admin/organizations", json={"name": "Dup", "entra_tenant_id": str(org.entra_tenant_id)})
+    create = await client.post("/api/admin/organizations", json={"name": "Dup", "entra_tenant_id": str(org.entra_tenant_id), "expected_admin_email": "admin@example.com"})
     assert create.status_code == 409
     other = (await client.post("/api/admin/organizations", json={"name": "Other"})).json()
     patch = await client.patch(f"/api/admin/organizations/{other['id']}", json={"entra_tenant_id": str(org.entra_tenant_id)})

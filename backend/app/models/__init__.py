@@ -26,6 +26,7 @@ from app.models.session import UserSession
 from app.models.sign_in_event import SignInEvent
 from app.models.source_ip_identity import SourceIpIdentity
 from app.models.tls_rpt import TlsRptReport
+from app.models.trusted_reporter import TrustedReporter
 from app.models.update_check_state import UpdateCheckState
 from app.models.user import User
 from app.models.user_recovery_code import UserRecoveryCode
@@ -56,6 +57,7 @@ __all__ = [
     "SignInEvent",
     "SourceIpIdentity",
     "TlsRptReport",
+    "TrustedReporter",
     "UpdateCheckState",
     "User",
     "UserRecoveryCode",

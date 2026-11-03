@@ -173,15 +173,16 @@ function WelcomeStep({ status, onNext }: { status: OnboardingStatus; onNext: () 
 function useNoReportMailbox(): boolean {
   const { data: org } = useCurrentOrganization();
   const { data: status } = useOnboardingStatus();
-  return !!org && !org.entra_tenant_id && !!status && !status.hosted_mailbox_ready;
+  const { data: connection } = useMailboxConnection();
+  return !!org && !org.entra_tenant_id && !!status && !status.hosted_mailbox_ready && !connection;
 }
 
 function NoReportMailboxNotice() {
   return (
     <div className="alert alert--warning">
-      <strong>This server can't receive DMARC reports yet.</strong> Organizations that sign in without Microsoft get
-      their reports through the server's hosted reporting mailbox, and that hasn't been set up. You can add and verify
-      domains and run DNS checks now; reports start arriving once your administrator sets it up (see the{" "}
+      <strong>No report mailbox yet.</strong> This server has no hosted reporting mailbox, so connect the mailbox your
+      DMARC reports arrive at (Settings → General, or the Mailbox step of this wizard). You can add and verify domains and
+      run DNS checks meanwhile. Administrators can also set up a hosted mailbox (see the{" "}
       <a href="https://github.com/BJD1997/YetAnotherDmarcTool/wiki/Configuration-Reference" target="_blank" rel="noreferrer">
         Configuration reference
       </a>
@@ -195,7 +196,9 @@ function MailboxStep({ onBack, onNext }: { onBack: () => void; onNext: () => voi
   // react-query dedupes into one shared fetch/poll rather than two.
   const { data: connection } = useMailboxConnection();
   const { data: org } = useCurrentOrganization();
-  const noReportMailbox = useNoReportMailbox();
+  const { data: status } = useOnboardingStatus();
+  const hostedReady = !!status?.hosted_mailbox_ready;
+  const [showOwnMailbox, setShowOwnMailbox] = useState(false);
 
   // No Entra tenant means no Mail Access consent is possible — this org
   // gets a hosted address per domain instead (offered later, once a domain
@@ -205,13 +208,24 @@ function MailboxStep({ onBack, onNext }: { onBack: () => void; onNext: () => voi
     return (
       <div>
         <h2 style={{ marginTop: 0 }}>Report mailbox</h2>
-        {noReportMailbox ? (
-          <NoReportMailboxNotice />
-        ) : (
+        {hostedReady && !connection ? (
           <div className="alert alert--good">
-            Your organization signs in without Microsoft Entra, so there's no mailbox to connect here. Once you add a
-            domain, we'll generate a dedicated YetAnotherDmarcTool-hosted reporting address for it automatically.
+            Once you add a domain, we'll generate a dedicated YetAnotherDmarcTool-hosted reporting address for it
+            automatically, so there's nothing to connect. If your reports already arrive in a mailbox of your own, you
+            can connect it below instead.
           </div>
+        ) : (
+          !connection && (
+            <p className="section-hint">
+              Connect the mailbox your DMARC reports arrive at. Any mailbox with IMAP works; use one just for reports.
+            </p>
+          )
+        )}
+        {(connection || !hostedReady || showOwnMailbox) && <MailboxConnectionSection canManage={true} />}
+        {hostedReady && !connection && !showOwnMailbox && (
+          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setShowOwnMailbox(true)}>
+            Connect my own mailbox
+          </button>
         )}
         <StepNav onBack={onBack} onNext={onNext} />
       </div>
@@ -246,7 +260,10 @@ function DomainStep({ onBack, onNext }: { onBack: () => void; onNext: () => void
   const hasDomain = (domains ?? []).length > 0;
   const apexDomains = (domains ?? []).filter((d) => !d.parent_domain_id);
   const latestDomain = [...apexDomains].sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
-  const hostedOnly = !!org && !org.entra_tenant_id;
+  const { data: connection } = useMailboxConnection();
+  // An own mailbox (IMAP) makes the hosted address unnecessary; it stays
+  // available in the Policy Builder for anyone who wants both.
+  const hostedOnly = !!org && !org.entra_tenant_id && !connection;
   const noReportMailbox = useNoReportMailbox();
 
   return (

@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from sqlalchemy import Boolean, DateTime, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
@@ -9,6 +10,8 @@ from app.db.base import Base
 from app.models.enums import OrganizationStatus, ReportSenderCheck, SpfAllQualifierMode
 from app.models.mixins import TimestampMixin, UUIDPkMixin
 from app.models.pg_enum import pg_enum
+from app.services.auth.totp_secret import EncryptedSecret
+from app.services.organizations.slug import random_slug
 
 
 class Organization(UUIDPkMixin, TimestampMixin, Base):
@@ -22,6 +25,30 @@ class Organization(UUIDPkMixin, TimestampMixin, Base):
     entra_tenant_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), unique=True, nullable=True
     )
+
+    # Google Workspace sign-in: the Workspace's primary domain, matched
+    # against the `hd` claim Google puts in the ID token.
+    google_workspace_domain: Mapped[str | None] = mapped_column(String(253), unique=True, nullable=True)
+    # The organization's own OpenID Connect provider (Authentik, Keycloak,
+    # ...). The rest comes from the issuer's discovery document. At most one
+    # of Microsoft, Google and OIDC is set (a check constraint, see 0043).
+    oidc_issuer: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    oidc_client_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    oidc_client_secret: Mapped[str | None] = mapped_column(EncryptedSecret(1024), nullable=True)
+    # The name in its direct sign-in link, /login/<slug>: random by default
+    # so links can't be guessed from organization names; the platform admin
+    # may choose a readable one.
+    slug: Mapped[str] = mapped_column(String(63), unique=True, nullable=False, default=random_slug)
+
+    @property
+    def sign_in_provider(self) -> Literal["none", "microsoft", "google", "oidc"]:
+        if self.entra_tenant_id is not None:
+            return "microsoft"
+        if self.google_workspace_domain:
+            return "google"
+        if self.oidc_issuer:
+            return "oidc"
+        return "none"
 
     status: Mapped[OrganizationStatus] = mapped_column(
         pg_enum(OrganizationStatus, "organization_status"),
@@ -67,6 +94,11 @@ class Organization(UUIDPkMixin, TimestampMixin, Base):
     ask_ai_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None)
 
     rating_window_days: Mapped[int] = mapped_column(Integer, nullable=False, default=90, server_default="90")
+
+    # The person who becomes org admin on their first sign-in with Microsoft
+    # (and later Google or another provider); everyone else becomes a
+    # member. Set by the platform admin. See 0041.
+    expected_admin_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
 
     # When an org admin reached the setup wizard's last step. Until then the
     # Overview sends org admins back to the wizard (see 0039).

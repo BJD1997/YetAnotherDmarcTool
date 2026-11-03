@@ -164,7 +164,10 @@ async def test_domain_rating_not_verified(api):
 
     assert response.status_code == 200
     body = response.json()
-    assert body == {"not_verified": True, "insufficient_data": True, "score": None, "grade": None, "factors": []}
+    assert body == {
+        "not_verified": True, "insufficient_data": True, "score": None, "grade": None, "factors": [],
+        "setup": None, "delivery": None, "sends_mail": True,
+    }
 
 
 async def test_domain_rating_verified_insufficient_data(api):

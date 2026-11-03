@@ -84,3 +84,33 @@ def test_worst_finding_of_type_is_used_not_best():
     spf_factor = next(f for f in rating.factors if f.factor == "spf")
     assert spf_factor.detail == "fail"
     assert spf_factor.score_pct == 0
+
+
+def test_a_new_domain_gets_a_setup_grade_before_any_report():
+    findings = {CheckType.spf: [Finding(status="pass", summary="ok")], CheckType.dkim: [Finding(status="warn", summary="meh")]}
+    rating = compute_rating(findings_by_type=findings, dmarc_pass_count=0, total_message_count=0)
+    assert rating.insufficient_data is True and rating.score is None
+    assert rating.setup is not None and rating.setup.score == 80.0 and rating.setup.grade == "B"
+    assert rating.delivery is None
+
+
+def test_setup_and_delivery_split_the_overall_score():
+    findings = {CheckType.spf: [Finding(status="pass", summary="ok")], CheckType.dmarc: [Finding(status="warn", summary="p=none")]}
+    rating = compute_rating(
+        findings_by_type=findings, dmarc_pass_count=90, total_message_count=100, spf_pass_count=80, dkim_pass_count=85
+    )
+    # Setup: spf 10*100 + dmarc_policy 25*60 over 35; delivery: the pass rate alone.
+    assert rating.setup.score == round((10 * 100 + 25 * 60) / 35, 1)
+    assert "dmarc_pass_rate" not in {f.factor for f in rating.setup.factors}
+    assert (rating.delivery.score, rating.delivery.grade) == (90.0, "A")
+    assert [(f.factor, f.detail) for f in rating.delivery.factors] == [
+        ("dmarc_pass_rate", "90.0% of 100 messages"), ("spf_pass_rate", "80.0%"), ("dkim_pass_rate", "85.0%"),
+    ]
+    # The overall grade is unchanged: both together.
+    assert rating.score == round((10 * 100 + 25 * 60 + 20 * 90) / 55, 1)
+
+
+def test_a_domain_that_doesnt_send_mail_has_no_delivery_grade():
+    findings = {CheckType.mx: [Finding(status="pass", summary="ok")]}
+    rating = compute_rating(findings_by_type=findings, dmarc_pass_count=0, total_message_count=5, mail_profile=DomainMailProfile.parked)
+    assert rating.setup is not None and rating.delivery is None

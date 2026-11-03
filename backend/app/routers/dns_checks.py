@@ -3,12 +3,13 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user, require_org_admin
 from app.models.dns_check import DnsCheckResult
-from app.models.enums import DomainVerificationStatus
+from app.models.enums import DomainVerificationStatus, SenderReviewStatus
 from app.models.organization import Organization
 from app.models.tls_rpt import TlsRptReport
 from app.models.user import User
@@ -17,15 +18,20 @@ from app.repositories.dns_checks import (
     list_tls_rpt_reports_for_domain,
     list_tls_rpt_reports_for_domain_page,
 )
+from app.repositories import dmarc_reports as dmarc_reports_repo
 from app.repositories.domains import get_owned_domain
 from app.repositories.mailbox_connections import get_org_mailbox_connection
+from app.services.dmarc_analytics import service_breakdown
+from app.services.dns_checks import spf
 from app.services.dns_checks.base import is_null_mx
 from app.services.dns_checks.dmarc_record import check_rua_destination
 from app.services.dns_checks.inbound_view import build_inbound_hosts
 from app.services.dns_checks.mta_sts import _TXT_RE, _mx_covered, _parse_policy, fetch_policy_file
 from app.services.dns_checks.resolver import DnsLookupError, resolve_mx, resolve_txt_strict
 from app.services.dns_checks.scheduled_recheck import run_and_persist_checks
+from app.services.dns_checks.spf_providers import SPF_PROVIDERS, provider_for_sender
 from app.services.dns_checks.tls_rpt_check import check_tls_rpt_rua_destination, fetch_current_tls_rpt_record
+from app.services.rating.domain_rating import rating_window_days
 
 router = APIRouter(tags=["dns-checks"])
 
@@ -454,3 +460,89 @@ async def tls_rpt_builder(
         "org_mailbox_address": mailbox_address,
         "hosted_report_address": domain.hosted_report_address,
     }
+
+
+def _spf_includes(record: str | None) -> set[str]:
+    return {
+        t.split(":", 1)[1].lower() for t in (record or "").split()[1:] if t.lower().lstrip("+-~?").startswith("include:")
+    }
+
+
+async def _spf_suggestions(db: AsyncSession, domain, current: str | None) -> list[dict]:
+    """Approved senders the record doesn't cover yet, when adding their
+    service's include would help: their mail uses this domain itself as the
+    envelope-from (the address SPF checks). A service that bounces through
+    its own domain is checked against that domain's SPF, so including it
+    here changes nothing; DKIM is what aligns that mail."""
+    approved = [
+        r.service_label
+        for r in await dmarc_reports_repo.list_sender_reviews_for_domain(db, domain.id)
+        if r.status == SenderReviewStatus.approved
+    ]
+    if not approved:
+        return []
+    since = datetime.now(timezone.utc) - timedelta(days=await rating_window_days(db, domain.organization_id))
+    senders = {s["service_label"]: s for s in await service_breakdown(db, domain.id, since=since)}
+    included = _spf_includes(current)
+    suggestions = []
+    for label in approved:
+        provider = provider_for_sender(label)
+        sender = senders.get(label)
+        if provider is None or sender is None or provider.include in included:
+            continue
+        details = await dmarc_reports_repo.sender_auth_details(
+            db, domain.id, [ip["source_ip"] for ip in sender["source_ips"]], since
+        )
+        if domain.name.lower() not in {name.lower() for name in details["spf_domains"]}:
+            continue
+        suggestions.append({"provider_key": provider.key, "sender_label": label, "messages": sender["volume"]})
+    return suggestions
+
+
+@router.get("/domains/{domain_id}/dns/spf-builder")
+async def spf_builder(
+    domain_id: uuid.UUID, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
+) -> dict:
+    """The published SPF record (the builder starts from it), the services
+    the builder offers, and approved senders the record doesn't cover."""
+    domain = await get_owned_domain(db, domain_id, user.organization_id)
+    lookup_error = False
+    try:
+        records = [" ".join(r.split()) for r in await resolve_txt_strict(domain.name) if spf.SPF_PREFIX_RE.match(r.strip())]
+    except DnsLookupError:
+        records = []
+        lookup_error = True
+    current = records[0] if records else None
+    return {
+        "current_record": current,
+        "current_record_count": len(records),
+        "current_record_lookup_error": lookup_error,
+        "providers": [{"key": p.key, "label": p.label, "include": p.include} for p in SPF_PROVIDERS],
+        "suggestions": await _spf_suggestions(db, domain, current),
+    }
+
+
+class SpfDraft(BaseModel):
+    record: str = Field(max_length=spf.MAX_RECORD_CHARS)
+
+    @field_validator("record")
+    @classmethod
+    def _an_spf_record(cls, value: str) -> str:
+        value = " ".join(value.split())
+        if not spf.SPF_PREFIX_RE.match(value):
+            raise ValueError("an SPF record starts with v=spf1")
+        if not value.isascii() or not value.isprintable():
+            raise ValueError("an SPF record holds plain ASCII characters only")
+        if len(value.split()) > spf.MAX_DRAFT_TERMS:
+            raise ValueError(f"at most {spf.MAX_DRAFT_TERMS} parts")
+        return value
+
+
+@router.post("/domains/{domain_id}/dns/spf-builder/evaluate")
+async def spf_builder_evaluate(
+    domain_id: uuid.UUID, body: SpfDraft, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
+) -> dict:
+    """Counts the builder's draft as the SPF check would count it once
+    published: DNS lookups (limit 10) and void lookups (limit 2)."""
+    domain = await get_owned_domain(db, domain_id, user.organization_id)
+    return await spf.evaluate(domain.name, body.record)

@@ -3,7 +3,16 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Mail, RefreshCw, ChevronDown, ChevronUp, History } from "lucide-react";
 import { ApiError } from "../../api/client";
 import { ReportFreshnessValue } from "../overview/widgets";
-import { useMailboxConnection, useMailboxJobRuns, useResyncMailbox, useSetMailboxConnection } from "../../hooks/useMailboxConnection";
+import {
+  useMailboxConnection,
+  useMailboxJobRuns,
+  useResyncMailbox,
+  useSetImapConnection,
+  useSetMailboxConnection,
+  useStartMicrosoftMailboxTest,
+} from "../../hooks/useMailboxConnection";
+import GoogleMailboxForm from "./GoogleMailboxForm";
+import ImapMailboxForm from "./ImapMailboxForm";
 import { useCurrentOrganization } from "../../hooks/useOrganization";
 import { queryKeys } from "../../hooks/queryKeys";
 
@@ -47,6 +56,20 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
   const [saveError, setSaveError] = useState<string | null>(null);
   const [showLinks, setShowLinks] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  // A Microsoft 365 mailbox or any IMAP mailbox. Organizations that don't
+  // sign in with Microsoft first prove the mailbox's tenant with a test
+  // sign-in (TenantProof), unless their Microsoft mailbox already has one.
+  const canUseMicrosoft = !!org?.entra_tenant_id || !!org?.microsoft_mailbox_available;
+  const [ticket, setTicket] = useState<string | null>(null);
+  const googleDelegation = org?.google_mailbox ?? null;
+  const kinds: Kind[] = [...(canUseMicrosoft ? (["microsoft"] as const) : []), "imap", ...(googleDelegation ? (["google"] as const) : [])];
+  const showChoice = kinds.length > 1;
+  const [choice, setChoice] = useState<Kind>("microsoft");
+  // The first choice offered when the organization can't use Microsoft.
+  const choiceShown: Kind = kinds.includes(choice) ? choice : kinds[0];
+  const confirmId = useSetImapConnection(startWaiting, (err) =>
+    setSaveError(err instanceof ApiError ? err.message : "couldn't save the mail server ID"),
+  );
 
   const setConnection = useSetMailboxConnection(
     () => {
@@ -106,6 +129,7 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
         </div>
       );
     }
+
     return (
       <div className="alert alert--warning">
         <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
@@ -113,10 +137,29 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
           No mailbox connection configured yet.
         </div>
 
-        <div style={{ marginTop: "0.75rem" }}>
-          <div className="stat-tile-label">Step 1 — grant access</div>
-          {consentCta}
-        </div>
+        {showChoice && <MailboxChoice kinds={kinds} choice={choiceShown} onChange={setChoice} />}
+
+        {choiceShown === "imap" ? (
+          <div style={{ marginTop: "0.75rem" }}>
+            <ImapMailboxForm onSaved={startWaiting} />
+          </div>
+        ) : choiceShown === "google" && googleDelegation ? (
+          <div style={{ marginTop: "0.75rem" }}>
+            <GoogleMailboxForm delegation={googleDelegation} onSaved={startWaiting} />
+          </div>
+        ) : (
+        <>
+        {org?.entra_tenant_id ? (
+          <div style={{ marginTop: "0.75rem" }}>
+            <div className="stat-tile-label">Step 1 — grant access</div>
+            {consentCta}
+          </div>
+        ) : (
+          <div style={{ marginTop: "0.75rem" }}>
+            <div className="stat-tile-label">Step 1 — confirm your Microsoft tenant</div>
+            <TenantProof onPassed={setTicket} />
+          </div>
+        )}
 
         <div style={{ marginTop: "0.9rem", paddingTop: "0.75rem", borderTop: "1px solid var(--border)" }}>
           <div className="stat-tile-label" style={{ marginBottom: "0.4rem" }}>
@@ -125,7 +168,7 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              setConnection.mutate(mailbox);
+              setConnection.mutate({ mailbox_address: mailbox, ...(ticket ? { ticket } : {}) });
             }}
             className="field-row"
           >
@@ -137,48 +180,139 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
               style={{ width: "260px" }}
               required
             />
-            <button type="submit" className="btn btn--secondary btn--sm" disabled={setConnection.isPending}>
+            <button
+              type="submit"
+              className="btn btn--secondary btn--sm"
+              disabled={setConnection.isPending || (!org?.entra_tenant_id && !ticket)}
+            >
               Save &amp; start syncing
             </button>
           </form>
         </div>
+        </>
+        )}
         {saveError && <div style={{ marginTop: "0.5rem" }}>{saveError}</div>}
       </div>
     );
   }
   if (!connection) return null;
 
-  const ok = connection.consent_status === "granted" && connection.last_sync_status !== "error";
+  const isImap = connection.kind === "imap";
+  const isMicrosoft = connection.kind === "microsoft";
+  const imap = connection.imap;
+  const idUnconfirmed = isImap && !!imap && !imap.authserv_id;
+  const ok = connection.consent_status === "granted" && connection.last_sync_status !== "error" && !idUnconfirmed;
+  const editingImap = editing && choiceShown === "imap";
+  const editingGoogle = editing && choiceShown === "google" && !!googleDelegation;
   return (
     <div className={`alert ${ok ? "alert--good" : "alert--warning"}`}>
-      {editing ? (
+      {editing && showChoice && <MailboxChoice kinds={kinds} choice={choiceShown} onChange={setChoice} />}
+      {editingGoogle && googleDelegation ? (
+        <div style={{ marginTop: "0.75rem" }}>
+          <GoogleMailboxForm
+            delegation={googleDelegation}
+            current={connection.kind === "google" ? connection.mailbox_address : undefined}
+            onSaved={() => {
+              setEditing(false);
+              startWaiting();
+            }}
+            onCancel={() => setEditing(false)}
+          />
+        </div>
+      ) : editingImap ? (
+        <div style={{ marginTop: showChoice ? "0.75rem" : 0 }}>
+          <ImapMailboxForm
+            current={imap}
+            onSaved={() => {
+              setEditing(false);
+              startWaiting();
+            }}
+            onCancel={() => setEditing(false)}
+          />
+        </div>
+      ) : editing ? (
+        <>
+        {!org?.entra_tenant_id && !isMicrosoft && (
+          <div style={{ marginTop: "0.75rem", marginBottom: "0.5rem" }}>
+            <TenantProof onPassed={setTicket} />
+          </div>
+        )}
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            setConnection.mutate(mailbox);
+            setConnection.mutate({ mailbox_address: mailbox, ...(ticket ? { ticket } : {}) });
           }}
           className="field-row"
         >
           <input className="input" value={mailbox} onChange={(e) => setMailbox(e.target.value)} style={{ width: "260px" }} required />
-          <button type="submit" className="btn btn--primary btn--sm" disabled={setConnection.isPending}>
+          <button
+            type="submit"
+            className="btn btn--primary btn--sm"
+            disabled={setConnection.isPending || (!org?.entra_tenant_id && !isMicrosoft && !ticket)}
+          >
             Save
           </button>
           <button type="button" className="btn btn--ghost btn--sm" onClick={() => setEditing(false)}>
             Cancel
           </button>
         </form>
+        </>
       ) : (
         <>
           <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}>
             <Mail size={15} />
-            Mailbox: <strong>{connection.mailbox_address}</strong>
-            <span className="muted">— consent {connection.consent_status}</span>
+            {isImap && imap ? (
+              <>
+                IMAP mailbox: <strong>{connection.mailbox_address}</strong>
+                <span className="muted">
+                  {connection.mailbox_address !== imap.username.toLowerCase() && `signed in as ${imap.username}, `}
+                  {`on ${imap.host}, ${imap.folder} → ${imap.processed_folder}`}
+                </span>
+              </>
+            ) : connection.kind === "google" ? (
+              <>
+                Google Workspace mailbox: <strong>{connection.mailbox_address}</strong>
+              </>
+            ) : (
+              <>
+                Mailbox: <strong>{connection.mailbox_address}</strong>
+                <span className="muted">— consent {connection.consent_status}</span>
+              </>
+            )}
             {connection.last_sync_at && (
               <span className="muted">, last synced {new Date(connection.last_sync_at).toLocaleString()}</span>
             )}
           </div>
-          {connection.last_sync_status === "error" && connection.last_sync_error && (
+          {connection.last_sync_status === "error" && connection.last_sync_error && !idUnconfirmed && (
             <div style={{ marginTop: "0.35rem" }}>— error: {connection.last_sync_error}</div>
+          )}
+          {idUnconfirmed && imap && (
+            <div style={{ marginTop: "0.5rem" }}>
+              <strong>Confirm your mail server's ID before reports are read.</strong>{" "}
+              {imap.detected_authserv_id ? (
+                <>
+                  Your mail server signs its checks as <code>{imap.detected_authserv_id}</code>.{" "}
+                  {canManage && (
+                    <button
+                      type="button"
+                      className="btn btn--secondary btn--sm"
+                      disabled={confirmId.isPending}
+                      onClick={() =>
+                        confirmId.mutate({
+                          host: imap.host, port: imap.port, security: imap.security, username: imap.username,
+                          report_address: imap.report_address, folder: imap.folder, processed_folder: imap.processed_folder,
+                          authserv_id: imap.detected_authserv_id,
+                        })
+                      }
+                    >
+                      Use this
+                    </button>
+                  )}
+                </>
+              ) : (
+                "It's detected from the first report that arrives; check back after the next sync."
+              )}
+            </div>
           )}
 
           <div className="chip-row" style={{ marginTop: "0.5rem", fontSize: "0.85rem" }}>
@@ -211,7 +345,7 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
               actually completed, so the links that matter for fixing that
               need to stay reachable here too, not just before the mailbox
               was first configured. */}
-          {canManage && connection.last_sync_status === "error" && consentCta}
+          {canManage && isMicrosoft && connection.last_sync_status === "error" && consentCta}
           {canManage && (
             <div className="chip-row" style={{ marginTop: "0.6rem" }}>
               <button className="btn btn--secondary btn--sm" onClick={() => resync.mutate()} disabled={resync.isPending || syncing}>
@@ -221,17 +355,30 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
               <button
                 className="btn btn--ghost btn--sm"
                 onClick={() => {
-                  setMailbox(connection.mailbox_address);
+                  setMailbox(isMicrosoft ? connection.mailbox_address : "");
+                  setChoice(connection.kind);
                   setEditing(true);
                 }}
               >
                 Change mailbox
               </button>
+              {showChoice && (
+                <button
+                  className="btn btn--ghost btn--sm"
+                  onClick={() => {
+                    setMailbox("");
+                    setChoice(kinds.find((k) => k !== connection.kind) ?? connection.kind);
+                    setEditing(true);
+                  }}
+                >
+                  Use another kind of mailbox
+                </button>
+              )}
               <button className="btn btn--ghost btn--sm" onClick={() => setShowHistory((v) => !v)}>
                 <History />
                 {showHistory ? "Hide" : "Recent syncs"}
               </button>
-              {connection.last_sync_status !== "error" && (
+              {isMicrosoft && connection.last_sync_status !== "error" && (
                 <button className="btn btn--ghost btn--sm" onClick={() => setShowLinks((v) => !v)}>
                   {showLinks ? <ChevronUp /> : <ChevronDown />}
                   Entra links
@@ -244,6 +391,81 @@ export default function MailboxConnectionSection({ canManage }: { canManage: boo
         </>
       )}
       {saveError && <div style={{ marginTop: "0.5rem" }}>{saveError}</div>}
+    </div>
+  );
+}
+
+// For an organization that doesn't sign in with Microsoft: a test sign-in
+// with a Microsoft work account on one of its verified domains proves which
+// tenant its report mailbox is in; the ticket goes along with the save.
+function TenantProof({ onPassed }: { onPassed: (ticket: string) => void }) {
+  const start = useStartMicrosoftMailboxTest();
+  const [passed, setPassed] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    function onMessage(event: MessageEvent) {
+      if (event.origin !== window.location.origin || event.data?.type !== "yadt-sign-in-test") return;
+      if (event.data.ok && event.data.tenant_id) {
+        setPassed(`Signed in as ${event.data.email}: tenant ${event.data.tenant_id}.`);
+        setError(null);
+        onPassed(event.data.ticket);
+      } else if (!event.data.ok) {
+        setPassed(null);
+        setError(event.data.error ?? "The test sign-in failed.");
+      }
+    }
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [onPassed]);
+
+  return (
+    <div style={{ display: "grid", gap: "0.4rem", marginTop: "0.3rem" }}>
+      <p className="section-hint" style={{ margin: 0 }}>
+        Sign in once with a Microsoft work account of your organization (its email on one of your verified domains). Its
+        tenant becomes the report mailbox's tenant; afterwards your Global Admin grants mail access.
+      </p>
+      <div>
+        <button
+          type="button"
+          className="btn btn--secondary btn--sm"
+          disabled={start.isPending}
+          onClick={() => {
+            setError(null);
+            start.mutate(undefined, {
+              onSuccess: ({ start_url }) => {
+                window.open(start_url, "yadt-sign-in-test", "width=520,height=680");
+              },
+              onError: (err) => setError(err instanceof ApiError ? err.message : "couldn't start the test"),
+            });
+          }}
+        >
+          Test sign-in with Microsoft
+        </button>
+      </div>
+      {passed && <div className="alert alert--good" style={{ margin: 0 }}>{passed}</div>}
+      {error && <div className="alert alert--critical" style={{ margin: 0 }}>{error}</div>}
+    </div>
+  );
+}
+
+type Kind = "microsoft" | "imap" | "google";
+
+const KIND_LABEL: Record<Kind, string> = {
+  microsoft: "Microsoft 365 mailbox",
+  imap: "Another mailbox (IMAP)",
+  google: "Google Workspace mailbox",
+};
+
+function MailboxChoice({ kinds, choice, onChange }: { kinds: Kind[]; choice: Kind; onChange: (c: Kind) => void }) {
+  return (
+    <div className="chip-row" role="radiogroup" aria-label="Report mailbox" style={{ marginTop: "0.6rem" }}>
+      {kinds.map((value) => (
+        <label key={value} className="chip-row" style={{ gap: "0.3rem", cursor: "pointer" }}>
+          <input type="radio" name="mailbox-kind" checked={choice === value} onChange={() => onChange(value)} />
+          {KIND_LABEL[value]}
+        </label>
+      ))}
     </div>
   );
 }

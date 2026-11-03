@@ -2,6 +2,8 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../../auth/AuthContext";
 import { useLeftOutReports, type LeftOutReport } from "../../hooks/useLeftOutReports";
+import { ApiError } from "../../api/client";
+import { useTrustReporter } from "../../hooks/useTrustedReporters";
 
 // Reports the organization's sender check leaves out of every view — listed
 // here so they're reviewed rather than silently missing.
@@ -9,6 +11,9 @@ export default function LeftOutReportsNotice({ domainId, types }: { domainId: st
   const { user } = useAuth();
   const [open, setOpen] = useState(false);
   const { data } = useLeftOutReports(domainId);
+  const [trustError, setTrustError] = useState<string | null>(null);
+  const trust = useTrustReporter((err) => setTrustError(err instanceof ApiError ? err.message : "couldn't trust this reporter"));
+  const canManage = user?.role === "org_admin";
   const reports = (data ?? []).filter((r) => types.includes(r.type));
   if (reports.length === 0) return null;
 
@@ -43,17 +48,33 @@ export default function LeftOutReportsNotice({ domainId, types }: { domainId: st
                     <td>{r.reporter ?? "—"}</td>
                     <td className="num">{new Date(r.period_start).toLocaleDateString()}</td>
                     <td className="num">{new Date(r.received_at).toLocaleString()}</td>
-                    <td>{r.reason}</td>
+                    <td>
+                      {r.reason}
+                      {canManage && r.trustable && r.sender_domain && (
+                        <button
+                          type="button"
+                          className="btn btn--ghost btn--sm"
+                          style={{ marginLeft: "0.5rem" }}
+                          disabled={trust.isPending}
+                          onClick={() => trust.mutate(r.sender_domain!)}
+                        >
+                          Trust {r.sender_domain}
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+          {trustError && <div className="alert alert--critical" style={{ marginTop: "0.5rem" }}>{trustError}</div>}
           <p className="section-hint" style={{ margin: "0.5rem 0 0" }}>
             Left-out reports aren't counted anywhere.{" "}
-            {user?.role === "org_admin" ? (
+            {canManage ? (
               <>
-                To count reports like these, change the <Link to="/settings">report sender check</Link>.
+                Only trust a reporter you recognize as a mail provider that receives your mail — its reports will
+                count from then on. To count other reports like these, change the{" "}
+                <Link to="/settings">report sender check</Link>.
               </>
             ) : (
               "An org admin can change which reports count in Settings."

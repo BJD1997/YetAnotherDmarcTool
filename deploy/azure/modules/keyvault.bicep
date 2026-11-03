@@ -37,6 +37,12 @@ param entraMailClientSecret string = ''
 @secure()
 param entraSsoClientSecret string = ''
 @secure()
+param googleSsoClientSecret string = ''
+@secure()
+param googleMailServiceAccountJson string = ''
+@secure()
+param hostedReportsImapPassword string = ''
+@secure()
 param cloudflareApiToken string = ''
 
 var kvSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6' // Key Vault Secrets User
@@ -195,6 +201,30 @@ resource sEntraSso 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(e
   name: 'entra-sso-client-secret'
   properties: {
     value: entraSsoClientSecret
+  }
+}
+
+resource sGoogleSso 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(googleSsoClientSecret)) {
+  parent: kv
+  name: 'google-sso-client-secret'
+  properties: {
+    value: googleSsoClientSecret
+  }
+}
+
+resource sGoogleMail 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(googleMailServiceAccountJson)) {
+  parent: kv
+  name: 'google-mail-service-account'
+  properties: {
+    value: googleMailServiceAccountJson
+  }
+}
+
+resource sHostedImap 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(hostedReportsImapPassword)) {
+  parent: kv
+  name: 'hosted-imap-password'
+  properties: {
+    value: hostedReportsImapPassword
   }
 }
 

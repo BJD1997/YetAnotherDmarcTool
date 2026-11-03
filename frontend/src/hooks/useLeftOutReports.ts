@@ -11,6 +11,8 @@ export interface LeftOutReport {
   received_at: string;
   sender_domain: string | null;
   reason: string;
+  // Whether trusting sender_domain is all it would take to count it.
+  trustable: boolean;
 }
 
 export function useLeftOutReports(domainId: string) {

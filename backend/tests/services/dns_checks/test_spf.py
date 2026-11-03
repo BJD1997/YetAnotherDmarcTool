@@ -110,3 +110,66 @@ async def test_missing_all_mechanism_warns():
     with _txt({"example.com": ["v=spf1 include:_spf.example.net"], "_spf.example.net": ["v=spf1 -all"]}):
         findings = await spf.check("example.com")
     assert any(f.status == "warn" and "weak implicit ?all" in f.summary for f in findings)
+
+
+async def test_lookup_count_finding_carries_the_record_and_what_each_part_costs():
+    with _txt(
+        {
+            "example.com": ["v=spf1  ip4:192.0.2.1 include:spf.protection.outlook.com include:esp.example mx ~all"],
+            "spf.protection.outlook.com": ["v=spf1 ip4:40.92.0.0/15 -all"],
+            "esp.example": ["v=spf1 include:a.esp.example include:b.esp.example -all"],
+            "a.esp.example": ["v=spf1 ip4:198.51.100.0/24 -all"],
+            "b.esp.example": ["v=spf1 ip4:203.0.113.0/24 -all"],
+        }
+    ):
+        findings = await spf.check("example.com")
+    details = next(f for f in findings if "lookup" in f.summary).details
+    assert details["record"] == "v=spf1 ip4:192.0.2.1 include:spf.protection.outlook.com include:esp.example mx ~all"
+    assert details["lookup_count"] == 5
+    assert details["terms"] == [
+        {"term": "ip4:192.0.2.1", "lookups": 0, "service": None},
+        {"term": "include:spf.protection.outlook.com", "lookups": 1, "service": "Microsoft 365"},
+        {"term": "include:esp.example", "lookups": 3, "service": None},
+        {"term": "mx", "lookups": 1, "service": None},
+        {"term": "~all", "lookups": 0, "service": None},
+    ]
+
+
+async def test_redirect_is_listed_last_with_its_cost():
+    with _txt({"example.com": ["v=spf1 redirect=_spf.google.com"], "_spf.google.com": ["v=spf1 include:_netblocks.google.com ~all"]}):
+        findings = await spf.check("example.com")
+    terms = next(f for f in findings if "lookup" in f.summary).details["terms"]
+    assert terms == [{"term": "redirect=_spf.google.com", "lookups": 2, "service": "Google Workspace"}]
+
+
+async def test_evaluate_counts_the_draft_not_the_published_record():
+    with _txt(
+        {
+            "example.com": ["v=spf1 -all"],
+            "icloud.com": ["v=spf1 include:a.icloud.example -all"],
+            "a.icloud.example": ["v=spf1 ip4:17.0.0.0/8 -all"],
+        }
+    ):
+        result = await spf.evaluate("example.com", "v=spf1 include:icloud.com include:missing.example -all")
+    assert result["lookup_count"] == 3
+    assert result["void_lookup_count"] == 1
+    assert result["capped"] is False
+    assert result["terms"][0] == {"term": "include:icloud.com", "lookups": 2, "service": "iCloud Mail"}
+
+
+async def test_evaluate_stops_following_includes_past_the_cap():
+    # Depth is already bounded (10), so the cap is about width: a record
+    # with many includes, each of which would otherwise be fetched.
+    records = {"wide.example": ["v=spf1 " + " ".join(f"include:w{i}.example" for i in range(60)) + " -all"]}
+    records.update({f"w{i}.example": ["v=spf1 ip4:192.0.2.1 -all"] for i in range(60)})
+    fetched: list[str] = []
+
+    async def fake_resolve_txt_strict(name):
+        fetched.append(name)
+        return records.get(name, [])
+
+    with patch("app.services.dns_checks.spf.resolve_txt_strict", fake_resolve_txt_strict):
+        result = await spf.evaluate("example.com", "v=spf1 include:wide.example -all")
+    assert result["capped"] is True
+    assert result["lookup_count"] == 61
+    assert len(fetched) <= spf.EVALUATE_LOOKUP_CAP + 1

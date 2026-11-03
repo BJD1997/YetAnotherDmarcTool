@@ -8,7 +8,7 @@ import { Stat } from "../../components/domain/shared";
 import {
   useAdminOrganizations, useAdminOrgUsers, useAdminResetUser, useChangeAdminPassword, useCreateAdminOrganization,
   useCreateAdminUser, useDeleteAdminOrganization, useSetAdminMailboxConsent, useUpdateAdminOrganization,
-  type AdminOrganization, type AdminOrganizationsPage, type AdminOrgUser,
+  type AdminOrganization, type AdminOrganizationUpdate, type AdminOrganizationsPage, type AdminOrgUser,
 } from "../../hooks/useAdmin";
 import { useClipboardFeedback } from "../../hooks/useClipboardFeedback";
 
@@ -39,11 +39,18 @@ export default function AdminOrganizations() {
 
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [name, setName] = useState("");
-  const [tenantId, setTenantId] = useState("");
+  const [breakGlassEmail, setBreakGlassEmail] = useState("");
+  const [created, setCreated] = useState<{ name: string; link: string } | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
+  const { copied, copy } = useClipboardFeedback();
 
   const createOrg = useCreateAdminOrganization(
-    () => { setName(""); setTenantId(""); setCreateError(null); },
+    (org) => {
+      setName("");
+      setBreakGlassEmail("");
+      setCreateError(null);
+      setCreated(org.break_glass_setup_link ? { name: org.name, link: org.break_glass_setup_link } : null);
+    },
     (err) => setCreateError(err instanceof ApiError ? err.message : "failed to create organization"),
   );
 
@@ -59,17 +66,20 @@ export default function AdminOrganizations() {
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            createOrg.mutate({ name, entra_tenant_id: tenantId || null });
+            setCreated(null);
+            createOrg.mutate({ name, break_glass_email: breakGlassEmail.trim() });
           }}
           className="field-row"
         >
           <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Organization name" required />
           <input
             className="input"
-            value={tenantId}
-            onChange={(e) => setTenantId(e.target.value)}
-            placeholder="Entra tenant ID (optional)"
-            style={{ width: "260px" }}
+            type="email"
+            value={breakGlassEmail}
+            onChange={(e) => setBreakGlassEmail(e.target.value)}
+            placeholder="Break-glass account email"
+            required
+            style={{ width: "240px" }}
           />
           <button type="submit" className="btn btn--primary" disabled={createOrg.isPending}>
             <Plus />
@@ -77,9 +87,24 @@ export default function AdminOrganizations() {
           </button>
         </form>
         <p className="section-hint" style={{ marginBottom: 0 }}>
-          Providing the tenant ID now activates the org immediately — the client can then sign in, approve consent,
-          and set their own mailbox from inside their dashboard, no further steps needed here.
+          Every organization starts with its break-glass account: a local account (password and authenticator) that
+          administers it and chooses how its people sign in (Microsoft, Google Workspace or their own provider) in
+          Settings → Sign-in.
         </p>
+        {created && (
+          <div className="alert alert--good" style={{ marginTop: "0.75rem", marginBottom: 0 }}>
+            {created.name} is ready. Share this one-time link with the break-glass account's owner to set its password:
+            <div className="field-row" style={{ marginTop: "0.4rem" }}>
+              <code className="input" style={{ display: "inline-block", maxWidth: "100%", overflow: "auto" }}>
+                {created.link}
+              </code>
+              <button className="btn btn--secondary btn--sm" onClick={() => void copy(created.link)}>
+                {copied ? <Check /> : <Copy />}
+                {copied ? "Copied" : "Copy link"}
+              </button>
+            </div>
+          </div>
+        )}
         {createError && (
           <div className="alert alert--critical" style={{ marginTop: "0.75rem", marginBottom: 0 }}>
             {createError}
@@ -154,6 +179,11 @@ function OrgRow({ org, expanded, onToggle }: { org: AdminOrganization; expanded:
           <strong style={{ fontSize: "0.92rem" }}>{org.name}</strong>
           <span className={`badge badge--${STATUS_ROLE[org.status]}`}>{org.status}</span>
           {org.is_operator && <span className="badge badge--neutral">operator</span>}
+          {!org.has_org_admin && org.status === "active" && (
+            <span className="badge badge--warning" title="Nobody in this organization is org admin yet">
+              no org admin
+            </span>
+          )}
         </div>
         <div className="chip-row" style={{ fontSize: "0.8rem" }}>
           <span className="muted">
@@ -186,8 +216,6 @@ function OrgRow({ org, expanded, onToggle }: { org: AdminOrganization; expanded:
 }
 
 function OrgDetail({ org }: { org: AdminOrganization }) {
-  const [tenantId, setTenantId] = useState(org.entra_tenant_id ?? "");
-
   const updateOrg = useUpdateAdminOrganization(org.id);
   const setMailboxConsent = useSetAdminMailboxConsent(org.id);
 
@@ -215,17 +243,8 @@ function OrgDetail({ org }: { org: AdminOrganization }) {
       </div>
 
       <div style={{ display: "flex", gap: "3rem", marginTop: "1rem", flexWrap: "wrap" }}>
-        <div>
-          <div className="muted" style={{ fontSize: "0.78rem" }}>
-            Entra tenant ID
-          </div>
-          <div className="field-row" style={{ marginTop: "0.3rem" }}>
-            <input className="input" value={tenantId} onChange={(e) => setTenantId(e.target.value)} placeholder="tenant GUID" style={{ width: "260px" }} />
-            <button className="btn btn--secondary btn--sm" onClick={() => updateOrg.mutate({ entra_tenant_id: tenantId || null })}>
-              Save
-            </button>
-          </div>
-        </div>
+        <SignInProviderField org={org} />
+        {org.sign_in_provider !== "none" && <ExpectedAdminField org={org} />}
 
         <div style={{ flex: 1, minWidth: 260 }}>
           <div className="muted" style={{ fontSize: "0.78rem" }}>
@@ -239,7 +258,8 @@ function OrgDetail({ org }: { org: AdminOrganization }) {
           {connection && (
             <div style={{ marginTop: "0.3rem", fontSize: "0.85rem" }}>
               <div style={{ marginBottom: "0.3rem" }}>
-                <strong>{connection.mailbox_address}</strong>
+                <strong>{connection.mailbox_address}</strong>{" "}
+                <span className="muted">({connection.kind === "imap" ? "IMAP" : "Microsoft 365"})</span>
               </div>
               <span className={`badge badge--${consentRole}`}>{connection.consent_status}</span>
               {connection.consent_status !== "granted" ? (
@@ -282,7 +302,9 @@ function OrgDetail({ org }: { org: AdminOrganization }) {
 
       {/* Any org without a Microsoft tenant signs in locally — platform admin
           orgs included, whose local admins reach this console through it. */}
-      {!org.entra_tenant_id && <CreateLocalUser orgId={org.id} />}
+      {(!org.has_break_glass || org.sign_in_provider === "none") && (
+        <CreateLocalUser orgId={org.id} breakGlass={!org.has_break_glass} />
+      )}
 
       <OrgUsersSection orgId={org.id} />
 
@@ -293,9 +315,126 @@ function OrgDetail({ org }: { org: AdminOrganization }) {
   );
 }
 
+// Who becomes org admin on their first sign-in with Microsoft (later also
+// Google or another provider). Members are promoted with "Make org admin".
+const PROVIDERS: { value: AdminOrganization["sign_in_provider"]; label: string }[] = [
+  { value: "none", label: "None (local accounts)" },
+  { value: "microsoft", label: "Microsoft" },
+  { value: "google", label: "Google Workspace" },
+  { value: "oidc", label: "Other OIDC" },
+];
+
+// One sign-in provider per organization, next to local accounts (which
+// always work). Saving sends the chosen provider's fields and clears the
+// others, since an organization can't have two.
+function SignInProviderField({ org }: { org: AdminOrganization }) {
+  const [provider, setProvider] = useState(org.sign_in_provider);
+  const [tenantId, setTenantId] = useState(org.entra_tenant_id ?? "");
+  const [workspace, setWorkspace] = useState(org.google_workspace_domain ?? "");
+  const [issuer, setIssuer] = useState(org.oidc_issuer ?? "");
+  const [clientId, setClientId] = useState(org.oidc_client_id ?? "");
+  const [secret, setSecret] = useState("");
+  const [slug, setSlug] = useState(org.slug);
+  const [error, setError] = useState<string | null>(null);
+  const updateOrg = useUpdateAdminOrganization(org.id);
+
+  function save() {
+    setError(null);
+    const body: AdminOrganizationUpdate = {
+      entra_tenant_id: provider === "microsoft" ? tenantId.trim() || null : null,
+      google_workspace_domain: provider === "google" ? workspace.trim() || null : null,
+      oidc_issuer: provider === "oidc" ? issuer.trim() || null : null,
+      ...(provider === "oidc" ? { oidc_client_id: clientId.trim() || null, ...(secret ? { oidc_client_secret: secret } : {}) } : {}),
+      ...(slug.trim() !== org.slug ? { slug: slug.trim() } : {}),
+    };
+    updateOrg.mutate(body, {
+      onSuccess: () => setSecret(""),
+      onError: (err) => setError(err instanceof ApiError ? err.message : "couldn't save"),
+    });
+  }
+
+  const small = { width: "260px" };
+  return (
+    <div>
+      <div className="muted" style={{ fontSize: "0.78rem" }}>
+        Sign-in provider
+      </div>
+      <div style={{ display: "grid", gap: "0.4rem", marginTop: "0.3rem" }}>
+        <select className="input" value={provider} onChange={(e) => setProvider(e.target.value as AdminOrganization["sign_in_provider"])} style={small} aria-label="Sign-in provider">
+          {PROVIDERS.map((p) => (
+            <option key={p.value} value={p.value}>
+              {p.label}
+            </option>
+          ))}
+        </select>
+        {provider === "microsoft" && (
+          <input className="input" value={tenantId} onChange={(e) => setTenantId(e.target.value)} placeholder="tenant GUID" style={small} />
+        )}
+        {provider === "google" && (
+          <input className="input" value={workspace} onChange={(e) => setWorkspace(e.target.value)} placeholder="Workspace domain, e.g. client.com" style={small} />
+        )}
+        {provider === "oidc" && (
+          <>
+            <input className="input" value={issuer} onChange={(e) => setIssuer(e.target.value)} placeholder="issuer URL" style={small} />
+            <input className="input" value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="client ID" style={small} />
+            <input
+              className="input"
+              type="password"
+              value={secret}
+              onChange={(e) => setSecret(e.target.value)}
+              placeholder={org.oidc_secret_set ? "client secret (unchanged)" : "client secret"}
+              autoComplete="new-password"
+              style={small}
+            />
+          </>
+        )}
+        <label className="muted" style={{ fontSize: "0.78rem" }}>
+          Sign-in link: /login/
+          <input className="input" value={slug} onChange={(e) => setSlug(e.target.value)} aria-label="Sign-in link name" style={{ width: "150px", marginLeft: "0.2rem" }} />
+        </label>
+        {error && <div className="alert alert--critical" style={{ margin: 0 }}>{error}</div>}
+        <div>
+          <button className="btn btn--secondary btn--sm" onClick={save} disabled={updateOrg.isPending}>
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ExpectedAdminField({ org }: { org: AdminOrganization }) {
+  const [email, setEmail] = useState(org.expected_admin_email ?? "");
+  const updateOrg = useUpdateAdminOrganization(org.id);
+  return (
+    <div>
+      <div className="muted" style={{ fontSize: "0.78rem" }}>
+        Admin email (becomes org admin on first sign-in)
+      </div>
+      <div className="field-row" style={{ marginTop: "0.3rem" }}>
+        <input
+          className="input"
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="it-admin@client.com"
+          style={{ width: "220px" }}
+        />
+        <button
+          className="btn btn--secondary btn--sm"
+          onClick={() => updateOrg.mutate({ expected_admin_email: email.trim() || null })}
+          disabled={updateOrg.isPending}
+        >
+          Save
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function OrgUsersSection({ orgId }: { orgId: string }) {
   const { data: users, isPending } = useAdminOrgUsers(orgId);
-  const { resetPassword, resetMfa } = useAdminResetUser(orgId);
+  const { resetPassword, resetMfa, makeOrgAdmin, makeBreakGlass, removeUser } = useAdminResetUser(orgId);
   const { copied, copy } = useClipboardFeedback();
   const [resetLink, setResetLink] = useState<{ email: string; link: string } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -309,6 +448,36 @@ function OrgUsersSection({ orgId }: { orgId: string }) {
     setMessage(null);
     resetPassword.mutate(user.id, {
       onSuccess: (result) => setResetLink({ email: user.email, link: result.setup_link }),
+      onError,
+    });
+  }
+
+  function handleMakeOrgAdmin(user: AdminOrgUser) {
+    if (!window.confirm(`Make ${user.email} org admin? They can then manage domains, the mailbox, settings and the team.`)) return;
+    setError(null);
+    setResetLink(null);
+    makeOrgAdmin.mutate(user.id, {
+      onSuccess: () => setMessage(`${user.email} is now org admin.`),
+      onError,
+    });
+  }
+
+  function handleMakeBreakGlass(user: AdminOrgUser) {
+    if (!window.confirm(`Make ${user.email} this organization's break-glass account? The current one becomes an ordinary local account.`)) return;
+    setError(null);
+    setResetLink(null);
+    makeBreakGlass.mutate(user.id, {
+      onSuccess: () => setMessage(`${user.email} is now the break-glass account.`),
+      onError,
+    });
+  }
+
+  function handleRemove(user: AdminOrgUser) {
+    if (!window.confirm(`Remove this account of ${user.email}? Its sign-in history stays. This can't be undone.`)) return;
+    setError(null);
+    setResetLink(null);
+    removeUser.mutate(user.id, {
+      onSuccess: () => setMessage(`Removed the account of ${user.email}.`),
       onError,
     });
   }
@@ -338,14 +507,33 @@ function OrgUsersSection({ orgId }: { orgId: string }) {
                 <tr key={user.id}>
                   <td>
                     {user.email}
+                    {user.is_break_glass && (
+                      <span className="badge badge--neutral" style={{ marginLeft: "0.4rem" }}>
+                        break-glass
+                      </span>
+                    )}
                     <span className="muted"> · {user.role === "org_admin" ? "org admin" : "member"}</span>
                     {user.status === "disabled" && <span className="muted"> · disabled</span>}
                     {user.auth_method === "entra" && <span className="muted"> · Microsoft</span>}
+                    {user.auth_method === "google" && <span className="muted"> · Google</span>}
+                    {user.auth_method === "oidc" && <span className="muted"> · company sign-in</span>}
+                    {user.auth_method !== "local" && user.removable && <span className="muted"> · previous provider</span>}
                     {user.auth_method === "local" && !user.mfa_enrolled && <span className="muted"> · no MFA yet</span>}
                   </td>
                   <td style={{ textAlign: "right" }}>
+                    <div className="chip-row" style={{ justifyContent: "flex-end" }}>
+                    {user.role === "member" && (
+                      <button className="btn btn--ghost btn--sm" onClick={() => handleMakeOrgAdmin(user)} disabled={makeOrgAdmin.isPending}>
+                        Make org admin
+                      </button>
+                    )}
                     {user.auth_method === "local" && (
-                      <div className="chip-row" style={{ justifyContent: "flex-end" }}>
+                      <>
+                        {!user.is_break_glass && (
+                          <button className="btn btn--ghost btn--sm" onClick={() => handleMakeBreakGlass(user)} disabled={makeBreakGlass.isPending}>
+                            Make break-glass
+                          </button>
+                        )}
                         <button className="btn btn--ghost btn--sm" onClick={() => handleResetPassword(user)} disabled={resetPassword.isPending}>
                           Reset password
                         </button>
@@ -354,8 +542,14 @@ function OrgUsersSection({ orgId }: { orgId: string }) {
                             Reset MFA
                           </button>
                         )}
-                      </div>
+                      </>
                     )}
+                    {user.removable && (
+                      <button className="btn btn--ghost btn--sm" onClick={() => handleRemove(user)} disabled={removeUser.isPending}>
+                        Remove
+                      </button>
+                    )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -431,7 +625,7 @@ function OperatorAccessSection({ org }: { org: AdminOrganization }) {
   );
 }
 
-function CreateLocalUser({ orgId }: { orgId: string }) {
+function CreateLocalUser({ orgId, breakGlass }: { orgId: string; breakGlass: boolean }) {
   const [email, setEmail] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [setupLink, setSetupLink] = useState<string | null>(null);
@@ -455,7 +649,9 @@ function CreateLocalUser({ orgId }: { orgId: string }) {
   return (
     <div style={{ marginTop: "1rem", paddingTop: "0.75rem", borderTop: "1px solid var(--border)" }}>
       <div className="muted" style={{ fontSize: "0.78rem", marginBottom: "0.3rem" }}>
-        No Entra tenant — bootstrap this org's first user
+        {breakGlass
+          ? "No break-glass account yet: create it (a local org admin that chooses how the organization signs in)"
+          : "Add a local user (only while the organization has no sign-in provider)"}
       </div>
       <form
         onSubmit={(e) => {

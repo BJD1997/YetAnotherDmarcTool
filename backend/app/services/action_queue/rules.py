@@ -237,6 +237,8 @@ async def mailbox_stopped_receiving_reports(db: AsyncSession, organization_id: u
     cutoff = datetime.now(timezone.utc) - timedelta(days=STALE_MAILBOX_DAYS)
     if connection.last_sync_at < cutoff:
         return []  # sync itself hasn't run recently either — a scheduling/worker problem, not this rule
+    if connection.consent_granted_at is not None and connection.consent_granted_at >= cutoff:
+        return []  # connected too recently to expect reports yet
 
     latest_report_at = await last_report_received_at_for_org(db, organization_id)
     if latest_report_at is not None and latest_report_at >= cutoff:
@@ -460,9 +462,9 @@ async def spf_lookup_limit_risk(db: AsyncSession, domain: Domain) -> list[Action
                 severity="critical" if lookup_count > limit else "warning",
                 category=CATEGORY_DNS_BLOCKING,
                 title=f"{domain.name}: SPF near lookup limit ({lookup_count}/{limit})",
-                action_hint="Simplify SPF includes",
+                action_hint="Simplify SPF includes — open the SPF record builder",
                 domain_id=str(domain.id),
-                link_path=f"/domains/{domain.id}/dns",
+                link_path=f"/domains/{domain.id}/dns?open=spf-builder",
                 ask_ai={"kind": "dns_check", "subject": "spf"},
             )
         )

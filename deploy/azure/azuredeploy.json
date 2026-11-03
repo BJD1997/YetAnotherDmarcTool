@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "12629991080932489678"
+      "templateHash": "13959963803245247996"
     }
   },
   "parameters": {
@@ -101,6 +101,21 @@
       "type": "string",
       "defaultValue": "https://login.microsoftonline.com/organizations"
     },
+    "googleSsoClientId": {
+      "type": "string",
+      "defaultValue": ""
+    },
+    "googleSsoClientSecret": {
+      "type": "securestring",
+      "defaultValue": ""
+    },
+    "oidcAllowPrivateIssuers": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Allow organizations' own OIDC sign-in providers on private addresses. Only when every organization is trusted."
+      }
+    },
     "entraMailClientId": {
       "type": "string",
       "defaultValue": ""
@@ -115,6 +130,61 @@
     },
     "hostedReportsMailboxAddress": {
       "type": "string",
+      "defaultValue": ""
+    },
+    "hostedReportsSource": {
+      "type": "string",
+      "defaultValue": "microsoft",
+      "allowedValues": [
+        "microsoft",
+        "imap",
+        "google"
+      ],
+      "metadata": {
+        "description": "How the hosted mailbox is read: microsoft (the tenant above), imap or google."
+      }
+    },
+    "hostedReportsImapHost": {
+      "type": "string",
+      "defaultValue": ""
+    },
+    "hostedReportsImapPort": {
+      "type": "string",
+      "defaultValue": "993"
+    },
+    "hostedReportsImapSecurity": {
+      "type": "string",
+      "defaultValue": "ssl",
+      "allowedValues": [
+        "ssl",
+        "starttls"
+      ]
+    },
+    "hostedReportsImapUsername": {
+      "type": "string",
+      "defaultValue": ""
+    },
+    "hostedReportsImapPassword": {
+      "type": "securestring",
+      "defaultValue": ""
+    },
+    "hostedReportsImapFolder": {
+      "type": "string",
+      "defaultValue": "INBOX"
+    },
+    "hostedReportsImapProcessedFolder": {
+      "type": "string",
+      "defaultValue": "DMARC processed"
+    },
+    "hostedReportsImapAuthservId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "The hosted IMAP server's Authentication-Results ID; nothing is read until it is set."
+      }
+    },
+    "googleMailServiceAccountJson": {
+      "type": "securestring",
       "defaultValue": ""
     },
     "cloudflareApiToken": {
@@ -262,8 +332,11 @@
     "imageRepos": "ghcr.io/bjd1997/yetanotherdmarctool,ghcr.io/bjd1997/yetanotherdmarctool-resolver,ghcr.io/bjd1997/yetanotherdmarctool-updater",
     "deployBootstrapSecret": "[not(empty(parameters('platformAdminBootstrapPassword')))]",
     "deployEntraSsoSecret": "[and(not(empty(parameters('entraSsoClientId'))), not(empty(parameters('entraSsoClientSecret'))))]",
+    "deployGoogleSsoSecret": "[and(not(empty(parameters('googleSsoClientId'))), not(empty(parameters('googleSsoClientSecret'))))]",
     "deployEntraMailSecret": "[and(not(empty(parameters('entraMailClientId'))), not(empty(parameters('entraMailClientSecret'))))]",
-    "deployHostedReports": "[and(not(empty(parameters('hostedReportsTenantId'))), not(empty(parameters('hostedReportsMailboxAddress'))))]",
+    "deployGoogleMailSecret": "[not(empty(parameters('googleMailServiceAccountJson')))]",
+    "deployHostedReports": "[and(not(empty(parameters('hostedReportsMailboxAddress'))), if(equals(parameters('hostedReportsSource'), 'imap'), and(and(not(empty(parameters('hostedReportsImapHost'))), not(empty(parameters('hostedReportsImapUsername')))), not(empty(parameters('hostedReportsImapPassword')))), if(equals(parameters('hostedReportsSource'), 'google'), variables('deployGoogleMailSecret'), not(empty(parameters('hostedReportsTenantId'))))))]",
+    "deployHostedImapSecret": "[and(variables('deployHostedReports'), equals(parameters('hostedReportsSource'), 'imap'))]",
     "deployCloudflareSecret": "[and(and(variables('deployHostedReports'), not(empty(parameters('cloudflareApiToken')))), not(empty(parameters('cloudflareZoneId'))))]",
     "contributorRoleId": "b24988ac-6180-42a0-ab88-20f7382dd24c"
   },
@@ -770,7 +843,12 @@
           "cloudflareApiToken": "[if(variables('deployCloudflareSecret'), createObject('value', parameters('cloudflareApiToken')), createObject('value', ''))]",
           "entraSsoClientSecret": {
             "value": "[parameters('entraSsoClientSecret')]"
-          }
+          },
+          "googleSsoClientSecret": "[if(variables('deployGoogleSsoSecret'), createObject('value', parameters('googleSsoClientSecret')), createObject('value', ''))]",
+          "googleMailServiceAccountJson": {
+            "value": "[parameters('googleMailServiceAccountJson')]"
+          },
+          "hostedReportsImapPassword": "[if(variables('deployHostedImapSecret'), createObject('value', parameters('hostedReportsImapPassword')), createObject('value', ''))]"
         },
         "template": {
           "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
@@ -779,7 +857,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "12449825506553703544"
+              "templateHash": "4773859495651823036"
             }
           },
           "parameters": {
@@ -838,6 +916,18 @@
               "defaultValue": ""
             },
             "entraSsoClientSecret": {
+              "type": "securestring",
+              "defaultValue": ""
+            },
+            "googleSsoClientSecret": {
+              "type": "securestring",
+              "defaultValue": ""
+            },
+            "googleMailServiceAccountJson": {
+              "type": "securestring",
+              "defaultValue": ""
+            },
+            "hostedReportsImapPassword": {
               "type": "securestring",
               "defaultValue": ""
             },
@@ -1033,6 +1123,42 @@
               "name": "[format('{0}/{1}', parameters('keyVaultName'), 'entra-sso-client-secret')]",
               "properties": {
                 "value": "[parameters('entraSsoClientSecret')]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]"
+              ]
+            },
+            {
+              "condition": "[not(empty(parameters('googleSsoClientSecret')))]",
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2023-07-01",
+              "name": "[format('{0}/{1}', parameters('keyVaultName'), 'google-sso-client-secret')]",
+              "properties": {
+                "value": "[parameters('googleSsoClientSecret')]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]"
+              ]
+            },
+            {
+              "condition": "[not(empty(parameters('googleMailServiceAccountJson')))]",
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2023-07-01",
+              "name": "[format('{0}/{1}', parameters('keyVaultName'), 'google-mail-service-account')]",
+              "properties": {
+                "value": "[parameters('googleMailServiceAccountJson')]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]"
+              ]
+            },
+            {
+              "condition": "[not(empty(parameters('hostedReportsImapPassword')))]",
+              "type": "Microsoft.KeyVault/vaults/secrets",
+              "apiVersion": "2023-07-01",
+              "name": "[format('{0}/{1}', parameters('keyVaultName'), 'hosted-imap-password')]",
+              "properties": {
+                "value": "[parameters('hostedReportsImapPassword')]"
               },
               "dependsOn": [
                 "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]"
@@ -1346,6 +1472,15 @@
           "deployEntraSsoSecret": {
             "value": "[variables('deployEntraSsoSecret')]"
           },
+          "googleSsoClientId": {
+            "value": "[parameters('googleSsoClientId')]"
+          },
+          "deployGoogleSsoSecret": {
+            "value": "[variables('deployGoogleSsoSecret')]"
+          },
+          "oidcAllowPrivateIssuers": {
+            "value": "[parameters('oidcAllowPrivateIssuers')]"
+          },
           "entraMailClientId": {
             "value": "[parameters('entraMailClientId')]"
           },
@@ -1354,6 +1489,36 @@
           },
           "hostedReportsTenantId": "[if(variables('deployHostedReports'), createObject('value', parameters('hostedReportsTenantId')), createObject('value', ''))]",
           "hostedReportsMailboxAddress": "[if(variables('deployHostedReports'), createObject('value', parameters('hostedReportsMailboxAddress')), createObject('value', ''))]",
+          "hostedReportsSource": {
+            "value": "[parameters('hostedReportsSource')]"
+          },
+          "hostedReportsImapHost": {
+            "value": "[parameters('hostedReportsImapHost')]"
+          },
+          "hostedReportsImapPort": {
+            "value": "[parameters('hostedReportsImapPort')]"
+          },
+          "hostedReportsImapSecurity": {
+            "value": "[parameters('hostedReportsImapSecurity')]"
+          },
+          "hostedReportsImapUsername": {
+            "value": "[parameters('hostedReportsImapUsername')]"
+          },
+          "hostedReportsImapFolder": {
+            "value": "[parameters('hostedReportsImapFolder')]"
+          },
+          "hostedReportsImapProcessedFolder": {
+            "value": "[parameters('hostedReportsImapProcessedFolder')]"
+          },
+          "hostedReportsImapAuthservId": {
+            "value": "[parameters('hostedReportsImapAuthservId')]"
+          },
+          "deployHostedImapSecret": {
+            "value": "[variables('deployHostedImapSecret')]"
+          },
+          "deployGoogleMailSecret": {
+            "value": "[variables('deployGoogleMailSecret')]"
+          },
           "cloudflareZoneId": "[if(variables('deployCloudflareSecret'), createObject('value', parameters('cloudflareZoneId')), createObject('value', ''))]",
           "deployCloudflareSecret": {
             "value": "[variables('deployCloudflareSecret')]"
@@ -1370,7 +1535,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "11925397527025642092"
+              "templateHash": "3497899318284124193"
             }
           },
           "parameters": {
@@ -1455,6 +1620,18 @@
               "type": "bool",
               "defaultValue": false
             },
+            "googleSsoClientId": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "deployGoogleSsoSecret": {
+              "type": "bool",
+              "defaultValue": false
+            },
+            "oidcAllowPrivateIssuers": {
+              "type": "bool",
+              "defaultValue": false
+            },
             "entraMailClientId": {
               "type": "string",
               "defaultValue": ""
@@ -1470,6 +1647,46 @@
             "hostedReportsMailboxAddress": {
               "type": "string",
               "defaultValue": ""
+            },
+            "hostedReportsSource": {
+              "type": "string",
+              "defaultValue": "microsoft"
+            },
+            "hostedReportsImapHost": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "hostedReportsImapPort": {
+              "type": "string",
+              "defaultValue": "993"
+            },
+            "hostedReportsImapSecurity": {
+              "type": "string",
+              "defaultValue": "ssl"
+            },
+            "hostedReportsImapUsername": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "hostedReportsImapFolder": {
+              "type": "string",
+              "defaultValue": "INBOX"
+            },
+            "hostedReportsImapProcessedFolder": {
+              "type": "string",
+              "defaultValue": "DMARC processed"
+            },
+            "hostedReportsImapAuthservId": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "deployHostedImapSecret": {
+              "type": "bool",
+              "defaultValue": false
+            },
+            "deployGoogleMailSecret": {
+              "type": "bool",
+              "defaultValue": false
             },
             "cloudflareZoneId": {
               "type": "string",
@@ -1511,7 +1728,8 @@
                 "value": "true"
               }
             ],
-            "hostedReportsEnv": "[if(empty(parameters('hostedReportsMailboxAddress')), createArray(), createArray(createObject('name', 'HOSTED_REPORTS_TENANT_ID', 'value', parameters('hostedReportsTenantId')), createObject('name', 'HOSTED_REPORTS_MAILBOX_ADDRESS', 'value', parameters('hostedReportsMailboxAddress'))))]",
+            "hostedReportsEnv": "[concat(if(empty(parameters('hostedReportsMailboxAddress')), createArray(), createArray(createObject('name', 'HOSTED_REPORTS_TENANT_ID', 'value', parameters('hostedReportsTenantId')), createObject('name', 'HOSTED_REPORTS_MAILBOX_ADDRESS', 'value', parameters('hostedReportsMailboxAddress')), createObject('name', 'HOSTED_REPORTS_SOURCE', 'value', parameters('hostedReportsSource')))), if(parameters('deployHostedImapSecret'), createArray(createObject('name', 'HOSTED_REPORTS_IMAP_HOST', 'value', parameters('hostedReportsImapHost')), createObject('name', 'HOSTED_REPORTS_IMAP_PORT', 'value', parameters('hostedReportsImapPort')), createObject('name', 'HOSTED_REPORTS_IMAP_SECURITY', 'value', parameters('hostedReportsImapSecurity')), createObject('name', 'HOSTED_REPORTS_IMAP_USERNAME', 'value', parameters('hostedReportsImapUsername')), createObject('name', 'HOSTED_REPORTS_IMAP_PASSWORD', 'secretRef', 'hosted-imap-password'), createObject('name', 'HOSTED_REPORTS_IMAP_FOLDER', 'value', parameters('hostedReportsImapFolder')), createObject('name', 'HOSTED_REPORTS_IMAP_PROCESSED_FOLDER', 'value', parameters('hostedReportsImapProcessedFolder')), createObject('name', 'HOSTED_REPORTS_IMAP_AUTHSERV_ID', 'value', parameters('hostedReportsImapAuthservId'))), createArray()), if(parameters('deployGoogleMailSecret'), createArray(createObject('name', 'GOOGLE_MAIL_SERVICE_ACCOUNT_JSON', 'secretRef', 'google-mail-service-account')), createArray()))]",
+            "mailSourceSecrets": "[concat(if(parameters('deployHostedImapSecret'), createArray(createObject('name', 'hosted-imap-password', 'keyVaultUrl', format('{0}secrets/hosted-imap-password', parameters('vaultUri')), 'identity', parameters('identityId'))), createArray()), if(parameters('deployGoogleMailSecret'), createArray(createObject('name', 'google-mail-service-account', 'keyVaultUrl', format('{0}secrets/google-mail-service-account', parameters('vaultUri')), 'identity', parameters('identityId'))), createArray()))]",
             "apiFqdn": "[format('{0}-api.{1}', parameters('namePrefix'), parameters('envDefaultDomain'))]",
             "publicBaseUrl": "[if(empty(parameters('publicBaseUrlOverride')), format('https://{0}', variables('apiFqdn')), parameters('publicBaseUrlOverride'))]",
             "resolverContainer": {
@@ -1522,9 +1740,9 @@
                 "memory": "0.5Gi"
               }
             },
-            "apiSecrets": "[concat(createArray(createObject('name', 'app-database-url', 'keyVaultUrl', format('{0}secrets/app-database-url', parameters('vaultUri')), 'identity', parameters('identityId')), createObject('name', 'fernet-key', 'keyVaultUrl', format('{0}secrets/fernet-key', parameters('vaultUri')), 'identity', parameters('identityId'))), if(parameters('deployEntraSsoSecret'), createArray(createObject('name', 'entra-sso-client-secret', 'keyVaultUrl', format('{0}secrets/entra-sso-client-secret', parameters('vaultUri')), 'identity', parameters('identityId'))), createArray()), if(parameters('deployCloudflareSecret'), createArray(createObject('name', 'cloudflare-api-token', 'keyVaultUrl', format('{0}secrets/cloudflare-api-token', parameters('vaultUri')), 'identity', parameters('identityId'))), createArray()))]",
-            "apiEnv": "[concat(createArray(createObject('name', 'DATABASE_URL', 'secretRef', 'app-database-url'), createObject('name', 'FERNET_KEY', 'secretRef', 'fernet-key'), createObject('name', 'PUBLIC_BASE_URL', 'value', variables('publicBaseUrl')), createObject('name', 'DNS_RESOLVER_HOST', 'value', '127.0.0.1'), createObject('name', 'RATE_LIMIT_BACKEND', 'value', 'postgres'), createObject('name', 'FORWARDED_ALLOW_IPS', 'value', format('100.100.0.0/16,{0}', parameters('acaSubnetPrefix'))), createObject('name', 'DEPLOYMENT_PLATFORM', 'value', 'azure-container-apps'), createObject('name', 'AZURE_RESOURCE_GROUP', 'value', resourceGroup().name), createObject('name', 'AZURE_UPDATER_JOB_ID', 'value', resourceId('Microsoft.App/jobs', format('{0}-updater', parameters('namePrefix')))), createObject('name', 'AZURE_UPDATE_CLIENT_ID', 'value', parameters('triggerClientId')), createObject('name', 'UPDATE_REHEARSAL_ENABLED', 'value', if(parameters('enableTestUpdate'), 'true', 'false'))), if(parameters('deployEntraSsoSecret'), createArray(createObject('name', 'ENTRA_SSO_CLIENT_ID', 'value', parameters('entraSsoClientId')), createObject('name', 'ENTRA_SSO_CLIENT_SECRET', 'secretRef', 'entra-sso-client-secret'), createObject('name', 'ENTRA_SSO_AUTHORITY', 'value', parameters('entraSsoAuthority'))), createArray()), if(parameters('deployEntraMailSecret'), createArray(createObject('name', 'ENTRA_MAIL_CLIENT_ID', 'value', parameters('entraMailClientId'))), createArray()), variables('hostedReportsEnv'), variables('starttlsEnv'), if(parameters('deployCloudflareSecret'), createArray(createObject('name', 'CLOUDFLARE_API_TOKEN', 'secretRef', 'cloudflare-api-token'), createObject('name', 'CLOUDFLARE_ZONE_ID', 'value', parameters('cloudflareZoneId'))), createArray()))]",
-            "workerSecrets": "[concat(createArray(createObject('name', 'app-database-url', 'keyVaultUrl', format('{0}secrets/app-database-url', parameters('vaultUri')), 'identity', parameters('identityId')), createObject('name', 'fernet-key', 'keyVaultUrl', format('{0}secrets/fernet-key', parameters('vaultUri')), 'identity', parameters('identityId')), createObject('name', 'keda-pg-connection', 'keyVaultUrl', format('{0}secrets/keda-pg-connection', parameters('vaultUri')), 'identity', parameters('identityId'))), if(parameters('deployEntraMailSecret'), createArray(createObject('name', 'entra-mail-client-secret', 'keyVaultUrl', format('{0}secrets/entra-mail-client-secret', parameters('vaultUri')), 'identity', parameters('identityId'))), createArray()))]",
+            "apiSecrets": "[concat(createArray(createObject('name', 'app-database-url', 'keyVaultUrl', format('{0}secrets/app-database-url', parameters('vaultUri')), 'identity', parameters('identityId')), createObject('name', 'fernet-key', 'keyVaultUrl', format('{0}secrets/fernet-key', parameters('vaultUri')), 'identity', parameters('identityId'))), if(parameters('deployEntraSsoSecret'), createArray(createObject('name', 'entra-sso-client-secret', 'keyVaultUrl', format('{0}secrets/entra-sso-client-secret', parameters('vaultUri')), 'identity', parameters('identityId'))), createArray()), if(parameters('deployGoogleSsoSecret'), createArray(createObject('name', 'google-sso-client-secret', 'keyVaultUrl', format('{0}secrets/google-sso-client-secret', parameters('vaultUri')), 'identity', parameters('identityId'))), createArray()), variables('mailSourceSecrets'), if(parameters('deployCloudflareSecret'), createArray(createObject('name', 'cloudflare-api-token', 'keyVaultUrl', format('{0}secrets/cloudflare-api-token', parameters('vaultUri')), 'identity', parameters('identityId'))), createArray()))]",
+            "apiEnv": "[concat(createArray(createObject('name', 'DATABASE_URL', 'secretRef', 'app-database-url'), createObject('name', 'FERNET_KEY', 'secretRef', 'fernet-key'), createObject('name', 'PUBLIC_BASE_URL', 'value', variables('publicBaseUrl')), createObject('name', 'DNS_RESOLVER_HOST', 'value', '127.0.0.1'), createObject('name', 'RATE_LIMIT_BACKEND', 'value', 'postgres'), createObject('name', 'FORWARDED_ALLOW_IPS', 'value', format('100.100.0.0/16,{0}', parameters('acaSubnetPrefix'))), createObject('name', 'DEPLOYMENT_PLATFORM', 'value', 'azure-container-apps'), createObject('name', 'AZURE_RESOURCE_GROUP', 'value', resourceGroup().name), createObject('name', 'AZURE_UPDATER_JOB_ID', 'value', resourceId('Microsoft.App/jobs', format('{0}-updater', parameters('namePrefix')))), createObject('name', 'AZURE_UPDATE_CLIENT_ID', 'value', parameters('triggerClientId')), createObject('name', 'UPDATE_REHEARSAL_ENABLED', 'value', if(parameters('enableTestUpdate'), 'true', 'false'))), if(parameters('deployEntraSsoSecret'), createArray(createObject('name', 'ENTRA_SSO_CLIENT_ID', 'value', parameters('entraSsoClientId')), createObject('name', 'ENTRA_SSO_CLIENT_SECRET', 'secretRef', 'entra-sso-client-secret'), createObject('name', 'ENTRA_SSO_AUTHORITY', 'value', parameters('entraSsoAuthority'))), createArray()), if(parameters('deployGoogleSsoSecret'), createArray(createObject('name', 'GOOGLE_SSO_CLIENT_ID', 'value', parameters('googleSsoClientId')), createObject('name', 'GOOGLE_SSO_CLIENT_SECRET', 'secretRef', 'google-sso-client-secret')), createArray()), createArray(createObject('name', 'OIDC_ALLOW_PRIVATE_ISSUERS', 'value', if(parameters('oidcAllowPrivateIssuers'), 'true', 'false'))), if(parameters('deployEntraMailSecret'), createArray(createObject('name', 'ENTRA_MAIL_CLIENT_ID', 'value', parameters('entraMailClientId'))), createArray()), variables('hostedReportsEnv'), variables('starttlsEnv'), if(parameters('deployCloudflareSecret'), createArray(createObject('name', 'CLOUDFLARE_API_TOKEN', 'secretRef', 'cloudflare-api-token'), createObject('name', 'CLOUDFLARE_ZONE_ID', 'value', parameters('cloudflareZoneId'))), createArray()))]",
+            "workerSecrets": "[concat(variables('mailSourceSecrets'), createArray(createObject('name', 'app-database-url', 'keyVaultUrl', format('{0}secrets/app-database-url', parameters('vaultUri')), 'identity', parameters('identityId')), createObject('name', 'fernet-key', 'keyVaultUrl', format('{0}secrets/fernet-key', parameters('vaultUri')), 'identity', parameters('identityId')), createObject('name', 'keda-pg-connection', 'keyVaultUrl', format('{0}secrets/keda-pg-connection', parameters('vaultUri')), 'identity', parameters('identityId'))), if(parameters('deployEntraMailSecret'), createArray(createObject('name', 'entra-mail-client-secret', 'keyVaultUrl', format('{0}secrets/entra-mail-client-secret', parameters('vaultUri')), 'identity', parameters('identityId'))), createArray()))]",
             "workerEnv": "[concat(createArray(createObject('name', 'DATABASE_URL', 'secretRef', 'app-database-url'), createObject('name', 'FERNET_KEY', 'secretRef', 'fernet-key'), createObject('name', 'DNS_RESOLVER_HOST', 'value', '127.0.0.1'), createObject('name', 'RATE_LIMIT_BACKEND', 'value', 'postgres')), if(parameters('deployEntraMailSecret'), createArray(createObject('name', 'ENTRA_MAIL_CLIENT_ID', 'value', parameters('entraMailClientId')), createObject('name', 'ENTRA_MAIL_CLIENT_SECRET', 'secretRef', 'entra-mail-client-secret')), createArray()), variables('hostedReportsEnv'), variables('starttlsEnv'))]"
           },
           "resources": [

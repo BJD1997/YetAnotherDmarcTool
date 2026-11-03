@@ -1,14 +1,13 @@
 from collections.abc import Sequence
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.enums import ConsentStatus, JobType
+from app.models.enums import ConsentStatus, JobType, MailboxKind
 from app.models.hosted_reports_poll_state import HostedReportsPollState
 from app.models.job_run import JobRun
 from app.models.mailbox_connection import MailboxConnection
-from app.models.organization import Organization
 
 
 async def get_org_mailbox_connection(db: AsyncSession, organization_id: UUID) -> MailboxConnection | None:
@@ -27,15 +26,19 @@ async def list_mailbox_job_runs(db: AsyncSession, organization_id: UUID, *, limi
 
 
 async def list_orgs_with_granted_mailbox_connections(db: AsyncSession) -> Sequence:
-    """(organization_id, entra_tenant_id) for every org with a granted
-    mailbox connection — the worker's own job-registration list, cross-org
-    by design (see app/workers/scheduler.py's _enqueue_mailbox_polls)."""
+    """(organization_id, tenant_id) for every org with a granted mailbox
+    connection — the worker's own job-registration list, cross-org by
+    design (see app/workers/scheduler.py's _enqueue_mailbox_polls). An IMAP
+    mailbox needs no tenant; a Microsoft 365 one uses its own (not the
+    organization's sign-in, which may have moved elsewhere)."""
     result = await db.execute(
-        select(Organization.id, Organization.entra_tenant_id)
-        .join(MailboxConnection, MailboxConnection.organization_id == Organization.id)
+        select(MailboxConnection.organization_id, MailboxConnection.ms_tenant_id)
         .where(
             MailboxConnection.consent_status == ConsentStatus.granted,
-            Organization.entra_tenant_id.is_not(None),
+            or_(
+                MailboxConnection.kind.in_([MailboxKind.imap, MailboxKind.google]),
+                MailboxConnection.ms_tenant_id.is_not(None),
+            ),
         )
     )
     return result.all()
@@ -49,3 +52,22 @@ async def get_or_create_hosted_reports_poll_state(db: AsyncSession) -> HostedRep
         db.add(state)
         await db.flush()
     return state
+
+
+async def other_org_using_microsoft_tenant(db: AsyncSession, tenant_id, organization_id) -> bool:
+    """Whether another organization signs in with, or reads a mailbox in,
+    this Microsoft tenant. Reads across organizations, so the caller must
+    have the platform-admin context on (and switch it off again)."""
+    from app.models.organization import Organization
+
+    sign_in = await db.execute(
+        select(Organization.id).where(Organization.entra_tenant_id == tenant_id, Organization.id != organization_id).limit(1)
+    )
+    if sign_in.first() is not None:
+        return True
+    mailbox = await db.execute(
+        select(MailboxConnection.id)
+        .where(MailboxConnection.ms_tenant_id == tenant_id, MailboxConnection.organization_id != organization_id)
+        .limit(1)
+    )
+    return mailbox.first() is not None

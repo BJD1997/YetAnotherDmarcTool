@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.db.rls import set_platform_admin_context
 from app.db.session import get_db
 from app.middleware.tenant_context import (
     AdminPrincipal,
@@ -15,13 +16,14 @@ from app.middleware.tenant_context import (
     get_current_platform_admin,
     get_current_platform_admin_local,
 )
-from app.models.enums import AuthMethod, ConsentStatus, JobStatus, JobType, OrganizationStatus, SignInResult
+from app.models.enums import AuthMethod, ConsentStatus, JobStatus, JobType, OrganizationStatus, SignInResult, UserRole, UserStatus
 from app.models.mailbox_connection import MailboxConnection
 from app.models.organization import Organization
 from app.models.platform_admin import PlatformAdmin
 from app.models.platform_admin_mfa_pending_challenge import PlatformAdminMfaPendingChallenge
 from app.models.platform_admin_recovery_code import PlatformAdminRecoveryCode
 from app.models.user import User
+from app.repositories.auth import get_organization_by_google_domain, get_organization_by_slug
 from app.repositories.domains import list_hosted_domain_names_for_org
 from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.repositories.organizations import get_organization
@@ -37,7 +39,7 @@ from app.repositories.platform_admin import (
     org_summary_stats,
 )
 from app.repositories.sign_in_events import list_platform_admin_sign_in_events
-from app.repositories.users import get_user_in_org, list_users_for_org
+from app.repositories.users import count_org_admins, get_break_glass_user, get_user_in_org, list_users_for_org
 from app.schemas.platform_admin import (
     AdminEnrollOtpConfirmRequest,
     AdminLoginRequest,
@@ -49,7 +51,8 @@ from app.schemas.platform_admin import (
     OrganizationCreateRequest,
     OrganizationUpdateRequest,
 )
-from app.services.auth import account_reset, session_manager, totp
+from app.services.auth import account_reset, oidc, session_manager, totp
+from app.services.auth.account_removal import removal_blocker
 from app.services.auth.rate_limit import login_limiter, otp_account_limiter, otp_limiter, rate_limiter
 from app.services.auth.entra_links import entra_consent_urls
 from app.services.auth.password import dummy_verify, hash_password, verify_password
@@ -70,6 +73,7 @@ async def _mailbox_out(db: AsyncSession, org_id: uuid.UUID) -> dict | None:
         return None
     return {
         "id": str(connection.id),
+        "kind": connection.kind.value,
         "mailbox_address": connection.mailbox_address,
         "consent_status": connection.consent_status.value,
         "consent_granted_at": connection.consent_granted_at.isoformat() if connection.consent_granted_at else None,
@@ -87,8 +91,17 @@ async def _org_out(db: AsyncSession, org: Organization, aggregates: dict | None 
         "id": str(org.id),
         "name": org.name,
         "entra_tenant_id": str(org.entra_tenant_id) if org.entra_tenant_id else None,
+        "sign_in_provider": org.sign_in_provider,
+        "slug": org.slug,
+        "google_workspace_domain": org.google_workspace_domain,
+        "oidc_issuer": org.oidc_issuer,
+        "oidc_client_id": org.oidc_client_id,
+        "oidc_secret_set": bool(org.oidc_client_secret),
         "status": org.status.value,
         "is_operator": org.is_operator,
+        "expected_admin_email": org.expected_admin_email,
+        "has_org_admin": await count_org_admins(db, org.id) > 0,
+        "has_break_glass": await get_break_glass_user(db, org.id) is not None,
         "created_at": org.created_at.isoformat(),
         "mailbox_connection": await _mailbox_out(db, org.id),
         "entra_consent_urls": entra_consent_urls(org),
@@ -461,17 +474,70 @@ async def _commit_org(db: AsyncSession) -> None:
         raise HTTPException(status.HTTP_409_CONFLICT, "that Microsoft tenant ID is already used by another organization")
 
 
+async def _apply_sign_in_fields(db: AsyncSession, org: Organization, body, *, creating: bool) -> None:
+    """Applies the sign-in provider and link fields that were sent (null
+    clears one) and refuses combinations that can't work: at most one
+    provider, complete OIDC settings, unique Workspace domains and links."""
+    sent = body.model_fields_set
+    if "entra_tenant_id" in sent:
+        org.entra_tenant_id = body.entra_tenant_id
+    if "google_workspace_domain" in sent:
+        domain = body.google_workspace_domain
+        if domain is not None:
+            other = await get_organization_by_google_domain(db, domain)
+            if other is not None and other.id != org.id:
+                raise HTTPException(status.HTTP_409_CONFLICT, "another organization already uses this Google Workspace")
+        org.google_workspace_domain = domain
+    if "oidc_issuer" in sent:
+        if body.oidc_issuer is None:
+            org.oidc_issuer = org.oidc_client_id = org.oidc_client_secret = None
+        else:
+            try:
+                issuer = oidc.normalize_issuer(body.oidc_issuer, allow_private=settings.oidc_allow_private_issuers)
+            except oidc.OidcError as exc:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+            client_id = (body.oidc_client_id or org.oidc_client_id or "").strip()
+            # Without a new secret, the stored one stays only for the same provider and app.
+            same_app = issuer == org.oidc_issuer and client_id == org.oidc_client_id
+            secret = body.oidc_client_secret or (org.oidc_client_secret if same_app else None)
+            if not client_id or not secret:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "enter the issuer, client ID and client secret")
+            org.oidc_issuer, org.oidc_client_id, org.oidc_client_secret = issuer, client_id, secret
+    if sum(1 for v in (org.entra_tenant_id, org.google_workspace_domain, org.oidc_issuer) if v) > 1:
+        raise HTTPException(status.HTTP_409_CONFLICT, "an organization signs in with one provider: clear the other first")
+
+    if body.slug is not None and body.slug != org.slug:
+        other = await get_organization_by_slug(db, body.slug)
+        if other is not None and other.id != org.id:
+            raise HTTPException(status.HTTP_409_CONFLICT, "that sign-in link name is taken")
+        org.slug = body.slug
+    # Left out on create: the model's random default.
+
+
 @router.post("/organizations", status_code=status.HTTP_201_CREATED)
 async def create_organization(
     body: OrganizationCreateRequest,
     db: AsyncSession = Depends(get_db),
     _admin: AdminPrincipal = Depends(get_current_platform_admin),
 ) -> dict:
-    org = Organization(name=body.name, entra_tenant_id=body.entra_tenant_id, status=OrganizationStatus.active)
+    org = Organization(
+        name=body.name,
+        expected_admin_email=str(body.expected_admin_email).lower() if body.expected_admin_email else None,
+        status=OrganizationStatus.active,
+    )
+    await _apply_sign_in_fields(db, org, body, creating=True)
     db.add(org)
     await _commit_org(db)
     await db.refresh(org)
-    return await _org_out(db, org)
+    out = await _org_out(db, org)
+    if body.break_glass_email is not None:
+        # The commit above ended the transaction, and with it the
+        # platform-admin context users' row-level security needs.
+        await set_platform_admin_context(db, is_admin=True)
+        user, setup_link = await _add_local_user(db, org, LocalUserCreateRequest(email=body.break_glass_email))
+        await db.commit()
+        out = {**out, "has_break_glass": True, "break_glass_setup_link": setup_link}
+    return out
 
 
 @router.get("/organizations/names")
@@ -523,12 +589,13 @@ async def update_organization(
         org.is_operator = body.is_operator
     if body.name is not None:
         org.name = body.name
-    # Sent as null means "clear it" (the org goes back to local sign-in);
-    # left out means "leave it alone".
-    if "entra_tenant_id" in body.model_fields_set:
-        org.entra_tenant_id = body.entra_tenant_id
+    # Sent as null means "clear it" (the org goes back to local sign-in
+    # only); left out means "leave it alone".
+    await _apply_sign_in_fields(db, org, body, creating=False)
     if body.status is not None:
         org.status = body.status
+    if "expected_admin_email" in body.model_fields_set:
+        org.expected_admin_email = str(body.expected_admin_email).lower() if body.expected_admin_email else None
     await _commit_org(db)
     await db.refresh(org)
     return await _org_out(db, org)
@@ -576,6 +643,7 @@ def _local_user_out(user: User) -> dict:
         "display_name": user.display_name,
         "role": user.role.value,
         "auth_method": user.auth_method.value,
+        "is_break_glass": user.is_break_glass,
     }
 
 
@@ -585,7 +653,8 @@ async def list_org_users(
     db: AsyncSession = Depends(get_db),
     _admin: AdminPrincipal = Depends(get_current_platform_admin),
 ) -> list[dict]:
-    if await get_organization(db, org_id) is None:
+    org = await get_organization(db, org_id)
+    if org is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "organization not found")
     return [
         {
@@ -593,9 +662,34 @@ async def list_org_users(
             "status": user.status.value,
             "mfa_enrolled": user.otp_enrolled_at is not None,
             "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
+            "removable": removal_blocker(org, user) is None,
         }
         for user in await list_users_for_org(db, org_id)
     ]
+
+
+@router.delete("/organizations/{org_id}/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def admin_remove_user(
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin: AdminPrincipal = Depends(get_current_platform_admin),
+) -> None:
+    """Same rule as an org admin's removal (account_removal): only accounts
+    nobody can sign in with any more."""
+    org = await get_organization(db, org_id)
+    target = await get_user_in_org(db, user_id, org_id) if org is not None else None
+    if target is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
+    if admin.auth_type == "operator_org" and target.id == admin.id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "you can't remove yourself")
+    blocker = removal_blocker(org, target)
+    if blocker is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, blocker)
+    await account_reset.log_account_change(db, request, target, "account_removed_by_platform_admin", actor_email=admin.email)
+    await db.delete(target)
+    await db.commit()
 
 
 async def _resettable_user(db: AsyncSession, admin: AdminPrincipal, org_id: uuid.UUID, user_id: uuid.UUID) -> User:
@@ -607,7 +701,7 @@ async def _resettable_user(db: AsyncSession, admin: AdminPrincipal, org_id: uuid
     if target is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
     if target.auth_method != AuthMethod.local:
-        raise HTTPException(status.HTTP_409_CONFLICT, "this user signs in with Microsoft — reset it in Entra instead")
+        raise HTTPException(status.HTTP_409_CONFLICT, "this user signs in through the organization's provider — reset it there instead")
     if admin.auth_type == "operator_org" and target.id == admin.id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "use Settings → Account to change your own sign-in")
     return target
@@ -646,6 +740,29 @@ async def admin_reset_user_mfa(
     await db.commit()
 
 
+@router.post("/organizations/{org_id}/users/{user_id}/make-org-admin")
+async def admin_make_org_admin(
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin: AdminPrincipal = Depends(get_current_platform_admin),
+) -> dict:
+    """For an organization without an admin, or when the wrong person signed
+    in first: makes a member org admin. Logged in the organization's
+    Sign-in activity. Demoting stays with the organization's own admins."""
+    target = await get_user_in_org(db, user_id, org_id)
+    if target is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
+    if target.role != UserRole.org_admin:
+        target.role = UserRole.org_admin
+        await account_reset.log_account_change(
+            db, request, target, "made_org_admin_by_platform_admin", actor_email=admin.email
+        )
+    await db.commit()
+    return {**_local_user_out(target), "status": target.status.value}
+
+
 @router.post("/organizations/{org_id}/users", status_code=status.HTTP_201_CREATED)
 async def create_local_user(
     org_id: uuid.UUID,
@@ -654,25 +771,35 @@ async def create_local_user(
     _admin: AdminPrincipal = Depends(get_current_platform_admin),
 ) -> dict:
     """Bootstraps a local-auth org's first user — mirrors provisioning the
-    organization itself today. Entra orgs keep auto-provisioning their
-    users on first SSO login (see /auth/callback) and don't get a parallel
-    manual path here. Returns a one-time "set your password" link for the
+    organization itself today. Works next to any sign-in provider, whose
+    users are still created on their first sign-in. Returns a one-time "set your password" link for the
     admin to share out-of-band (same manual-share philosophy as Team.tsx's
     ShareSignInLink — no outbound email sending in this app)."""
     org = await get_organization(db, org_id)
     if org is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "organization not found")
-    if org.entra_tenant_id is not None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "this organization uses Entra SSO — users join by signing in, not manual creation"
-        )
+    user, setup_link = await _add_local_user(db, org, body)
+    await db.commit()
+    return {**_local_user_out(user), "setup_link": setup_link}
 
+
+async def _add_local_user(db: AsyncSession, org: Organization, body: LocalUserCreateRequest) -> tuple[User, str]:
+    """The organization's first local account becomes its break-glass
+    account (org admin). More local accounts only while the organization
+    has no sign-in provider."""
+    is_break_glass = await get_break_glass_user(db, org.id) is None
+    if not is_break_glass and org.sign_in_provider != "none":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "this organization signs in through its provider and already has its break-glass account",
+        )
     user = User(
-        organization_id=org_id,
+        organization_id=org.id,
         auth_method=AuthMethod.local,
         email=body.email,
         display_name=body.display_name,
-        role=body.role,
+        role=UserRole.org_admin if is_break_glass else body.role,
+        is_break_glass=is_break_glass,
     )
     db.add(user)
     try:
@@ -688,9 +815,34 @@ async def create_local_user(
     # (see app/db/rls.py's own docstring on this exact gotcha).
     await db.flush()
     await db.refresh(user)
-    await db.commit()
+    return user, setup_link
 
-    return {**_local_user_out(user), "setup_link": setup_link}
+
+@router.post("/organizations/{org_id}/users/{user_id}/make-break-glass")
+async def make_break_glass(
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    admin: AdminPrincipal = Depends(get_current_platform_admin),
+) -> dict:
+    """Lockout help: another local account of the organization becomes its
+    break-glass account (an active org admin); the previous one stays an
+    ordinary local account."""
+    target = await _resettable_user(db, admin, org_id, user_id)
+    current = await get_break_glass_user(db, org_id)
+    if current is not None and current.id != target.id:
+        current.is_break_glass = False
+        await db.flush()
+    target.is_break_glass = True
+    target.role = UserRole.org_admin
+    target.status = UserStatus.active
+    await account_reset.log_account_change(db, request, target, "made_break_glass_by_platform_admin", actor_email=admin.email)
+    await db.flush()
+    await db.refresh(target)
+    out = _local_user_out(target)
+    await db.commit()
+    return out
 
 
 @router.patch("/organizations/{org_id}/mailbox-connection")

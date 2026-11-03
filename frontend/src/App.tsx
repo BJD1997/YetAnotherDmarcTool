@@ -1,5 +1,6 @@
 import { Route, Routes } from "react-router-dom";
 import Login from "./pages/Login";
+import LoginOrg from "./pages/LoginOrg";
 import SetPassword from "./pages/SetPassword";
 import AdminLogin from "./pages/admin/AdminLogin";
 import AdminOrganizations from "./pages/admin/AdminOrganizations";
@@ -23,6 +24,7 @@ import GeneralTab from "./pages/settings/GeneralTab";
 import AccountTab from "./pages/settings/AccountTab";
 import DomainsTab from "./pages/settings/DomainsTab";
 import SignInActivityTab from "./pages/settings/SignInActivityTab";
+import SignInTab from "./pages/settings/SignInTab";
 import Shell from "./components/Shell";
 import AdminShell from "./components/AdminShell";
 import RequireAuth from "./components/RequireAuth";
@@ -32,6 +34,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route path="/login/:slug" element={<LoginOrg />} />
       <Route path="/set-password" element={<SetPassword />} />
       <Route path="/admin/login" element={<AdminLogin />} />
       <Route
@@ -145,6 +148,7 @@ export default function App() {
         <Route index element={<GeneralTab />} />
         <Route path="account" element={<AccountTab />} />
         <Route path="domains" element={<DomainsTab />} />
+        <Route path="sign-in" element={<SignInTab />} />
         <Route path="sign-in-activity" element={<SignInActivityTab />} />
       </Route>
     </Routes>

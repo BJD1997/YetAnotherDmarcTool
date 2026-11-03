@@ -109,6 +109,8 @@ def _cross_org_requests(b) -> list[tuple[str, str]]:
         ("GET", f"/api/domains/{d}/dmarc/inbound"),
         ("GET", f"/api/domains/{d}/dns/mta-sts-builder"),
         ("GET", f"/api/domains/{d}/dns/tls-rpt-builder"),
+        ("GET", f"/api/domains/{d}/dns/spf-builder"),
+        ("POST", f"/api/domains/{d}/dns/spf-builder/evaluate"),
         ("GET", f"/api/domains/{d}/dmarc/rua-check"),
         ("GET", f"/api/domains/{d}/dmarc/summary"),
         ("GET", f"/api/domains/{d}/rating"),
@@ -127,6 +129,7 @@ def _cross_org_requests(b) -> list[tuple[str, str]]:
         ("GET", f"/api/domains/{d}/selectors/detected"),
         ("DELETE", f"/api/domains/{d}/selectors/{b['selector'].id}"),
         ("PATCH", f"/api/users/{b['member'].id}"),
+        ("DELETE", f"/api/users/{b['member'].id}"),
         ("POST", f"/api/users/{b['member'].id}/reset-password"),
         ("POST", f"/api/users/{b['member'].id}/reset-mfa"),
     ]
@@ -200,6 +203,7 @@ async def test_member_cannot_reach_admin_only_routes(api):
         ("POST", f"/api/domains/{d}/verify", None),
         ("POST", "/api/users", {"email": "new@a.example"}),
         ("PATCH", f"/api/users/{member_a.id}", {"role": "org_admin"}),
+        ("DELETE", f"/api/users/{member_a.id}", None),
         ("GET", "/api/sign-in-events", None),
     ]
     escalations = []

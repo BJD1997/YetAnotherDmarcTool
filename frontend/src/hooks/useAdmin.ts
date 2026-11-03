@@ -8,11 +8,23 @@ export interface AdminOrganization {
   id: string;
   name: string;
   entra_tenant_id: string | null;
+  sign_in_provider: "none" | "microsoft" | "google" | "oidc";
+  // The direct sign-in link name, /login/<slug>.
+  slug: string;
+  google_workspace_domain: string | null;
+  oidc_issuer: string | null;
+  oidc_client_id: string | null;
+  oidc_secret_set: boolean;
   status: "active" | "suspended";
   is_operator: boolean;
+  // Becomes org admin on first sign-in; everyone else becomes a member.
+  expected_admin_email: string | null;
+  has_org_admin: boolean;
+  has_break_glass: boolean;
   created_at: string;
   mailbox_connection: {
     id: string;
+    kind: "microsoft" | "imap";
     mailbox_address: string;
     consent_status: "pending" | "granted" | "revoked";
     consent_granted_at: string | null;
@@ -34,10 +46,14 @@ export interface AdminOrgUser {
   email: string;
   display_name: string | null;
   role: "org_admin" | "member";
-  auth_method: "entra" | "local";
+  auth_method: "entra" | "local" | "google" | "oidc";
+  // The organization's one break-glass account (local, org admin).
+  is_break_glass: boolean;
   status: "active" | "disabled";
   mfa_enrolled: boolean;
   last_login_at: string | null;
+  // Nobody can sign in with it any more (see the Team page).
+  removable: boolean;
 }
 
 export interface AdminOrganizationsPage {
@@ -146,19 +162,30 @@ function useInvalidateAdminOrganizations() {
   return () => queryClient.invalidateQueries({ queryKey: queryKeys.admin.organizationsAll });
 }
 
-export function useCreateAdminOrganization(onSuccess?: () => void, onError?: (error: Error) => void) {
+export function useCreateAdminOrganization(
+  onSuccess?: (created: AdminOrganization & { break_glass_setup_link?: string }) => void,
+  onError?: (error: Error) => void,
+) {
   const invalidate = useInvalidateAdminOrganizations();
   return useMutation({
-    mutationFn: (body: { name: string; entra_tenant_id: string | null }) => api.post<AdminOrganization>("/admin/organizations", body),
-    onSuccess: () => { invalidate(); onSuccess?.(); },
+    mutationFn: (body: { name: string; break_glass_email: string }) =>
+      api.post<AdminOrganization & { break_glass_setup_link?: string }>("/admin/organizations", body),
+    onSuccess: (created) => { invalidate(); onSuccess?.(created); },
     onError,
   });
 }
 
+export type AdminOrganizationUpdate = Partial<
+  Pick<
+    AdminOrganization,
+    "entra_tenant_id" | "status" | "is_operator" | "expected_admin_email" | "slug" | "google_workspace_domain" | "oidc_issuer" | "oidc_client_id"
+  > & { oidc_client_secret: string | null }
+>;
+
 export function useUpdateAdminOrganization(orgId: string) {
   const invalidate = useInvalidateAdminOrganizations();
   return useMutation({
-    mutationFn: (body: Partial<Pick<AdminOrganization, "entra_tenant_id" | "status" | "is_operator">>) => api.patch<AdminOrganization>(`/admin/organizations/${orgId}`, body),
+    mutationFn: (body: AdminOrganizationUpdate) => api.patch<AdminOrganization>(`/admin/organizations/${orgId}`, body),
     onSuccess: invalidate,
   });
 }
@@ -200,7 +227,28 @@ export function useAdminResetUser(orgId: string) {
     mutationFn: (userId: string) => api.post<void>(`/admin/organizations/${orgId}/users/${userId}/reset-mfa`),
     onSuccess: invalidate,
   });
-  return { resetPassword, resetMfa };
+  const invalidateOrgs = useInvalidateAdminOrganizations();
+  const makeOrgAdmin = useMutation({
+    mutationFn: (userId: string) => api.post<AdminOrgUser>(`/admin/organizations/${orgId}/users/${userId}/make-org-admin`),
+    onSuccess: () => {
+      invalidate();
+      invalidateOrgs();
+    },
+  });
+  // Lockout help: another local account becomes the break-glass account.
+  const makeBreakGlass = useMutation({
+    mutationFn: (userId: string) => api.post<AdminOrgUser>(`/admin/organizations/${orgId}/users/${userId}/make-break-glass`),
+    onSuccess: () => {
+      invalidate();
+      invalidateOrgs();
+    },
+  });
+  // An account nobody can sign in with any more, e.g. left by a provider switch.
+  const removeUser = useMutation({
+    mutationFn: (userId: string) => api.delete<void>(`/admin/organizations/${orgId}/users/${userId}`),
+    onSuccess: invalidate,
+  });
+  return { resetPassword, resetMfa, makeOrgAdmin, makeBreakGlass, removeUser };
 }
 
 export function useDeleteAdminOrganization(orgId: string) {

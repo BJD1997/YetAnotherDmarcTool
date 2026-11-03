@@ -38,10 +38,12 @@ from sqlalchemy import text
 
 from app.db.rls import set_org_context
 from app.db.session import async_session_factory, engine
-from app.models.enums import ConsentStatus, JobStatus, JobType, SyncStatus
+from app.models.enums import ConsentStatus, JobStatus, JobType, MailboxKind, SyncStatus
 from app.models.job_run import JobRun
 from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.services.graph.mailbox_poller import MessageTooLargeError, fetch_message_raw_mime, fetch_new_message_ids
+from app.services.gmail.poll import poll_gmail_mailbox
+from app.services.imap.poll import poll_imap_mailbox
 from app.services.ingestion import report_writer
 from app.services.ingestion.parsedmarc_adapter import UnparseableReportError, parse_report_email
 from app.services.ingestion.sender_auth import authenticate_report_sender
@@ -68,7 +70,7 @@ def _advisory_lock_key(organization_id: uuid.UUID) -> int:
     return int.from_bytes(organization_id.bytes[:8], "big", signed=True)
 
 
-async def poll_org_mailbox(organization_id: uuid.UUID, tenant_id: str) -> None:
+async def poll_org_mailbox(organization_id: uuid.UUID, tenant_id: str | None) -> None:
     lock_key = _advisory_lock_key(organization_id)
     async with engine.connect() as lock_conn:
         got_lock = (
@@ -88,7 +90,7 @@ async def poll_org_mailbox(organization_id: uuid.UUID, tenant_id: str) -> None:
             await lock_conn.commit()
 
 
-async def _do_poll(organization_id: uuid.UUID, tenant_id: str) -> None:
+async def _do_poll(organization_id: uuid.UUID, tenant_id: str | None) -> None:
     started_at = datetime.now(timezone.utc)
     stats = _empty_stats()
 
@@ -100,6 +102,28 @@ async def _do_poll(organization_id: uuid.UUID, tenant_id: str) -> None:
             if connection is None or connection.consent_status != ConsentStatus.granted:
                 return
 
+            if connection.kind in (MailboxKind.imap, MailboxKind.google):
+                poll = poll_imap_mailbox if connection.kind == MailboxKind.imap else poll_gmail_mailbox
+                await poll(db, organization_id, connection, stats)
+                connection = await get_org_mailbox_connection(db, organization_id)
+                connection.last_sync_at = datetime.now(timezone.utc)
+                connection.last_sync_status = SyncStatus.success
+                connection.last_sync_error = None
+                db.add(
+                    JobRun(
+                        job_type=JobType.mailbox_poll,
+                        organization_id=organization_id,
+                        status=JobStatus.success,
+                        started_at=started_at,
+                        finished_at=datetime.now(timezone.utc),
+                        stats=stats,
+                    )
+                )
+                await db.commit()
+                return
+
+            if tenant_id is None:
+                raise RuntimeError("this organization has no Microsoft tenant ID for its Microsoft 365 mailbox")
             message_ids, new_delta_link = await fetch_new_message_ids(
                 tenant_id=tenant_id, mailbox=connection.mailbox_address, delta_link=connection.delta_link
             )

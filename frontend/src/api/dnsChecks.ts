@@ -80,3 +80,42 @@ export interface TlsRptBuilderData {
   org_mailbox_address: string | null;
   hosted_report_address: string | null;
 }
+
+// One part of an SPF record and the DNS lookups it costs (an include
+// counts its own nested lookups too); `service` names the mail service an
+// include or redirect belongs to, when known.
+export interface SpfTerm {
+  term: string;
+  lookups: number;
+  service: string | null;
+}
+
+export interface SpfProvider {
+  key: string;
+  label: string;
+  include: string;
+}
+
+export interface SpfSuggestion {
+  provider_key: string;
+  sender_label: string;
+  messages: number;
+}
+
+export interface SpfBuilderData {
+  current_record: string | null;
+  current_record_count: number;
+  current_record_lookup_error: boolean;
+  providers: SpfProvider[];
+  suggestions: SpfSuggestion[];
+}
+
+export interface SpfEvaluation {
+  lookup_count: number;
+  limit: number;
+  capped: boolean;
+  void_lookup_count: number;
+  void_limit: number;
+  notes: { status: "warn" | "fail"; message: string }[];
+  terms: SpfTerm[];
+}

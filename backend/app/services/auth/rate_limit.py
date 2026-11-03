@@ -140,6 +140,11 @@ async def prune_rate_limit_hits(max_age_seconds: int = 86400) -> None:
 # platform-admin password endpoints; otp_limiter by both verify-otp endpoints.
 login_limiter = RateLimiter("login", max_events=10, window_seconds=300)
 otp_limiter = RateLimiter("otp", max_events=10, window_seconds=300)
+# The login page's lookups (company email → provider, direct links): no
+# password involved, and a whole office may share one IP, so roomier than
+# login_limiter — still far too few to guess random links or probe many
+# domains.
+sign_in_lookup_limiter = RateLimiter("sign-in-lookup", max_events=60, window_seconds=300)
 # Per ACCOUNT, not per IP: someone who already has the password can spread
 # code guesses over many IPs, which otp_limiter alone doesn't stop. 10
 # guesses per 15 minutes puts a 6-digit code out of reach for centuries

@@ -22,9 +22,15 @@ from app.repositories import dmarc_reports as dmarc_reports_repo
 from app.repositories.trends import get_trend
 from app.services.dmarc_analytics import service_breakdown
 from app.services.dns_checks.dmarc_record import fetch_current_dmarc_record
-from app.services.dns_checks.resolver import DnsLookupError, resolve_mx, resolve_txt
+from app.services.dns_checks.resolver import DnsLookupError, resolve_mx, resolve_txt_strict
+from app.services.dns_checks.spf_providers import KNOWN_MAIL_SERVICES, service_for_host
 from app.services.dns_checks.tls_rpt_check import fetch_current_tls_rpt_record
-from app.services.rating.domain_rating import latest_findings_by_type, rating_window_days
+from app.services.rating.domain_rating import (
+    READY_TO_ENFORCE_MIN_VOLUME,
+    domain_policy_readiness,
+    latest_findings_by_type,
+    rating_window_days,
+)
 
 KINDS = ("dns_check", "sender", "compliance")
 MAX_PROMPT_CHARS = 6000
@@ -58,26 +64,6 @@ def _name(value: object, limit: int = MAX_NAME_CHARS) -> str:
     cleaned = " ".join(_NAME_CHARS.sub("", str(value)).split())
     return cleaned if len(cleaned) <= limit else cleaned[: limit - 1] + "…"
 
-# Mail services recognized from MX hosts and SPF includes, so the answer can
-# give steps for the right admin portal.
-_PROVIDERS: list[tuple[tuple[str, ...], str]] = [
-    (("protection.outlook.com", "outlook.com", "mx.microsoft"), "Microsoft 365"),
-    (("google.com", "googlemail.com"), "Google Workspace"),
-    (("smtp2go",), "SMTP2GO"),
-    (("sendgrid",), "SendGrid"),
-    (("mailgun",), "Mailgun"),
-    (("amazonses",), "Amazon SES"),
-    (("mcsv.net", "mandrillapp", "mailchimp"), "Mailchimp"),
-    (("zoho",), "Zoho Mail"),
-    (("protonmail", "proton.me"), "Proton Mail"),
-    (("mimecast",), "Mimecast"),
-    (("pphosted",), "Proofpoint"),
-    (("sendinblue", "brevo"), "Brevo"),
-    (("postmarkapp",), "Postmark"),
-    (("sparkpostmail",), "SparkPost"),
-    (("messagelabs",), "Broadcom Email Security"),
-]
-
 # Bounded, and can't start inside a run of address characters: a long run
 # without an "@" would otherwise be rescanned from every position.
 _EMAIL = re.compile(r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}\.[A-Za-z]{2,24}")
@@ -109,20 +95,18 @@ def cap(text: str) -> str:
 
 
 async def current_record(kind: str, domain_name: str) -> str | None:
-    """The record as published right now, or None (absent or lookup failed)."""
-    try:
-        if kind == "spf":
-            return next((r for r in await resolve_txt(domain_name) if r.lower().startswith("v=spf1")), None)
-        if kind == "dmarc":
-            record = await fetch_current_dmarc_record(domain_name)
-            return record.raw if record else None
-        if kind == "tls_rpt":
-            record = await fetch_current_tls_rpt_record(domain_name)
-            return record.raw if record else None
-        if kind == "mta_sts":
-            return next((r for r in await resolve_txt(f"_mta-sts.{domain_name}") if r.startswith("v=STSv1")), None)
-    except DnsLookupError:
-        return None
+    """The record as published right now, or None when there is none.
+    Raises DnsLookupError when the lookup itself failed."""
+    if kind == "spf":
+        return next((r for r in await resolve_txt_strict(domain_name) if r.lower().startswith("v=spf1")), None)
+    if kind == "dmarc":
+        record = await fetch_current_dmarc_record(domain_name)
+        return record.raw if record else None
+    if kind == "tls_rpt":
+        record = await fetch_current_tls_rpt_record(domain_name)
+        return record.raw if record else None
+    if kind == "mta_sts":
+        return next((r for r in await resolve_txt_strict(f"_mta-sts.{domain_name}") if r.startswith("v=STSv1")), None)
     return None
 
 
@@ -136,14 +120,17 @@ async def mx_hosts(domain_name: str) -> list[str]:
 def _providers(hosts: list[str]) -> list[str]:
     found: list[str] = []
     for host in hosts:
-        for patterns, name in _PROVIDERS:
+        for patterns, name in KNOWN_MAIL_SERVICES:
             if any(p in host for p in patterns) and name not in found:
                 found.append(name)
     return found
 
 
 async def _mail_setup(domain_name: str) -> str | None:
-    """e.g. "receives mail via Microsoft 365; SPF allows Microsoft 365, SMTP2GO"."""
+    """e.g. "receives mail via Microsoft 365; SPF includes
+    spf.protection.outlook.com (Microsoft 365), spf.example.net". Every
+    include is listed, named where the service is known: one the app
+    doesn't know is still something the domain allows."""
     parts = []
     mx = await mx_hosts(domain_name)
     inbound = _providers(mx)
@@ -151,19 +138,26 @@ async def _mail_setup(domain_name: str) -> str | None:
         parts.append(f"receives mail via {', '.join(inbound)}")
     elif mx:
         parts.append(f"MX: {', '.join(mx[:3])}")
-    spf = await current_record("spf", domain_name) or ""
-    includes = [
-        t.split(":", 1)[1] if t.lower().startswith("include:") else t.split("=", 1)[1]
-        for t in spf.split()
-        if t.lower().startswith(("include:", "redirect="))
-    ]
-    allowed = _providers([i.lower() for i in includes])
-    if allowed:
-        parts.append(f"SPF allows {', '.join(allowed)}")
+    try:
+        spf = await current_record("spf", domain_name) or ""
+    except DnsLookupError:
+        spf = ""
+    includes: list[str] = []
+    for token in spf.split():
+        if token.lower().startswith(("include:", "redirect=")):
+            target = _name(re.split(r"[:=]", token, maxsplit=1)[1].lower())
+            service = service_for_host(target)
+            includes.append(f"{target} ({service})" if service else target)
+    if includes:
+        parts.append(f"SPF includes {', '.join(includes)}")
     return f"Mail setup: {'; '.join(parts)}." if parts else None
 
 
-def _record_line(label: str, record: str | None) -> str:
+async def _record_line(label: str, kind: str, domain_name: str) -> str:
+    try:
+        record = await current_record(kind, domain_name)
+    except DnsLookupError:
+        return f"Current {label} record: couldn't be looked up just now"
     return f"Current {label} record: {record}" if record else f"Current {label} record: none published"
 
 
@@ -184,7 +178,7 @@ async def _dns_check(db: AsyncSession, domain: Domain, subject: str | None, _per
             if recommendation:
                 lines.append(f"  Suggested: {recommendation}")
     if check_type.value in ("spf", "dmarc", "tls_rpt", "mta_sts"):
-        lines.append(_record_line(name, await current_record(check_type.value, domain.name)))
+        lines.append(await _record_line(name, check_type.value, domain.name))
     return lines
 
 
@@ -288,8 +282,8 @@ async def _sender(db: AsyncSession, domain: Domain, subject: str | None, period:
     if details["reporters"]:
         top = sorted(details["reporters"].items(), key=lambda kv: -kv[1])[:5]
         lines.append("Reported by: " + ", ".join(f"{_name(name, 40)} ({count:,})" for name, count in top))
-    lines.append(_record_line("SPF", await current_record("spf", domain.name)))
-    lines.append(_record_line("DMARC", await current_record("dmarc", domain.name)))
+    lines.append(await _record_line("SPF", "spf", domain.name))
+    lines.append(await _record_line("DMARC", "dmarc", domain.name))
     lines.append("For DMARC to pass, SPF or DKIM must pass with a domain that aligns with the From domain.")
     # Right under the sender line: the verdict decides what kind of help fits.
     review = await dmarc_reports_repo.get_sender_review(db, domain.id, sender["service_label"])
@@ -329,7 +323,17 @@ async def _compliance(db: AsyncSession, domain: Domain, _subject: str | None, pe
         lines.append(
             "Senders I blocked or that look spoofed should keep failing: only suggest fixes for legitimate senders."
         )
-    lines.append(_record_line("DMARC", await current_record("dmarc", domain.name)))
+    readiness = await domain_policy_readiness(db, domain)
+    if readiness.eligible and not readiness.ready and readiness.pass_rate_pct is None:
+        # Too few messages to judge: the issue is waiting, not something
+        # to fix, and an AI left to guess tends to suggest changes anyway.
+        nothing_failing = "Nothing is failing. " if total and passed == total else ""
+        lines.append(
+            f"{nothing_failing}Too little data yet: {readiness.total_volume:,} of the {READY_TO_ENFORCE_MIN_VOLUME} "
+            f"messages the app waits for before it recommends p={readiness.next_rung}."
+        )
+    lines.append(await _record_line("SPF", "spf", domain.name))
+    lines.append(await _record_line("DMARC", "dmarc", domain.name))
     return lines
 
 
