@@ -26,6 +26,7 @@ function server({
   signInProvider = false,
   imapConnected = false,
   hostedAddress = null,
+  newerPendingDomain = false,
 }: {
   hostedMailboxReady?: boolean;
   baselineDone?: boolean;
@@ -34,6 +35,7 @@ function server({
   signInProvider?: boolean;
   imapConnected?: boolean;
   hostedAddress?: string | null;
+  newerPendingDomain?: boolean;
 } = {}) {
   getMock.mockImplementation(async (url: string) => {
     if (url === "/onboarding/status")
@@ -67,7 +69,14 @@ function server({
             id: "d1", name: "example.com", parent_domain_id: null, created_at: "2026-10-01T00:00:00Z",
             verification_status: verified ? "verified" : "pending", verification_record_name: "_yadt.example.com",
             verification_token: "yadt-verify=abc123", hosted_report_address: hostedAddress,
-          }]
+          },
+          ...(newerPendingDomain
+            ? [{
+                id: "d2", name: "newer.example", parent_domain_id: null, created_at: "2026-11-01T00:00:00Z",
+                verification_status: "pending", verification_record_name: "_yadt.newer.example",
+                verification_token: "yadt-verify=def456", hosted_report_address: null,
+              }]
+            : [])]
         : [];
     return null;
   });
@@ -88,6 +97,8 @@ describe("deriveStep", () => {
   it("starts at Welcome for an org that has done nothing", () => expect(deriveStep(base)).toBe(1));
   it("resumes at Domain while no domain is verified", () =>
     expect(deriveStep({ ...base, has_domain: true })).toBe(2));
+  it("still starts at Welcome when only a sign-in provider was provisioned", () =>
+    expect(deriveStep({ ...base, has_sign_in_provider: true })).toBe(1));
   it("goes to Sign-in after the domain is verified", () =>
     expect(deriveStep({ ...base, has_domain: true, has_verified_domain: true })).toBe(3));
   it("goes to Mailbox once a provider is set", () =>
@@ -150,6 +161,24 @@ describe("Report mailbox step", () => {
     fireEvent.click(await screen.findByRole("button", { name: /Use a YetAnotherDmarcTool-hosted address/ }));
     await waitFor(() => expect(vi.mocked(api.post)).toHaveBeenCalledWith("/domains/d1/hosted-report-address"));
     expect(await screen.findByText("reports+abc@hosted.example")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Continue/ })).toBeInTheDocument();
+  });
+
+  it("focuses the verified domain, not a newer pending one, and a hosted address unlocks Continue", async () => {
+    server({ verified: true, signInProvider: true, hostedAddress: "reports+abc@hosted.example", newerPendingDomain: true });
+    renderWithAppProviders(<Onboarding />);
+    // has_mailbox is set, so the wizard resumes at the baseline; go back one step.
+    fireEvent.click(await screen.findByRole("button", { name: /Back/ }));
+    expect(await screen.findByText("reports+abc@hosted.example")).toBeInTheDocument();
+    expect(screen.getByText(/Hosted address for example\.com/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Continue/ })).toBeInTheDocument();
+  });
+
+  it("unlocks Continue when the org has its own mailbox", async () => {
+    server({ verified: true, signInProvider: true, imapConnected: true });
+    renderWithAppProviders(<Onboarding />);
+    fireEvent.click(await screen.findByRole("button", { name: /Back/ }));
+    expect(await screen.findByRole("button", { name: /Continue/ })).toBeInTheDocument();
   });
 
   it("hides the hosted choice when the server has none", async () => {

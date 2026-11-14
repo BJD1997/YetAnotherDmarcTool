@@ -476,7 +476,7 @@ async def rua_destination_broken(db: AsyncSession, domain: Domain, destination: 
     """Catches the trap this whole onboarding/reporting area is meant to
     prevent: a domain can be verified, pass every DNS check, and still
     never send this product a single report if rua= isn't (or no longer
-    is) pointed at the connected mailbox. Deliberately silent on "no
+    is) pointed at the report address (own mailbox or hosted). Deliberately silent on "no
     DMARC record at all" (dmarc.py's checker + low_compliance_domain
     already cover that loudly) and on a transient lookup_error — this rule
     is specifically about a record that exists but doesn't report here."""
@@ -488,7 +488,7 @@ async def rua_destination_broken(db: AsyncSession, domain: Domain, destination: 
     title = (
         f"{domain.name}: no rua= address configured"
         if result.status == "no_rua"
-        else f"{domain.name}: rua= not reaching this mailbox"
+        else f"{domain.name}: rua= not reaching your report address"
     )
     return [
         ActionItem(

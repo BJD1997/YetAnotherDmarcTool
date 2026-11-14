@@ -48,9 +48,8 @@ async def onboarding_status(db: AsyncSession = Depends(get_db), user: User = Dep
         "has_verified_domain": has_verified_domain,
         "has_dns_baseline": has_dns_baseline,
         "has_any_report": has_any_report,
-        # Organizations without Microsoft sign-in can only receive reports
-        # through the server's hosted mailbox: the wizard says so plainly
-        # when this server doesn't have one.
+        # Whether this server offers hosted reporting addresses; the wizard
+        # only offers that choice when it does.
         "hosted_mailbox_ready": settings.hosted_mailbox_ready,
         "wizard_completed": org is not None and org.onboarding_completed_at is not None,
     }

@@ -109,7 +109,7 @@ export default function GeneralTab() {
 
           <hr className="divider" />
           <h3 className="section-title">Hosted reporting mailbox</h3>
-          <p className="section-hint">A YetAnotherDmarcTool-hosted rua= address, for domains with no mailbox of their own to dedicate.</p>
+          <p className="section-hint">A YetAnotherDmarcTool-hosted rua= address for a domain, alongside or in place of your own mailbox.</p>
           <HostedMailboxSection />
         </>
       )}

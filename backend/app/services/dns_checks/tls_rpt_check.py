@@ -159,8 +159,8 @@ async def check(domain: str, destination: ReportDestination | None = None) -> li
             findings.append(
                 Finding(
                     status="warn",
-                    summary=f"TLS-RPT rua= doesn't include your configured mailbox ({destination.address}) — reports won't reach it",
-                    details={"recommendation": "Use the TLS-RPT record builder to update rua= to include your mailbox."},
+                    summary=f"TLS-RPT rua= doesn't include your report address ({destination.address}) — reports won't reach it",
+                    details={"recommendation": "Use the TLS-RPT record builder to update rua= to include your report address."},
                 )
             )
 

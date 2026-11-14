@@ -8,8 +8,8 @@ import { sameAddress } from "./sameAddress";
 import { useHostedAddress } from "./useHostedAddress";
 
 const RUA_STATUS_TEXT: Record<string, { text: string; role: "good" | "warning" | "critical" | "neutral" }> = {
-  correct: { text: "Reports are reaching your configured mailbox", role: "good" },
-  points_elsewhere: { text: "rua= doesn't include your configured mailbox", role: "warning" },
+  correct: { text: "Reports are reaching your report address", role: "good" },
+  points_elsewhere: { text: "rua= doesn't include your report address", role: "warning" },
   no_rua: { text: "No mailto: rua= address configured — reports won't reach your mailbox", role: "critical" },
   not_configured: { text: "No TLS-RPT record published yet", role: "warning" },
   lookup_error: { text: "Couldn't check right now — DNS lookup failed", role: "neutral" },

@@ -34,6 +34,7 @@ export interface PolicyBuilderData {
   current_record: DmarcCurrentRecord | null;
   current_record_lookup_error: boolean;
   rua_destination: RuaDestination;
+  // The report destination: the org's own mailbox, else the domain's hosted address.
   org_mailbox_address: string | null;
   hosted_report_address: string | null;
   has_own_mailbox: boolean;

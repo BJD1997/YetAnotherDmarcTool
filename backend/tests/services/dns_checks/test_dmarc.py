@@ -134,7 +134,7 @@ async def test_parent_lookup_error_is_error_not_fail():
 async def test_rua_mismatch_is_a_warn():
     with _txt({"_dmarc.example.com": ["v=DMARC1; p=reject; rua=mailto:old-vendor@example.com;"]}):
         findings = await dmarc.check("example.com", destination=ReportDestination.single("reports@example.com"))
-    assert any(f.status == "warn" and "rua= doesn't include your configured mailbox" in f.summary for f in findings)
+    assert any(f.status == "warn" and "rua= doesn't include your report address" in f.summary for f in findings)
     # The existing presence finding is untouched — additional, not replaced.
     assert any(f.status == "pass" and "Aggregate reports (rua) configured" in f.summary for f in findings)
 
@@ -142,7 +142,7 @@ async def test_rua_mismatch_is_a_warn():
 async def test_rua_match_has_no_mismatch_finding():
     with _txt({"_dmarc.example.com": ["v=DMARC1; p=reject; rua=mailto:reports@example.com;"]}):
         findings = await dmarc.check("example.com", destination=ReportDestination.single("reports@example.com"))
-    assert not any("doesn't include your configured mailbox" in f.summary for f in findings)
+    assert not any("doesn't include your report address" in f.summary for f in findings)
 
 
 async def test_no_mismatch_finding_when_rua_points_at_the_hosted_address():
@@ -154,13 +154,13 @@ async def test_no_mismatch_finding_when_rua_points_at_the_hosted_address():
     }
     with _txt(records):
         findings = await dmarc.check("example.com", destination=dest)
-    assert not any("doesn't include your configured mailbox" in f.summary for f in findings)
+    assert not any("doesn't include your report address" in f.summary for f in findings)
 
 
 async def test_no_destination_given_means_no_mismatch_finding():
     with _txt({"_dmarc.example.com": ["v=DMARC1; p=reject; rua=mailto:old-vendor@example.com;"]}):
         findings = await dmarc.check("example.com")
-    assert not any("doesn't include your configured mailbox" in f.summary for f in findings)
+    assert not any("doesn't include your report address" in f.summary for f in findings)
 
 
 async def test_ruf_mismatch_is_a_warn():
@@ -169,7 +169,7 @@ async def test_ruf_mismatch_is_a_warn():
     # covered by its own tests, not what's under test here.
     with _txt({"_dmarc.example.com": ["v=DMARC1; p=reject; rua=mailto:reports@example.com; ruf=mailto:forensics@example.com;"]}):
         findings = await dmarc.check("example.com", destination=ReportDestination.single("reports@example.com"))
-    assert any(f.status == "warn" and "ruf= doesn't include your configured mailbox" in f.summary for f in findings)
+    assert any(f.status == "warn" and "ruf= doesn't include your report address" in f.summary for f in findings)
 
 
 async def test_ruf_not_configured_means_no_mismatch_finding():

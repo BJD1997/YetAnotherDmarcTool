@@ -42,7 +42,7 @@ const STEP_LABELS = ["Welcome", "Domain", "Sign-in", "Report mailbox", "DNS base
 // done once a report destination exists: "Only local accounts for now"
 // isn't stored, and getting past it is the only way to the mailbox step.
 export function deriveStep(status: OnboardingStatus): number {
-  const started = status.has_domain || status.has_mailbox || status.has_sign_in_provider;
+  const started = status.has_domain || status.has_mailbox;
   if (!started) return 1;
   if (!status.has_verified_domain) return 2;
   if (!status.has_sign_in_provider && !status.has_mailbox) return 3;
@@ -76,7 +76,10 @@ export default function Onboarding() {
   }, [status !== undefined]);
 
   const apexDomains = (domains ?? []).filter((d) => !d.parent_domain_id);
-  const focusDomain = [...apexDomains].sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
+  // Newest verified domain first: the mailbox/baseline steps need a verified
+  // one (the server refuses hosted addresses on pending domains).
+  const byNewest = [...apexDomains].sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const focusDomain = byNewest.find((d) => d.verification_status === "verified") ?? byNewest[0];
 
   if (!status || step === null) {
     return <p className="muted" style={{ padding: "2rem" }}>Loading…</p>;
@@ -353,7 +356,7 @@ function MailboxStep({ domain, onBack, onNext }: { domain: Domain | undefined; o
     (err) => setError(err instanceof ApiError ? err.message : "couldn't create a hosted address"),
   );
   const hostedOffered = !!status?.hosted_mailbox_ready;
-  const done = !!connection || !!hosted;
+  const done = !!connection || !!hosted || !!status?.has_mailbox;
 
   return (
     <div>
@@ -526,7 +529,7 @@ function ReportingStep({ domain, onBack, onNext }: { domain: Domain | undefined;
     <div>
       <h2 style={{ marginTop: 0 }}>Make sure reports reach this dashboard</h2>
       <p className="section-hint">
-        Your DMARC record's <code>rua=</code> address has to point at your connected mailbox, or reports will never
+        Your DMARC record's <code>rua=</code> address has to point at your report address, or reports will never
         arrive here.
       </p>
 
@@ -534,8 +537,8 @@ function ReportingStep({ domain, onBack, onNext }: { domain: Domain | undefined;
       {data && (
         <div className={`alert ${correct ? "alert--good" : "alert--warning"}`}>
           {correct
-            ? "Aggregate reports are already configured to reach your connected mailbox."
-            : "Your DMARC record's rua= doesn't point at your connected mailbox yet."}
+            ? "Aggregate reports are already configured to reach your report address."
+            : "Your DMARC record's rua= doesn't point at your report address yet."}
           {!correct && (
             <div style={{ marginTop: "0.6rem" }}>
               <button className="btn btn--secondary btn--sm" onClick={() => setShowBuilder(true)}>

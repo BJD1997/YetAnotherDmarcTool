@@ -40,8 +40,21 @@ export function useSpfEvaluation(domainId: string, record: string | null) {
   });
 }
 
+// Creating one changes the report destination, so every screen showing it
+// is refetched (same set as removing).
 export function useRequestHostedReportAddress(domainId: string, onSuccess?: (result: HostedReportAddressResult) => void, onError?: (error: Error) => void) {
-  return useMutation({ mutationFn: () => api.post<HostedReportAddressResult>(`/domains/${domainId}/hosted-report-address`), onSuccess, onError });
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<HostedReportAddressResult>(`/domains/${domainId}/hosted-report-address`),
+    onSuccess: (result) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.policyBuilder(domainId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.tlsRptBuilder(domainId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.domains.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.onboarding.status });
+      onSuccess?.(result);
+    },
+    onError,
+  });
 }
 
 // Own-mailbox orgs only (the server answers 409 otherwise). Both builders

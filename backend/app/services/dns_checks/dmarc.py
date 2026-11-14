@@ -194,7 +194,7 @@ async def check(domain: str, parent_domain: str | None = None, destination: Repo
             Finding(
                 status="warn",
                 summary="No rua= (aggregate reporting) address configured — no visibility into DMARC results",
-                details={"recommendation": "Use the policy builder to add rua= pointing at your connected mailbox."},
+                details={"recommendation": "Use the policy builder to add rua= pointing at your report address."},
             )
         )
     else:
@@ -211,8 +211,8 @@ async def check(domain: str, parent_domain: str | None = None, destination: Repo
             findings.append(
                 Finding(
                     status="warn",
-                    summary=f"rua= doesn't include your configured mailbox ({destination.address}) — aggregate reports won't reach it",
-                    details={"recommendation": "Use the policy builder to update rua= to include your mailbox."},
+                    summary=f"rua= doesn't include your report address ({destination.address}) — aggregate reports won't reach it",
+                    details={"recommendation": "Use the policy builder to update rua= to include your report address."},
                 )
             )
 
@@ -228,8 +228,8 @@ async def check(domain: str, parent_domain: str | None = None, destination: Repo
         findings.append(
             Finding(
                 status="warn",
-                summary=f"ruf= doesn't include your configured mailbox ({destination.address}) — forensic reports won't reach it",
-                details={"recommendation": "Use the policy builder to update ruf= to include your mailbox."},
+                summary=f"ruf= doesn't include your report address ({destination.address}) — forensic reports won't reach it",
+                details={"recommendation": "Use the policy builder to update ruf= to include your report address."},
             )
         )
 

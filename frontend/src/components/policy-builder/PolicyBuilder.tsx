@@ -10,8 +10,8 @@ import { sameAddress } from "./sameAddress";
 import { useHostedAddress } from "./useHostedAddress";
 
 const RUA_STATUS_TEXT: Record<string, { text: string; role: "good" | "warning" | "critical" | "neutral" }> = {
-  correct: { text: "Reports are reaching your connected mailbox", role: "good" },
-  points_elsewhere: { text: "rua= points somewhere other than your connected mailbox", role: "warning" },
+  correct: { text: "Reports are reaching your report address", role: "good" },
+  points_elsewhere: { text: "rua= points somewhere other than your report address", role: "warning" },
   no_rua: { text: "No rua= address configured — no reports will arrive", role: "critical" },
   not_configured: { text: "No DMARC record published yet", role: "warning" },
   lookup_error: { text: "Couldn't check right now — DNS lookup failed", role: "neutral" },

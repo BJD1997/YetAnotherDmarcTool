@@ -108,7 +108,7 @@ def _mocked_check(txt_records: list[str]):
 async def test_check_flags_mailbox_mismatch_as_warn():
     with _mocked_check(["v=TLSRPTv1; rua=mailto:old-vendor@third-party.com"]):
         findings = await tls_rpt_check.check("example.com", destination=ReportDestination.single("reports@example.com"))
-    mismatch = [f for f in findings if "doesn't include your configured mailbox" in f.summary]
+    mismatch = [f for f in findings if "doesn't include your report address" in f.summary]
     assert len(mismatch) == 1
     assert mismatch[0].status == "warn"
     # The existing presence/validity pass finding is untouched — this is an
@@ -119,7 +119,7 @@ async def test_check_flags_mailbox_mismatch_as_warn():
 async def test_check_no_mismatch_finding_when_mailbox_matches():
     with _mocked_check(["v=TLSRPTv1; rua=mailto:reports@example.com"]):
         findings = await tls_rpt_check.check("example.com", destination=ReportDestination.single("reports@example.com"))
-    assert not any("doesn't include your configured mailbox" in f.summary for f in findings)
+    assert not any("doesn't include your report address" in f.summary for f in findings)
 
 
 async def test_check_no_mismatch_finding_when_no_destination_given():
@@ -128,7 +128,7 @@ async def test_check_no_mismatch_finding_when_no_destination_given():
     # destination defaults to None.
     with _mocked_check(["v=TLSRPTv1; rua=mailto:old-vendor@third-party.com"]):
         findings = await tls_rpt_check.check("example.com")
-    assert not any("doesn't include your configured mailbox" in f.summary for f in findings)
+    assert not any("doesn't include your report address" in f.summary for f in findings)
 
 
 async def test_check_flags_mismatch_for_https_only_rua():
@@ -136,7 +136,7 @@ async def test_check_flags_mismatch_for_https_only_rua():
     # this app's own mailbox for this domain.
     with _mocked_check(["v=TLSRPTv1; rua=https://reports.example.com/submit"]):
         findings = await tls_rpt_check.check("example.com", destination=ReportDestination.single("reports@example.com"))
-    assert any(f.status == "warn" and "doesn't include your configured mailbox" in f.summary for f in findings)
+    assert any(f.status == "warn" and "doesn't include your report address" in f.summary for f in findings)
 
 
 async def test_check_no_mismatch_finding_when_rua_itself_is_invalid():
@@ -145,5 +145,5 @@ async def test_check_no_mismatch_finding_when_rua_itself_is_invalid():
     # a second, confusing finding about the mailbox on top of it.
     with _mocked_check(["v=TLSRPTv1; rua=ftp://not-a-real-scheme"]):
         findings = await tls_rpt_check.check("example.com", destination=ReportDestination.single("reports@example.com"))
-    assert not any("doesn't include your configured mailbox" in f.summary for f in findings)
+    assert not any("doesn't include your report address" in f.summary for f in findings)
     assert any(f.status == "fail" for f in findings)
