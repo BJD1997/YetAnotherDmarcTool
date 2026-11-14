@@ -29,7 +29,8 @@ admin):
 |---|---|
 | Wizard order | Domain + verify before sign-in, since every provider's test sign-in needs a verified domain. |
 | Sign-in step skippable | Yes: "Only local accounts for now". A provider can be added later in Settings → Sign-in. |
-| Mailbox step | Two explicit choices: own mailbox (Microsoft 365, Google Workspace, IMAP) or a hosted address. Nothing is created until one is picked; the step can't be passed without one. Hosted is only offered when the server has a hosted mailbox and the org may use it (today's `_hosted_mailbox_available` rule, unchanged: always without a Microsoft tenant, opt-in with one). |
+| Mailbox step | Two explicit options, usable together: own mailbox (Microsoft 365, Google Workspace, IMAP) and/or a hosted address. Nothing is created until someone picks it; the step can't be passed without at least one. |
+| Who may use a hosted address | Every organization, whatever its sign-in provider, whenever the server has a hosted mailbox. The per-org opt-in for Microsoft orgs goes. |
 | Own mailbox and hosted address both present | The own mailbox is the report destination. |
 | Removing a hosted address | Possible, but only while an own mailbox is connected. |
 
@@ -53,11 +54,12 @@ New order:
 - Step 3 reuses the Settings → Sign-in provider UI (Microsoft, Google
   Workspace, OIDC: test sign-in, then save) plus "Only local accounts for
   now", which just moves on.
-- Step 4 shows the two choices. "Use my own mailbox" opens the same
-  `MailboxConnectionSection` as Settings (Microsoft 365 / Google Workspace /
-  IMAP). "Use a hosted address" calls the existing
+- Step 4 shows both options side by side. "Use my own mailbox" opens the
+  same `MailboxConnectionSection` as Settings (Microsoft 365 / Google
+  Workspace / IMAP). "Use a hosted address" calls the existing
   `POST /domains/{id}/hosted-report-address` for the focus domain and shows
-  the address. `HostedAddressPreview`'s automatic generation is removed.
+  the address. Either or both; Continue unlocks once one exists.
+  `HostedAddressPreview`'s automatic generation is removed.
 - Resume: `deriveStep` uses the "Done when" column only; `entra_tenant_id`
   no longer decides anything. Whoever opens the wizard (break-glass or a
   later admin) lands on the first unfinished step; earlier steps show as
@@ -88,7 +90,23 @@ builder), `scheduled_recheck.py`.
   for any unknown recipient). The builders show "Remove hosted address"
   only in that situation.
 
-## C. Settings fixes
+## C. Hosted address for every organization
+
+- Backend: `_hosted_mailbox_available` is removed; `POST
+  /domains/{id}/hosted-report-address` only checks that the domain is
+  verified and the server has a hosted mailbox (as today).
+- Settings → General: the On/Off switch goes; every org sees the "always
+  available on servers that offer one, as well as or instead of your own
+  mailbox" text (and a "not offered on this server" note when it isn't).
+- Policy builders: the hosted option shows whenever the server offers it,
+  independent of `entra_tenant_id` / `hosted_mailbox_opt_in`.
+- Overview mailbox badge: from the real state (connection, or any domain
+  with a hosted address), not from the sign-in provider.
+- `organizations.hosted_mailbox_opt_in` stays in the database unused and
+  out of the API; dropping the column is left for v0.4.0 (no migration in
+  this beta).
+
+## D. Settings fixes
 
 - Settings → Domains: under the add form, every domain still pending
   verification is listed with its host name and TXT value (copy buttons)
@@ -100,7 +118,8 @@ builder), `scheduled_recheck.py`.
 
 ## Testing
 
-- Backend: `report_destination` (own wins, hosted fallback, none); rua
+- Backend: hosted address allowed for an org with a Microsoft tenant and
+  no opt-in; `report_destination` (own wins, hosted fallback, none); rua
   check accepts either; DELETE hosted address (409 without a connection,
   clears the field, releases the record); `/onboarding/status` fields.
 - Frontend: `deriveStep` for each state (incl. skipped sign-in, Settings
