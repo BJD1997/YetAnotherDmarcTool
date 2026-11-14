@@ -15,6 +15,7 @@ from cryptography.fernet import Fernet
 from app.config import settings
 from app.models.domain import Domain
 from app.models.enums import AuthMethod, DomainVerificationStatus, UserRole, UserStatus
+from app.models.mailbox_connection import MailboxConnection
 from app.models.user import User
 from app.services.auth import entra_oidc
 from app.services.auth.password import hash_password
@@ -281,3 +282,61 @@ async def test_platform_admin_can_clear_a_tenant_id(api):
     # Leaving the field out still leaves it alone.
     renamed = await client.patch(f"/api/admin/organizations/{org.id}", json={"name": "Renamed"})
     assert renamed.json()["entra_tenant_id"] is None and renamed.json()["name"] == "Renamed"
+
+
+async def test_hosted_address_allowed_for_a_microsoft_org_without_opt_in(api, monkeypatch):
+    from app.config import settings
+
+    client, owner_factory = api
+    monkeypatch.setattr(settings, "hosted_reports_mailbox_address", "reports@hosted.example")
+
+    async def _ensure(name):
+        return dns_provisioner.ProvisionResult(status="unconfigured", detail=None)
+
+    monkeypatch.setattr("app.routers.domains.ensure_authorization_record", _ensure)
+    org, admin = await seed_org_and_user(owner_factory, entra=True)
+    domain = await _seed_domain(owner_factory, org, "ms-org.example")
+    await login_as(client, owner_factory, admin)
+
+    response = await client.post(f"/api/domains/{domain.id}/hosted-report-address")
+    assert response.status_code == 200
+    assert response.json()["hosted_report_address"].startswith("reports+")
+
+
+async def test_removing_a_hosted_address_needs_an_own_mailbox(api, monkeypatch):
+    released: list[set[str]] = []
+
+    async def _release(names):
+        released.append(names)
+
+    monkeypatch.setattr("app.routers.domains.release_authorization_records", _release)
+    client, owner_factory = api
+    org, admin = await seed_org_and_user(owner_factory)
+    domain = await _seed_domain(owner_factory, org, "remove-me.example", hosted=True)
+    await login_as(client, owner_factory, admin)
+
+    refused = await client.delete(f"/api/domains/{domain.id}/hosted-report-address")
+    assert refused.status_code == 409
+    assert released == []
+
+    async with owner_factory() as db:
+        db.add(MailboxConnection(organization_id=org.id, mailbox_address="dmarc@remove-me.example"))
+        await db.commit()
+
+    assert (await client.delete(f"/api/domains/{domain.id}/hosted-report-address")).status_code == 204
+    assert released == [{"remove-me.example"}]
+    async with owner_factory() as db:
+        assert (await db.get(Domain, domain.id)).hosted_report_address is None
+
+
+async def test_removing_a_hosted_address_of_another_org_is_404(api):
+    client, owner_factory = api
+    other_org, other_user = await seed_org_and_user(owner_factory)
+    foreign = await _seed_domain(owner_factory, other_org, "foreign.example", hosted=True)
+    async with owner_factory() as db:  # seed_org_and_user always uses the same email
+        (await db.get(User, other_user.id)).email = "other-admin@test.example"
+        await db.commit()
+    _org, admin = await seed_org_and_user(owner_factory)
+    await login_as(client, owner_factory, admin)
+
+    assert (await client.delete(f"/api/domains/{foreign.id}/hosted-report-address")).status_code == 404

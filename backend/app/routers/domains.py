@@ -11,12 +11,10 @@ from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user, require_org_admin
 from app.models.domain import Domain
 from app.models.enums import CheckType, DomainMailProfile, DomainVerificationStatus
-from app.models.organization import Organization
 from app.models.user import User
 from app.repositories.dmarc_reports import count_reports_for_domain, last_report_received_at_for_domain
 from app.repositories.domains import count_subdomains, get_owned_domain, list_domains_for_org
 from app.repositories.mailbox_connections import get_org_mailbox_connection
-from app.repositories.organizations import get_organization
 from app.schemas.domains import DetectedDomainAddRequest, DomainCreateRequest, DomainUpdateRequest
 from app.services.cloudflare.dns_provisioner import ensure_authorization_record, release_authorization_records
 from app.services.dns_checks.dmarc_record import check_rua_destination
@@ -298,32 +296,19 @@ async def delete_domain(
         await release_authorization_records({domain.name})
 
 
-def _hosted_mailbox_available(org: Organization) -> bool:
-    """Local-auth orgs (no entra_tenant_id) have no Entra tenant to grant
-    Mail Access consent from, so an operator-hosted mailbox is their only
-    way to receive reports at all — always available to them. Entra orgs
-    CAN set up their own MailboxConnection, so hosted mailbox is an
-    explicit opt-in convenience for them instead (see Settings)."""
-    return org.entra_tenant_id is None or org.hosted_mailbox_opt_in
-
-
 @router.post("/{domain_id}/hosted-report-address")
 async def get_or_create_hosted_report_address(
     domain_id: uuid.UUID, db: AsyncSession = Depends(get_db), user: User = Depends(require_org_admin)
 ) -> dict:
     """Generates (idempotently returns if already generated) an
-    operator-hosted rua= address for customers with no mailbox of their
-    own to dedicate — see app/workers/jobs/hosted_reports_poll_job.py for
+    operator-hosted rua= address, for any organization, next to or instead
+    of its own mailbox — see app/workers/jobs/hosted_reports_poll_job.py for
     how mail sent to it gets attributed back to this domain."""
     domain = await get_owned_domain(db, domain_id, user.organization_id)
     # The address comes with a DNS record in the operator's own zone, so
     # only for domains this org has proven it controls.
     if domain.verification_status != DomainVerificationStatus.verified:
         raise HTTPException(status.HTTP_409_CONFLICT, "verify this domain before setting up a hosted reporting address")
-
-    org = await get_organization(db, user.organization_id)
-    if not _hosted_mailbox_available(org):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "hosted mailbox isn't enabled for your organization — see Settings")
 
     if not settings.hosted_reports_domain or not settings.hosted_reports_mailbox_address:
         raise HTTPException(status.HTTP_409_CONFLICT, "hosted reporting addresses aren't configured on this instance yet")
@@ -354,3 +339,20 @@ async def get_or_create_hosted_report_address(
         "authorization_record_status": provision_result.status,
         "authorization_record_detail": provision_result.detail,
     }
+
+
+@router.delete("/{domain_id}/hosted-report-address", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_hosted_report_address(
+    domain_id: uuid.UUID, db: AsyncSession = Depends(get_db), user: User = Depends(require_org_admin)
+) -> None:
+    """Only while the organization has its own mailbox, so a domain is never
+    left without anywhere for its reports to go. Reports already received
+    stay; later mail to the old address is skipped by the hosted poll."""
+    domain = await get_owned_domain(db, domain_id, user.organization_id)
+    if await get_org_mailbox_connection(db, user.organization_id) is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "connect your own mailbox before removing the hosted address")
+    if domain.hosted_report_address is None:
+        return
+    domain.hosted_report_address = None
+    await db.commit()
+    await release_authorization_records({domain.name})

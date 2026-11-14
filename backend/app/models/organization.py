@@ -78,12 +78,7 @@ class Organization(UUIDPkMixin, TimestampMixin, Base):
         default=ReportSenderCheck.standard,
     )
 
-    # Explicit opt-in for orgs that COULD set up their own MailboxConnection
-    # (entra_tenant_id is set) but want the operator-hosted address instead.
-    # Irrelevant for local-auth orgs (entra_tenant_id is None) — those have
-    # no Entra tenant to grant Mail Access consent from, so hosted mailbox
-    # is always available to them regardless of this flag — see
-    # app/routers/domains.py's _hosted_mailbox_available.
+    # Unused since v0.3.0-beta21 (hosted addresses are open to every organization); dropped in v0.4.0.
     hosted_mailbox_opt_in: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     # How far back each domain's grade, failing-message count, readiness and

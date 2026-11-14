@@ -28,7 +28,6 @@ def _org_out(org: Organization, mailbox_tenant_id=None) -> dict:
         "sign_in_provider": org.sign_in_provider,
         "is_operator": org.is_operator,
         "spf_all_qualifier_mode": org.spf_all_qualifier_mode.value,
-        "hosted_mailbox_opt_in": org.hosted_mailbox_opt_in,
         "report_sender_check": org.report_sender_check.value,
         "rating_window_days": org.rating_window_days,
         "ask_ai_enabled": org.ask_ai_enabled,
@@ -77,8 +76,6 @@ async def update_current_organization(
     org.name = body.name
     if body.spf_all_qualifier_mode is not None:
         org.spf_all_qualifier_mode = body.spf_all_qualifier_mode
-    if body.hosted_mailbox_opt_in is not None:
-        org.hosted_mailbox_opt_in = body.hosted_mailbox_opt_in
     if body.ask_ai_enabled is not None:
         org.ask_ai_enabled = body.ask_ai_enabled
     if body.rating_window_days is not None:
