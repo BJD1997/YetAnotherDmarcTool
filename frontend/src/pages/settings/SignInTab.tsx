@@ -93,12 +93,12 @@ export default function SignInTab() {
       : PROVIDER_NAME[data.provider];
 
   return (
-    <div style={{ display: "grid", gap: "1rem", maxWidth: "42rem" }}>
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: "1rem", maxWidth: "42rem" }}>
       <div className="card">
         <h2 style={{ marginTop: 0 }}>Direct sign-in link</h2>
         <p className="section-hint">Share or bookmark this link: it goes straight to your organization's sign-in.</p>
         <div className="field-row">
-          <code className="input" style={{ display: "inline-block" }}>
+          <code className="input" style={{ display: "inline-block", minWidth: 0, overflowWrap: "anywhere" }}>
             {data.login_link}
           </code>
           <button className="btn btn--secondary btn--sm" onClick={() => void copy(data.login_link)}>
@@ -187,7 +187,7 @@ export default function SignInTab() {
                   address on one of your verified domains.
                 </p>
                 <div style={{ fontSize: "0.9rem" }}>
-                  Redirect URI: <code>{data.redirect_uri}</code>
+                  Redirect URI: <code style={{ overflowWrap: "anywhere" }}>{data.redirect_uri}</code>
                 </div>
                 <label className="field-label">
                   Issuer URL
