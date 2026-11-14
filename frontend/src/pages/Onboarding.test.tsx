@@ -98,6 +98,17 @@ describe("deriveStep", () => {
     expect(deriveStep({ ...base, has_domain: true, has_verified_domain: true, has_mailbox: true, has_dns_baseline: true })).toBe(6));
 });
 
+describe("Step chips", () => {
+  it("marks the steps before the resumed one as done", async () => {
+    server({ verified: true, hostedAddress: "reports+abc@hosted.example" });
+    renderWithAppProviders(<Onboarding />);
+
+    expect(await screen.findByRole("button", { name: /Run baseline check/ })).toBeInTheDocument();
+    for (const n of [1, 2, 3, 4]) expect(screen.getByTestId(`step-chip-${n}`)).toHaveTextContent("(done)");
+    for (const n of [5, 6, 7, 8]) expect(screen.getByTestId(`step-chip-${n}`)).not.toHaveTextContent("(done)");
+  });
+});
+
 describe("Domain step", () => {
   it("shows the verification record with copy buttons and waits for verification", async () => {
     server({ unverifiedDomain: true });

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { ArrowLeft, ArrowRight, RefreshCw, CheckCircle2, KeyRound, Users, ShieldCheck } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, RefreshCw, CheckCircle2, KeyRound, Users, ShieldCheck } from "lucide-react";
 import { ApiError } from "../api/client";
 import type { Domain } from "../api/types";
 import type { OnboardingStatus } from "../api/onboarding";
@@ -23,6 +23,16 @@ import { ASK_AI_EXPLANATION, AskAiToggle } from "../components/settings/AskAiTog
 import { useAuth } from "../auth/AuthContext";
 import type { Organization } from "../api/types";
 import { CHECK_LABELS, type CheckResult } from "../api/dnsChecks";
+
+// Read by screen readers, not shown: the check icon says "done" visually.
+const VISUALLY_HIDDEN = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  overflow: "hidden",
+  clip: "rect(0 0 0 0)",
+  whiteSpace: "nowrap",
+} as const;
 
 const STEP_LABELS = ["Welcome", "Domain", "Sign-in", "Report mailbox", "DNS baseline", "Reporting", "AI help", "Waiting room"];
 
@@ -87,13 +97,17 @@ export default function Onboarding() {
       <div className="chip-row" style={{ marginBottom: "1.5rem" }}>
         {STEP_LABELS.map((label, i) => {
           const n = i + 1;
+          const done = n < step;
           return (
             <span
               key={label}
-              className={`badge ${n === step ? "badge--good" : n < step ? "badge--neutral" : "badge--neutral"}`}
+              data-testid={`step-chip-${n}`}
+              className={`badge ${n === step ? "badge--good" : "badge--neutral"}`}
               style={n > step ? { opacity: 0.5 } : undefined}
             >
+              {done && <Check size={12} aria-hidden="true" />}
               {n}. {label}
+              {done && <span style={VISUALLY_HIDDEN}> (done)</span>}
             </span>
           );
         })}
