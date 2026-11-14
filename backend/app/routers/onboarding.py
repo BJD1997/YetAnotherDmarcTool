@@ -8,7 +8,7 @@ from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user, require_org_admin
 from app.repositories.dmarc_reports import count_reports_for_org
 from app.repositories.dns_checks import count_dns_checks_for_org
-from app.repositories.domains import count_domains_for_org, count_verified_domains_for_org
+from app.repositories.domains import count_domains_for_org, count_hosted_domains_for_org, count_verified_domains_for_org
 from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.repositories.organizations import get_organization
 from app.models.user import User
@@ -30,17 +30,16 @@ async def onboarding_status(db: AsyncSession = Depends(get_db), user: User = Dep
     has_dns_baseline = await count_dns_checks_for_org(db, user.organization_id) > 0
     has_any_report = await count_reports_for_org(db, user.organization_id) > 0
 
-    # A local-auth org (no entra_tenant_id) has no Entra tenant to grant
-    # Mail Access consent from, so a MailboxConnection is never possible for
-    # them — they get a hosted address per domain instead (see
-    # app/routers/domains.py), which needs no
-    # separate "connect a mailbox" step at all.
-    has_mailbox = connection is not None or (org is not None and org.entra_tenant_id is None)
+    # Any report destination counts: the organization's own mailbox or a
+    # hosted address on one of its domains. Never implied by how the
+    # organization signs in.
+    has_mailbox = connection is not None or await count_hosted_domains_for_org(db, user.organization_id) > 0
 
     return {
         "org_name": org.name if org is not None else None,
         "user_role": user.role.value,
         "has_mailbox": has_mailbox,
+        "has_sign_in_provider": org is not None and org.sign_in_provider != "none",
         "mailbox_consent_granted": connection is not None and connection.consent_status.value == "granted",
         "mailbox_last_sync_status": (
             connection.last_sync_status.value if connection is not None and connection.last_sync_status else None

@@ -41,6 +41,15 @@ async def count_verified_domains_for_org(db: AsyncSession, organization_id: UUID
     return result.scalar_one()
 
 
+async def count_hosted_domains_for_org(db: AsyncSession, organization_id: UUID) -> int:
+    result = await db.execute(
+        select(func.count()).select_from(Domain).where(
+            Domain.organization_id == organization_id, Domain.hosted_report_address.is_not(None)
+        )
+    )
+    return result.scalar_one()
+
+
 async def count_subdomains(db: AsyncSession, domain_id: UUID) -> int:
     result = await db.execute(
         select(func.count()).select_from(Domain).where(Domain.parent_domain_id == domain_id)
