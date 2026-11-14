@@ -1,4 +1,4 @@
-import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "../api/client";
 import type { MtaStsBuilderData, SpfBuilderData, SpfEvaluation, TlsRptBuilderData } from "../api/dnsChecks";
@@ -42,4 +42,21 @@ export function useSpfEvaluation(domainId: string, record: string | null) {
 
 export function useRequestHostedReportAddress(domainId: string, onSuccess?: (result: HostedReportAddressResult) => void, onError?: (error: Error) => void) {
   return useMutation({ mutationFn: () => api.post<HostedReportAddressResult>(`/domains/${domainId}/hosted-report-address`), onSuccess, onError });
+}
+
+// Own-mailbox orgs only (the server answers 409 otherwise). Both builders
+// show the hosted address, so both are refetched.
+export function useRemoveHostedReportAddress(domainId: string, onSuccess?: () => void, onError?: (error: Error) => void) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.delete(`/domains/${domainId}/hosted-report-address`),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.policyBuilder(domainId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.tlsRptBuilder(domainId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.domains.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.onboarding.status });
+      onSuccess?.();
+    },
+    onError,
+  });
 }

@@ -19,7 +19,6 @@ const ORG = {
   entra_tenant_id: null,
   is_operator: false,
   spf_all_qualifier_mode: "strict",
-  hosted_mailbox_opt_in: false,
   report_sender_check: "standard",
   rating_window_days: 90,
   ask_ai_enabled: false,

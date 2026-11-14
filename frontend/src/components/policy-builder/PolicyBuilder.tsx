@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { X, Copy, RefreshCw, Check, Plus } from "lucide-react";
+import { X, Copy, RefreshCw, Check, Plus, Trash2 } from "lucide-react";
 import { ApiError } from "../../api/client";
 import type { DmarcPolicy } from "../../api/policyBuilder";
-import { useCurrentOrganization } from "../../hooks/useOrganization";
+import { useOnboardingStatus } from "../../hooks/useOnboarding";
 import { useClipboardFeedback } from "../../hooks/useClipboardFeedback";
-import { useDmarcPolicyBuilder, useRequestHostedReportAddress } from "../../hooks/usePolicyBuilders";
+import { useDmarcPolicyBuilder, useRemoveHostedReportAddress, useRequestHostedReportAddress } from "../../hooks/usePolicyBuilders";
 import { asPolicy, findRelaxations } from "./dmarcInheritance";
+import { sameAddress } from "./sameAddress";
 
 const RUA_STATUS_TEXT: Record<string, { text: string; role: "good" | "warning" | "critical" | "neutral" }> = {
   correct: { text: "Reports are reaching your connected mailbox", role: "good" },
@@ -52,8 +53,9 @@ function buildRecord(opts: {
 
 export default function PolicyBuilder({ domainId, domainName, onClose }: { domainId: string; domainName: string; onClose: () => void }) {
   const { data, isLoading, refetch, isFetching } = useDmarcPolicyBuilder(domainId);
-  const { data: org } = useCurrentOrganization();
-  const hostedMailboxAvailable = !org?.entra_tenant_id || org?.hosted_mailbox_opt_in;
+  const { data: onboarding } = useOnboardingStatus();
+  // Every org may use a hosted address, as long as this server can host one.
+  const hostedMailboxAvailable = !!onboarding?.hosted_mailbox_ready;
 
   const [policy, setPolicy] = useState<DmarcPolicy>("none");
   const [sp, setSp] = useState<DmarcPolicy | "">("");
@@ -82,11 +84,27 @@ export default function PolicyBuilder({ domainId, domainName, onClose }: { domai
     (result) => {
       setHostedAddressError(null);
       setHostedAddress(result.hosted_report_address);
-      setSelectedRua((prev) => (prev.includes(result.hosted_report_address) ? prev : [...prev, result.hosted_report_address]));
+      // With an own mailbox as destination the hosted address is an
+      // optional extra the user ticks; without one it is the destination.
+      if (!data?.org_mailbox_address) {
+        setSelectedRua((prev) => (prev.includes(result.hosted_report_address) ? prev : [...prev, result.hosted_report_address]));
+      }
       const needsAttention = result.authorization_record_status === "unconfigured" || result.authorization_record_status === "error";
       setAuthWarning(needsAttention ? result.authorization_record_detail : null);
     },
     (err) => setHostedAddressError(err instanceof ApiError ? err.message : "couldn't generate a hosted address"),
+  );
+
+  const removeHostedAddress = useRemoveHostedReportAddress(
+    domainId,
+    () => {
+      const removed = hostedAddress;
+      setHostedAddressError(null);
+      setAuthWarning(null);
+      setHostedAddress(null);
+      setSelectedRua((prev) => prev.filter((a) => !sameAddress(a, removed)));
+    },
+    (err) => setHostedAddressError(err instanceof ApiError ? err.message : "couldn't remove the hosted address"),
   );
 
   // Seed the form from the domain's CURRENTLY PUBLISHED record where one
@@ -106,9 +124,15 @@ export default function PolicyBuilder({ domainId, domainName, onClose }: { domai
       setNp(asPolicyOrBlank(tags?.np) || (data.recommendation.np ?? ""));
       setAdkim(asAlignment(tags?.adkim));
       setAspf(asAlignment(tags?.aspf));
-      const org = data.org_mailbox_address;
-      const others = data.rua_destination.current_targets.filter((t) => !org || t.toLowerCase() !== org.toLowerCase());
-      setSelectedRua(org ? [org, ...others] : others);
+      // The destination is always ticked. A hosted address that isn't the
+      // destination is ticked only when it is already published.
+      const dest = data.org_mailbox_address;
+      const hosted = data.hosted_report_address;
+      const targets = data.rua_destination.current_targets;
+      const others = targets.filter((t) => !sameAddress(t, dest) && !sameAddress(t, hosted));
+      const hostedPublished = !!hosted && targets.some((t) => sameAddress(t, hosted));
+      const extraHosted = hosted && !sameAddress(hosted, dest) && hostedPublished ? [hosted] : [];
+      setSelectedRua([...(dest ? [dest] : []), ...extraHosted, ...others]);
       // A hosted address may already exist for this domain (generated
       // during onboarding, or on a previous visit here) — without this,
       // the "no mailbox of your own?" button below would re-offer to
@@ -132,7 +156,7 @@ export default function PolicyBuilder({ domainId, domainName, onClose }: { domai
   const relaxations = data ? findRelaxations(data.current_record?.tags, policy, sp, np) : [];
   const orgMailbox = data?.org_mailbox_address ?? null;
   const otherTargets = data
-    ? data.rua_destination.current_targets.filter((t) => !orgMailbox || t.toLowerCase() !== orgMailbox.toLowerCase())
+    ? data.rua_destination.current_targets.filter((t) => !sameAddress(t, orgMailbox) && !sameAddress(t, data.hosted_report_address))
     : [];
 
   function copyRecord() {
@@ -193,23 +217,43 @@ export default function PolicyBuilder({ domainId, domainName, onClose }: { domai
                   </div>
                 </div>
               )}
-              {hostedMailboxAvailable && (
+              {(hostedMailboxAvailable || hostedAddress) && (
                 <div style={{ marginTop: "0.6rem" }}>
-                  {hostedAddress ? (
-                    <div className="chip-row">
-                      <code>{hostedAddress}</code>
-                      <span className="badge badge--good">hosted by YetAnotherDmarcTool</span>
-                    </div>
-                  ) : (
+                  {hostedAddress && !sameAddress(hostedAddress, data.org_mailbox_address) ? (
+                    <>
+                      <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.85rem" }}>
+                        <input
+                          type="checkbox"
+                          checked={selectedRua.includes(hostedAddress)}
+                          onChange={(e) =>
+                            setSelectedRua((prev) => (e.target.checked ? [...prev, hostedAddress] : prev.filter((a) => a !== hostedAddress)))
+                          }
+                        />
+                        <code>{hostedAddress}</code>
+                        <span className="badge badge--good">hosted by YetAnotherDmarcTool</span>
+                      </label>
+                      {data.has_own_mailbox && (
+                        <button
+                          className="btn btn--ghost btn--sm"
+                          style={{ marginTop: "0.3rem" }}
+                          onClick={() => removeHostedAddress.mutate()}
+                          disabled={removeHostedAddress.isPending}
+                        >
+                          <Trash2 />
+                          Remove hosted address
+                        </button>
+                      )}
+                    </>
+                  ) : !hostedAddress && hostedMailboxAvailable ? (
                     <button
                       className="btn btn--ghost btn--sm"
                       onClick={() => requestHostedAddress.mutate()}
                       disabled={requestHostedAddress.isPending}
                     >
                       <Plus />
-                      No mailbox of your own? Use a YetAnotherDmarcTool-hosted address
+                      {data.org_mailbox_address ? "Also use a YetAnotherDmarcTool-hosted address" : "No mailbox of your own? Use a YetAnotherDmarcTool-hosted address"}
                     </button>
-                  )}
+                  ) : null}
                   {hostedAddressError && (
                     <p className="section-hint" style={{ color: "var(--critical-text)", marginTop: "0.3rem", marginBottom: 0 }}>
                       {hostedAddressError}

@@ -79,6 +79,7 @@ export interface TlsRptBuilderData {
   rua_destination: RuaDestination;
   org_mailbox_address: string | null;
   hosted_report_address: string | null;
+  has_own_mailbox: boolean;
 }
 
 // One part of an SPF record and the DNS lookups it costs (an include

@@ -36,6 +36,7 @@ export interface PolicyBuilderData {
   rua_destination: RuaDestination;
   org_mailbox_address: string | null;
   hosted_report_address: string | null;
+  has_own_mailbox: boolean;
   policy_stability_days: number;
   recommendation: PolicyRecommendation;
 }

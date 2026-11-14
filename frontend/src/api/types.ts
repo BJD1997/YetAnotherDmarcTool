@@ -28,7 +28,6 @@ export interface Organization {
   sign_in_provider: "none" | "microsoft" | "google" | "oidc";
   is_operator: boolean;
   spf_all_qualifier_mode: SpfAllQualifierMode;
-  hosted_mailbox_opt_in: boolean;
   report_sender_check: ReportSenderCheck;
   rating_window_days: RatingWindowDays;
   // null = not answered yet (org admins get asked once).
