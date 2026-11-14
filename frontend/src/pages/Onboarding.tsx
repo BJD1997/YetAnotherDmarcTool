@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { ArrowLeft, ArrowRight, RefreshCw, CheckCircle2, KeyRound, Users, ShieldCheck } from "lucide-react";
 import { ApiError } from "../api/client";
@@ -6,10 +7,14 @@ import type { Domain } from "../api/types";
 import type { OnboardingStatus } from "../api/onboarding";
 import MailboxConnectionSection from "../components/settings/MailboxConnectionSection";
 import AddDomainForm from "../components/settings/AddDomainForm";
+import CopyValue from "../components/CopyValue";
+import SignInTab from "./settings/SignInTab";
 import PolicyBuilder from "../components/policy-builder/PolicyBuilder";
 import { MailboxHealthWidget } from "../components/overview/widgets";
 import { useDomains, useVerifyDomain } from "../hooks/useDomains";
 import { useMailboxConnection } from "../hooks/useMailboxConnection";
+import { useSignInSettings } from "../hooks/useSignInSettings";
+import { queryKeys } from "../hooks/queryKeys";
 import { useCompleteOnboarding, useGenerateHostedReportAddress, useOnboardingStatus } from "../hooks/useOnboarding";
 import { useCurrentOrganization, useUpdateOrganization } from "../hooks/useOrganization";
 import { useRecheckDns } from "../hooks/useDnsChecks";
@@ -19,22 +24,19 @@ import { useAuth } from "../auth/AuthContext";
 import type { Organization } from "../api/types";
 import { CHECK_LABELS, type CheckResult } from "../api/dnsChecks";
 
-const STEP_LABELS = ["Welcome", "Mailbox", "Domain", "Verify", "DNS baseline", "Reporting", "AI help", "Waiting room"];
+const STEP_LABELS = ["Welcome", "Domain", "Sign-in", "Report mailbox", "DNS baseline", "Reporting", "AI help", "Waiting room"];
 
-function deriveStep(status: OnboardingStatus, hasEntraTenant: boolean): number {
-  // No "have they seen Welcome" flag is persisted anywhere (deliberately
-  // stateless, see onboarding_status's docstring), so this can't
-  // distinguish "never visited" from "read Welcome, still working on the
-  // next milestone." Resolved in Welcome's favor: reshow it on reload
-  // rather than silently skip it for an account that's done nothing yet.
-  //
-  // "Done nothing yet" is judged by each org type's own first real
-  // action — has_mailbox for Entra orgs, has_domain for local-auth orgs
-  // (which have no mailbox step at all, see MailboxStep).
-  const firstMilestoneDone = hasEntraTenant ? status.has_mailbox : status.has_domain;
-  if (!firstMilestoneDone) return 1;
-  if (!status.has_domain) return 3;
-  if (!status.has_verified_domain) return 4;
+// Resumes at the first unfinished step, judged only by what's actually set
+// up, so whoever opens the wizard (break-glass or a later admin, after
+// doing things in Settings) lands in the right place. Sign-in counts as
+// done once a report destination exists: "Only local accounts for now"
+// isn't stored, and getting past it is the only way to the mailbox step.
+export function deriveStep(status: OnboardingStatus): number {
+  const started = status.has_domain || status.has_mailbox || status.has_sign_in_provider;
+  if (!started) return 1;
+  if (!status.has_verified_domain) return 2;
+  if (!status.has_sign_in_provider && !status.has_mailbox) return 3;
+  if (!status.has_mailbox) return 4;
   if (!status.has_dns_baseline) return 5;
   return 6;
 }
@@ -43,7 +45,7 @@ export default function Onboarding() {
   const { data: status } = useOnboardingStatus();
   const { data: org } = useCurrentOrganization();
   const { data: domains } = useDomains({
-    // Live-updates VerifyStep/BaselineStep while DNS propagates, so a
+    // Live-updates DomainStep/BaselineStep while DNS propagates, so a
     // background verification (see run_domain_verification_sweep) shows up
     // here without the user needing to do anything.
     refetchInterval: (query) => {
@@ -55,13 +57,13 @@ export default function Onboarding() {
   const [step, setStep] = useState<number | null>(null);
 
   // Seed the wizard to wherever setup actually is, once, the first time
-  // status AND org have loaded — after that the user drives Back/Next
-  // themselves so finishing one step doesn't yank them straight to the
-  // next before they've had a chance to read the confirmation.
+  // status has loaded — after that the user drives Back/Next themselves so
+  // finishing one step doesn't yank them straight to the next before
+  // they've had a chance to read the confirmation.
   useEffect(() => {
-    if (status && org && step === null) setStep(deriveStep(status, !!org.entra_tenant_id));
+    if (status && step === null) setStep(deriveStep(status));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status !== undefined, org !== undefined]);
+  }, [status !== undefined]);
 
   const apexDomains = (domains ?? []).filter((d) => !d.parent_domain_id);
   const focusDomain = [...apexDomains].sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
@@ -75,7 +77,10 @@ export default function Onboarding() {
       <div className="page-header">
         <div>
           <h1>Set up YetAnotherDmarcTool</h1>
-          <p className="page-subtitle">Connect your mailbox, add a domain, and get a DNS baseline — a few minutes, most of it waiting on DNS.</p>
+          <p className="page-subtitle">
+            Add and verify a domain, choose how people sign in and where reports go, and get a DNS baseline — a few
+            minutes, most of it waiting on DNS.
+          </p>
         </div>
       </div>
 
@@ -96,10 +101,12 @@ export default function Onboarding() {
 
       <div className="card">
         {step === 1 && <WelcomeStep status={status} onNext={() => setStep(2)} />}
-        {step === 2 && <MailboxStep onBack={() => setStep(1)} onNext={() => setStep(3)} />}
-        {step === 3 && <DomainStep onBack={() => setStep(2)} onNext={() => setStep(4)} />}
-        {step === 4 && <VerifyStep domain={focusDomain} onBack={() => setStep(3)} onNext={() => setStep(5)} />}
-        {step === 5 && <BaselineStep domain={focusDomain} onBack={() => setStep(4)} onNext={() => setStep(6)} />}
+        {step === 2 && <DomainStep domain={focusDomain} onBack={() => setStep(1)} onNext={() => setStep(3)} />}
+        {step === 3 && <SignInStep onBack={() => setStep(2)} onNext={() => setStep(4)} />}
+        {step === 4 && <MailboxStep domain={focusDomain} onBack={() => setStep(3)} onNext={() => setStep(5)} />}
+        {step === 5 && (
+          <BaselineStep domain={focusDomain} onBack={() => setStep(4)} onVerify={() => setStep(2)} onNext={() => setStep(6)} />
+        )}
         {step === 6 && <ReportingStep domain={focusDomain} onBack={() => setStep(5)} onNext={() => setStep(7)} />}
         {step === 7 && org && <AskAiStep org={org} onBack={() => setStep(6)} onNext={() => setStep(8)} />}
         {step === 8 && <WaitingRoomStep domain={focusDomain} onBack={() => setStep(7)} />}
@@ -160,29 +167,27 @@ function WelcomeStep({ status, onNext }: { status: OnboardingStatus; onNext: () 
         administrator. You're signed in as {status.user_role === "org_admin" ? "an organization admin" : "a member"}.
       </p>
       <p className="muted">
-        Next: connect the mailbox your DMARC/TLS-RPT reports arrive at, add your first domain, verify you own it,
-        and run a DNS baseline — then we'll show you what's next while the first reports arrive.
+        Next: add your first domain and verify you own it, choose how people sign in, pick where your DMARC/TLS-RPT
+        reports arrive, and run a DNS baseline — then we'll show you what's next while the first reports arrive.
       </p>
       <StepNav onNext={onNext} nextLabel="Get started" />
     </div>
   );
 }
 
-/** True for an organization that can only get reports through the server's
- *  hosted mailbox (no Microsoft sign-in) while this server has none. */
+/** True when this server has no hosted mailbox and the organization has no
+ *  report mailbox of its own either, so reports have nowhere to arrive. */
 function useNoReportMailbox(): boolean {
-  const { data: org } = useCurrentOrganization();
   const { data: status } = useOnboardingStatus();
-  const { data: connection } = useMailboxConnection();
-  return !!org && !org.entra_tenant_id && !!status && !status.hosted_mailbox_ready && !connection;
+  return !!status && !status.hosted_mailbox_ready && !status.has_mailbox;
 }
 
 function NoReportMailboxNotice() {
   return (
     <div className="alert alert--warning">
       <strong>No report mailbox yet.</strong> This server has no hosted reporting mailbox, so connect the mailbox your
-      DMARC reports arrive at (Settings → General, or the Mailbox step of this wizard). You can add and verify domains and
-      run DNS checks meanwhile. Administrators can also set up a hosted mailbox (see the{" "}
+      DMARC reports arrive at (the Report mailbox step of this wizard, or Settings → General). You can add and verify
+      domains and run DNS checks meanwhile. Administrators can also set up a hosted mailbox (see the{" "}
       <a href="https://github.com/BJD1997/YetAnotherDmarcTool/wiki/Configuration-Reference" target="_blank" rel="noreferrer">
         Configuration reference
       </a>
@@ -191,152 +196,22 @@ function NoReportMailboxNotice() {
   );
 }
 
-function MailboxStep({ onBack, onNext }: { onBack: () => void; onNext: () => void }) {
-  // Same query key/options MailboxConnectionSection uses below, so
-  // react-query dedupes into one shared fetch/poll rather than two.
-  const { data: connection } = useMailboxConnection();
-  const { data: org } = useCurrentOrganization();
-  const { data: status } = useOnboardingStatus();
-  const hostedReady = !!status?.hosted_mailbox_ready;
-  const [showOwnMailbox, setShowOwnMailbox] = useState(false);
-
-  // No Entra tenant means no Mail Access consent is possible — this org
-  // gets a hosted address per domain instead (offered later, once a domain
-  // exists — see VerifyStep/ReportingStep's PolicyBuilder), so there's
-  // nothing to connect or gate on here at all.
-  if (org && !org.entra_tenant_id) {
-    return (
-      <div>
-        <h2 style={{ marginTop: 0 }}>Report mailbox</h2>
-        {hostedReady && !connection ? (
-          <div className="alert alert--good">
-            Once you add a domain, we'll generate a dedicated YetAnotherDmarcTool-hosted reporting address for it
-            automatically, so there's nothing to connect. If your reports already arrive in a mailbox of your own, you
-            can connect it below instead.
-          </div>
-        ) : (
-          !connection && (
-            <p className="section-hint">
-              Connect the mailbox your DMARC reports arrive at. Any mailbox with IMAP works; use one just for reports.
-            </p>
-          )
-        )}
-        {(connection || !hostedReady || showOwnMailbox) && <MailboxConnectionSection canManage={true} />}
-        {hostedReady && !connection && !showOwnMailbox && (
-          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setShowOwnMailbox(true)}>
-            Connect my own mailbox
-          </button>
-        )}
-        <StepNav onBack={onBack} onNext={onNext} />
-      </div>
-    );
-  }
-
-  // Gate on "connected and not erroring," not "fully synced" — a fresh
-  // save has last_sync_status === null until the background sync resolves,
-  // and blocking Next on that would turn the soft gate into a hard one.
-  const ready = connection !== undefined && connection.consent_status === "granted" && connection.last_sync_status !== "error";
-
-  return (
-    <div>
-      <h2 style={{ marginTop: 0 }}>Connect your report mailbox</h2>
-      <p className="section-hint">
-        We only read DMARC/TLS-RPT report messages and their attachments from this mailbox.
-      </p>
-      <MailboxConnectionSection canManage={true} />
-      {connection?.last_sync_status === "error" && (
-        <p className="section-hint" style={{ color: "var(--critical-text)" }}>
-          Fix the connection above — grant mail access, then save the mailbox address again — before continuing.
-        </p>
-      )}
-      <StepNav onBack={onBack} onNext={ready ? onNext : undefined} />
-    </div>
-  );
-}
-
-function DomainStep({ onBack, onNext }: { onBack: () => void; onNext: () => void }) {
-  const { data: domains } = useDomains();
-  const { data: org } = useCurrentOrganization();
-  const hasDomain = (domains ?? []).length > 0;
-  const apexDomains = (domains ?? []).filter((d) => !d.parent_domain_id);
-  const latestDomain = [...apexDomains].sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
-  const { data: connection } = useMailboxConnection();
-  // An own mailbox (IMAP) makes the hosted address unnecessary; it stays
-  // available in the Policy Builder for anyone who wants both.
-  const hostedOnly = !!org && !org.entra_tenant_id && !connection;
-  const noReportMailbox = useNoReportMailbox();
-
-  return (
-    <div>
-      <h2 style={{ marginTop: 0 }}>Add your first domain</h2>
-      <p className="section-hint">Start with the domain you send the most mail from — you can add more later.</p>
-      <AddDomainForm />
-      {hostedOnly && latestDomain && !noReportMailbox && <HostedAddressPreview domain={latestDomain} />}
-      <StepNav onBack={onBack} onNext={hasDomain ? onNext : undefined} />
-    </div>
-  );
-}
-
-// Auto-generates (idempotent — same POST DomainStep's PolicyBuilder steps
-// use later) and reveals the domain's hosted reporting address right when
-// it's most concrete: the moment the domain exists. Saves a trip to the
-// Policy Builder later just to find out what address to expect.
-function HostedAddressPreview({ domain }: { domain: Domain }) {
-  const [address, setAddress] = useState<string | null>(domain.hosted_report_address);
-  const [error, setError] = useState<string | null>(null);
-  const requestedFor = useRef<string | null>(null);
-
-  const generate = useGenerateHostedReportAddress(
-    domain.id,
-    setAddress,
-    (err) => setError(err instanceof ApiError ? err.message : "couldn't generate a hosted address"),
-  );
-
-  // Hosted addresses are only issued for verified domains (they come with
-  // a DNS record in the operator's zone) — the next step verifies it.
-  const verified = domain.verification_status === "verified";
-
-  useEffect(() => {
-    if (verified && !domain.hosted_report_address && requestedFor.current !== domain.id) {
-      requestedFor.current = domain.id;
-      generate.mutate();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [domain.id, domain.hosted_report_address, verified]);
-
-  if (!verified) {
-    return (
-      <p className="section-hint" style={{ marginTop: "0.6rem", marginBottom: 0 }}>
-        Your hosted reporting address for {domain.name} is created once the domain is verified — that's the next step.
-      </p>
-    );
-  }
-  if (error) {
-    return (
-      <p className="section-hint" style={{ color: "var(--critical-text)", marginTop: "0.6rem", marginBottom: 0 }}>
-        Couldn't generate a hosted address yet: {error}
-      </p>
-    );
-  }
-  if (!address) return null;
-
-  return (
-    <div className="alert alert--good" style={{ marginTop: "0.75rem" }}>
-      Reports for {domain.name} will arrive at:
-      <div className="chip-row" style={{ marginTop: "0.4rem" }}>
-        <code>{address}</code>
-        <span className="badge badge--good">hosted by YetAnotherDmarcTool</span>
-      </div>
-    </div>
-  );
-}
-
-function VerifyStep({ domain, onBack, onNext }: { domain: Domain | undefined; onBack: () => void; onNext: () => void }) {
+// Adds the first domain, then shows its ownership record until DNS has it.
+// Verification comes first: sign-in providers and hosted addresses both
+// need a verified domain.
+function DomainStep({ domain, onBack, onNext }: { domain: Domain | undefined; onBack: () => void; onNext: () => void }) {
   const [showBuilder, setShowBuilder] = useState(false);
   const verifyDomain = useVerifyDomain(domain?.id ?? "");
 
   if (!domain) {
-    return <p className="muted">No domain to verify yet — go back and add one first.</p>;
+    return (
+      <div>
+        <h2 style={{ marginTop: 0 }}>Add your first domain</h2>
+        <p className="section-hint">Start with the domain you send the most mail from — you can add more later.</p>
+        <AddDomainForm />
+        <StepNav onBack={onBack} />
+      </div>
+    );
   }
 
   const verified = domain.verification_status === "verified";
@@ -358,21 +233,22 @@ function VerifyStep({ domain, onBack, onNext }: { domain: Domain | undefined; on
             background: "var(--plane)",
             border: "1px solid var(--border)",
             borderRadius: "var(--radius-sm)",
-            fontFamily: "monospace",
             fontSize: "0.83rem",
+            display: "grid",
+            gap: "0.35rem",
           }}
         >
-          Host/name: <strong>{domain.verification_record_name}</strong>
-          <br />
-          Type: <strong>TXT</strong>
-          <br />
-          Value: <strong>{domain.verification_token}</strong>
+          <CopyValue label="Host/name" value={domain.verification_record_name} />
+          <span>
+            <span className="muted">Type</span> <code>TXT</code>
+          </span>
+          <CopyValue label="Value" value={domain.verification_token} />
           {verifyDomain.isSuccess && !verifyDomain.data.verified && (
-            <p style={{ color: "var(--critical-text)", fontFamily: "var(--font-sans)", marginTop: "0.5rem", marginBottom: 0 }}>
+            <p style={{ color: "var(--critical-text)", marginTop: "0.2rem", marginBottom: 0 }}>
               Not found yet — DNS changes can take a few minutes to propagate.
             </p>
           )}
-          <p className="muted" style={{ fontFamily: "var(--font-sans)", marginTop: "0.5rem", marginBottom: 0 }}>
+          <p className="muted" style={{ marginTop: "0.2rem", marginBottom: 0 }}>
             DNS changes can take a while to propagate — we check automatically every few minutes, so you don't have
             to wait here. Use "Check now" if you want to confirm sooner.
           </p>
@@ -402,12 +278,112 @@ function VerifyStep({ domain, onBack, onNext }: { domain: Domain | undefined; on
       </div>
       {showBuilder && <PolicyBuilder domainId={domain.id} domainName={domain.name} onClose={() => setShowBuilder(false)} />}
 
-      <StepNav onBack={onBack} onNext={onNext} nextLabel={verified ? "Continue" : "Continue — I'll finish verifying later"} />
+      <StepNav onBack={onBack} onNext={verified ? onNext : undefined} />
     </div>
   );
 }
 
-function BaselineStep({ domain, onBack, onNext }: { domain: Domain | undefined; onBack: () => void; onNext: () => void }) {
+function SignInStep({ onBack, onNext }: { onBack: () => void; onNext: () => void }) {
+  const { data } = useSignInSettings();
+  return (
+    <div>
+      <h2 style={{ marginTop: 0 }}>How people sign in</h2>
+      <p className="section-hint">
+        Let your team sign in with Microsoft, Google Workspace or your own OpenID Connect provider. Local accounts keep
+        working next to it, and you can change this later in Settings → Sign-in.
+      </p>
+      <SignInTab />
+      <div className="chip-row" style={{ marginTop: "1.25rem" }}>
+        <button className="btn btn--ghost btn--sm" onClick={onBack}>
+          <ArrowLeft />
+          Back
+        </button>
+        {data?.provider && data.provider !== "none" ? (
+          <button className="btn btn--primary btn--sm" onClick={onNext}>
+            Continue
+            <ArrowRight />
+          </button>
+        ) : (
+          <button className="btn btn--secondary btn--sm" onClick={onNext}>
+            Only local accounts for now
+            <ArrowRight />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Nothing is created until the admin picks: their own mailbox, a hosted
+// address for the focus domain, or both.
+function MailboxStep({ domain, onBack, onNext }: { domain: Domain | undefined; onBack: () => void; onNext: () => void }) {
+  // Same query key/options MailboxConnectionSection uses below, so
+  // react-query dedupes into one shared fetch/poll rather than two.
+  const { data: connection } = useMailboxConnection();
+  const { data: status } = useOnboardingStatus();
+  const queryClient = useQueryClient();
+  const [showOwn, setShowOwn] = useState(false);
+  const [created, setCreated] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const hosted = created ?? domain?.hosted_report_address ?? null;
+  const generate = useGenerateHostedReportAddress(
+    domain?.id ?? "",
+    (address) => {
+      setCreated(address);
+      setError(null);
+      // So has_mailbox and the domain's address are current when the admin
+      // comes back to this step or moves on.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.domains.all });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.onboarding.status });
+    },
+    (err) => setError(err instanceof ApiError ? err.message : "couldn't create a hosted address"),
+  );
+  const hostedOffered = !!status?.hosted_mailbox_ready;
+  const done = !!connection || !!hosted;
+
+  return (
+    <div>
+      <h2 style={{ marginTop: 0 }}>Where reports arrive</h2>
+      <p className="section-hint">
+        DMARC reports are emailed by mail providers. Read them from a mailbox of your own (Microsoft 365, Google
+        Workspace or IMAP){hostedOffered ? ", use an address hosted by YetAnotherDmarcTool, or both" : ""}.
+      </p>
+      <div className="chip-row">
+        {!connection && !showOwn && (
+          <button className="btn btn--secondary btn--sm" onClick={() => setShowOwn(true)}>
+            Use my own mailbox
+          </button>
+        )}
+        {hostedOffered && !hosted && domain && (
+          <button className="btn btn--secondary btn--sm" onClick={() => generate.mutate()} disabled={generate.isPending}>
+            Use a YetAnotherDmarcTool-hosted address
+          </button>
+        )}
+      </div>
+      {(connection || showOwn) && <MailboxConnectionSection canManage={true} />}
+      {hosted && (
+        <div className="alert alert--good" style={{ marginTop: "0.75rem" }}>
+          Hosted address for {domain?.name}: <CopyValue value={hosted} />
+        </div>
+      )}
+      {error && <div className="alert alert--critical">{error}</div>}
+      {!hostedOffered && !connection && <NoReportMailboxNotice />}
+      <StepNav onBack={onBack} onNext={done ? onNext : undefined} />
+    </div>
+  );
+}
+
+function BaselineStep({
+  domain,
+  onBack,
+  onVerify,
+  onNext,
+}: {
+  domain: Domain | undefined;
+  onBack: () => void;
+  onVerify: () => void;
+  onNext: () => void;
+}) {
   const [ranOnce, setRanOnce] = useState(false);
   const recheck = useRecheckDns(domain?.id ?? "", () => setRanOnce(true));
 
@@ -424,10 +400,10 @@ function BaselineStep({ domain, onBack, onNext }: { domain: Domain | undefined; 
           We're checking automatically every few minutes; go{" "}
           <button
             className="btn btn--ghost btn--sm"
-            onClick={onBack}
+            onClick={onVerify}
             style={{ display: "inline-flex", verticalAlign: "-2px" }}
           >
-            back to Verify
+            back to Domain
           </button>{" "}
           to check now, or continue and come back once it's verified.
         </div>
