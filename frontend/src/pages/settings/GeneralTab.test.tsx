@@ -28,11 +28,13 @@ const ORG = {
 };
 vi.mock("react-router-dom", async (importOriginal) => ({
   ...(await importOriginal<typeof import("react-router-dom")>()),
-  useOutletContext: () => ORG,
+  useOutletContext: () => outletOrg,
 }));
+let outletOrg: Omit<typeof ORG, "entra_tenant_id"> & { entra_tenant_id: string | null } = ORG;
 const patchMock = vi.mocked(api.patch);
 
 beforeEach(() => {
+  outletOrg = ORG;
   patchMock.mockReset();
   vi.mocked(api.get).mockResolvedValue(null);
 });
@@ -75,9 +77,18 @@ describe("GeneralTab mailbox and hosted sections", () => {
     expect(screen.queryByPlaceholderText("imap.example.com")).not.toBeInTheDocument();
   });
 
-  it("has no hosted mailbox on/off switch", async () => {
+  it("has no hosted mailbox on/off switch, even for a Microsoft organization", async () => {
+    outletOrg = { ...ORG, entra_tenant_id: "tenant-1" };
+    vi.mocked(api.get).mockImplementation(async (url: string) => (url === "/onboarding/status" ? { hosted_mailbox_ready: true } : null));
     renderWithAppProviders(<GeneralTab />);
     expect(await screen.findByText(/as well as or instead of your own mailbox/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "On" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Off" })).not.toBeInTheDocument();
+  });
+
+  it("says so when the server offers no hosted reporting addresses", async () => {
+    vi.mocked(api.get).mockImplementation(async (url: string) => (url === "/onboarding/status" ? { hosted_mailbox_ready: false } : null));
+    renderWithAppProviders(<GeneralTab />);
+    expect(await screen.findByText(/doesn't offer hosted reporting addresses/)).toBeInTheDocument();
   });
 });
