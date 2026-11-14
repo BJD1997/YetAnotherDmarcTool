@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { X, Copy, RefreshCw, Check, Plus, Trash2 } from "lucide-react";
-import { ApiError } from "../../api/client";
+import { X, Copy, RefreshCw, Check } from "lucide-react";
 import { useOnboardingStatus } from "../../hooks/useOnboarding";
 import { useClipboardFeedback } from "../../hooks/useClipboardFeedback";
-import { useRemoveHostedReportAddress, useRequestHostedReportAddress, useTlsRptPolicyBuilder } from "../../hooks/usePolicyBuilders";
+import { useTlsRptPolicyBuilder } from "../../hooks/usePolicyBuilders";
+import HostedAddressRow from "./HostedAddressRow";
 import { sameAddress } from "./sameAddress";
+import { useHostedAddress } from "./useHostedAddress";
 
 const RUA_STATUS_TEXT: Record<string, { text: string; role: "good" | "warning" | "critical" | "neutral" }> = {
   correct: { text: "Reports are reaching your configured mailbox", role: "good" },
@@ -36,37 +37,14 @@ export default function TlsRptPolicyBuilder({ domainId, domainName, onClose }: {
 
   const { copied, copy } = useClipboardFeedback();
   const [selectedUris, setSelectedUris] = useState<string[]>([]);
-  const [hostedAddress, setHostedAddress] = useState<string | null>(null);
-  const [hostedAddressError, setHostedAddressError] = useState<string | null>(null);
-  const [authWarning, setAuthWarning] = useState<string | null>(null);
-
-  const requestHostedAddress = useRequestHostedReportAddress(
+  const hostedState = useHostedAddress(
     domainId,
-    (result) => {
-      setHostedAddressError(null);
-      setHostedAddress(result.hosted_report_address);
-      // With an own mailbox as destination the hosted address is an
-      // optional extra the user ticks; without one it is the destination.
-      if (!data?.org_mailbox_address) {
-        const uri = `mailto:${result.hosted_report_address}`;
-        setSelectedUris((prev) => (prev.includes(uri) ? prev : [...prev, uri]));
-      }
-      const needsAttention = result.authorization_record_status === "unconfigured" || result.authorization_record_status === "error";
-      setAuthWarning(needsAttention ? result.authorization_record_detail : null);
+    data?.org_mailbox_address,
+    (address) => {
+      const uri = `mailto:${address}`;
+      setSelectedUris((prev) => (prev.includes(uri) ? prev : [...prev, uri]));
     },
-    (err) => setHostedAddressError(err instanceof ApiError ? err.message : "couldn't generate a hosted address"),
-  );
-
-  const removeHostedAddress = useRemoveHostedReportAddress(
-    domainId,
-    () => {
-      const removedUri = hostedAddress ? `mailto:${hostedAddress}` : null;
-      setHostedAddressError(null);
-      setAuthWarning(null);
-      setHostedAddress(null);
-      setSelectedUris((prev) => prev.filter((u) => !sameAddress(u, removedUri)));
-    },
-    (err) => setHostedAddressError(err instanceof ApiError ? err.message : "couldn't remove the hosted address"),
+    (removed) => setSelectedUris((prev) => prev.filter((u) => !sameAddress(u, `mailto:${removed}`))),
   );
 
   // Seed once, when data first loads: the destination (ticked), a hosted
@@ -83,7 +61,7 @@ export default function TlsRptPolicyBuilder({ domainId, domainName, onClose }: {
       const hostedPublished = currentUris.some((u) => sameAddress(u, hostedUri));
       const extraHosted = hostedUri && !sameAddress(hostedUri, mailboxUri) && hostedPublished ? [hostedUri] : [];
       setSelectedUris([...(mailboxUri ? [mailboxUri] : []), ...extraHosted, ...others]);
-      setHostedAddress(data.hosted_report_address);
+      hostedState.setHostedAddress(data.hosted_report_address);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data === undefined]);
@@ -99,9 +77,10 @@ export default function TlsRptPolicyBuilder({ domainId, domainName, onClose }: {
   const ruaInfo = data ? RUA_STATUS_TEXT[data.rua_destination.status] : null;
   const orgMailbox = data?.org_mailbox_address ?? null;
   const orgMailboxUri = orgMailbox ? `mailto:${orgMailbox}` : null;
+  const hostedUri = data?.hosted_report_address ? `mailto:${data.hosted_report_address}` : null;
   const otherUris = data
     ? parseRuaUris(data.current_record?.tags.rua).filter(
-        (u) => !sameAddress(u, orgMailboxUri) && !sameAddress(u, data.hosted_report_address ? `mailto:${data.hosted_report_address}` : null),
+        (u) => !sameAddress(u, orgMailboxUri) && !sameAddress(u, hostedUri),
       )
     : [];
   const generated = `v=TLSRPTv1; rua=${selectedUris.join(",")}`;
@@ -160,57 +139,23 @@ export default function TlsRptPolicyBuilder({ domainId, domainName, onClose }: {
                 </div>
               )}
 
-              {(hostedMailboxAvailable || hostedAddress) && (
-                <div style={{ marginTop: "0.6rem" }}>
-                  {hostedAddress && !sameAddress(hostedAddress, orgMailbox) ? (
-                    <>
-                      <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.85rem" }}>
-                        <input
-                          type="checkbox"
-                          checked={selectedUris.includes(`mailto:${hostedAddress}`)}
-                          onChange={(e) =>
-                            setSelectedUris((prev) =>
-                              e.target.checked ? [...prev, `mailto:${hostedAddress}`] : prev.filter((u) => u !== `mailto:${hostedAddress}`),
-                            )
-                          }
-                        />
-                        <code>{hostedAddress}</code>
-                        <span className="badge badge--good">hosted by YetAnotherDmarcTool</span>
-                      </label>
-                      {data.has_own_mailbox && (
-                        <button
-                          className="btn btn--ghost btn--sm"
-                          style={{ marginTop: "0.3rem" }}
-                          onClick={() => removeHostedAddress.mutate()}
-                          disabled={removeHostedAddress.isPending}
-                        >
-                          <Trash2 />
-                          Remove hosted address
-                        </button>
-                      )}
-                    </>
-                  ) : !hostedAddress && hostedMailboxAvailable ? (
-                    <button
-                      className="btn btn--ghost btn--sm"
-                      onClick={() => requestHostedAddress.mutate()}
-                      disabled={requestHostedAddress.isPending}
-                    >
-                      <Plus />
-                      {orgMailbox ? "Also use a YetAnotherDmarcTool-hosted address" : "No mailbox of your own? Use a YetAnotherDmarcTool-hosted address"}
-                    </button>
-                  ) : null}
-                  {hostedAddressError && (
-                    <p className="section-hint" style={{ color: "var(--critical-text)", marginTop: "0.3rem", marginBottom: 0 }}>
-                      {hostedAddressError}
-                    </p>
-                  )}
-                  {authWarning && (
-                    <p className="section-hint" style={{ color: "var(--warning-text)", marginTop: "0.3rem", marginBottom: 0 }}>
-                      This address works, but couldn't be auto-authorized yet: {authWarning}
-                    </p>
-                  )}
-                </div>
-              )}
+              <HostedAddressRow
+                hostedAddress={hostedState.hostedAddress}
+                destination={orgMailbox}
+                hostedMailboxAvailable={hostedMailboxAvailable}
+                checked={!!hostedState.hostedAddress && selectedUris.includes(`mailto:${hostedState.hostedAddress}`)}
+                onToggle={(on) => {
+                  const uri = `mailto:${hostedState.hostedAddress}`;
+                  setSelectedUris((prev) => (on ? [...prev, uri] : prev.filter((u) => u !== uri)));
+                }}
+                canRemove={data.has_own_mailbox}
+                onRemove={() => hostedState.remove.mutate()}
+                removePending={hostedState.remove.isPending}
+                onRequest={() => hostedState.request.mutate()}
+                requestPending={hostedState.request.isPending}
+                error={hostedState.error}
+                authWarning={hostedState.authWarning}
+              />
             </div>
 
             <div style={{ marginTop: "1.25rem", paddingTop: "1rem", borderTop: "1px solid var(--border)" }}>

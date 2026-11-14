@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
-import { X, Copy, RefreshCw, Check, Plus, Trash2 } from "lucide-react";
-import { ApiError } from "../../api/client";
+import { X, Copy, RefreshCw, Check } from "lucide-react";
 import type { DmarcPolicy } from "../../api/policyBuilder";
 import { useOnboardingStatus } from "../../hooks/useOnboarding";
 import { useClipboardFeedback } from "../../hooks/useClipboardFeedback";
-import { useDmarcPolicyBuilder, useRemoveHostedReportAddress, useRequestHostedReportAddress } from "../../hooks/usePolicyBuilders";
+import { useDmarcPolicyBuilder } from "../../hooks/usePolicyBuilders";
 import { asPolicy, findRelaxations } from "./dmarcInheritance";
+import HostedAddressRow from "./HostedAddressRow";
 import { sameAddress } from "./sameAddress";
+import { useHostedAddress } from "./useHostedAddress";
 
 const RUA_STATUS_TEXT: Record<string, { text: string; role: "good" | "warning" | "critical" | "neutral" }> = {
   correct: { text: "Reports are reaching your connected mailbox", role: "good" },
@@ -70,41 +71,11 @@ export default function PolicyBuilder({ domainId, domainName, onClose }: { domai
   // silently drop any other legitimate destination (a prior DMARC vendor,
   // a compliance mailbox) the domain already had configured.
   const [selectedRua, setSelectedRua] = useState<string[]>([]);
-  const [hostedAddress, setHostedAddress] = useState<string | null>(null);
-  const [hostedAddressError, setHostedAddressError] = useState<string | null>(null);
-  // Set only when the address itself was generated fine but the RFC 7489
-  // §7.1 authorization record on the hosted domain couldn't be
-  // auto-provisioned (Cloudflare unconfigured/erroring) — distinct from
-  // hostedAddressError, since the address is still usable, just not yet
-  // authorized to receive reports.
-  const [authWarning, setAuthWarning] = useState<string | null>(null);
-
-  const requestHostedAddress = useRequestHostedReportAddress(
+  const hostedState = useHostedAddress(
     domainId,
-    (result) => {
-      setHostedAddressError(null);
-      setHostedAddress(result.hosted_report_address);
-      // With an own mailbox as destination the hosted address is an
-      // optional extra the user ticks; without one it is the destination.
-      if (!data?.org_mailbox_address) {
-        setSelectedRua((prev) => (prev.includes(result.hosted_report_address) ? prev : [...prev, result.hosted_report_address]));
-      }
-      const needsAttention = result.authorization_record_status === "unconfigured" || result.authorization_record_status === "error";
-      setAuthWarning(needsAttention ? result.authorization_record_detail : null);
-    },
-    (err) => setHostedAddressError(err instanceof ApiError ? err.message : "couldn't generate a hosted address"),
-  );
-
-  const removeHostedAddress = useRemoveHostedReportAddress(
-    domainId,
-    () => {
-      const removed = hostedAddress;
-      setHostedAddressError(null);
-      setAuthWarning(null);
-      setHostedAddress(null);
-      setSelectedRua((prev) => prev.filter((a) => !sameAddress(a, removed)));
-    },
-    (err) => setHostedAddressError(err instanceof ApiError ? err.message : "couldn't remove the hosted address"),
+    data?.org_mailbox_address,
+    (address) => setSelectedRua((prev) => (prev.includes(address) ? prev : [...prev, address])),
+    (removed) => setSelectedRua((prev) => prev.filter((a) => !sameAddress(a, removed))),
   );
 
   // Seed the form from the domain's CURRENTLY PUBLISHED record where one
@@ -137,7 +108,7 @@ export default function PolicyBuilder({ domainId, domainName, onClose }: { domai
       // during onboarding, or on a previous visit here) — without this,
       // the "no mailbox of your own?" button below would re-offer to
       // generate one every time, ignoring that it already has.
-      setHostedAddress(data.hosted_report_address);
+      hostedState.setHostedAddress(data.hosted_report_address);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data === undefined]);
@@ -217,55 +188,23 @@ export default function PolicyBuilder({ domainId, domainName, onClose }: { domai
                   </div>
                 </div>
               )}
-              {(hostedMailboxAvailable || hostedAddress) && (
-                <div style={{ marginTop: "0.6rem" }}>
-                  {hostedAddress && !sameAddress(hostedAddress, data.org_mailbox_address) ? (
-                    <>
-                      <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.85rem" }}>
-                        <input
-                          type="checkbox"
-                          checked={selectedRua.includes(hostedAddress)}
-                          onChange={(e) =>
-                            setSelectedRua((prev) => (e.target.checked ? [...prev, hostedAddress] : prev.filter((a) => a !== hostedAddress)))
-                          }
-                        />
-                        <code>{hostedAddress}</code>
-                        <span className="badge badge--good">hosted by YetAnotherDmarcTool</span>
-                      </label>
-                      {data.has_own_mailbox && (
-                        <button
-                          className="btn btn--ghost btn--sm"
-                          style={{ marginTop: "0.3rem" }}
-                          onClick={() => removeHostedAddress.mutate()}
-                          disabled={removeHostedAddress.isPending}
-                        >
-                          <Trash2 />
-                          Remove hosted address
-                        </button>
-                      )}
-                    </>
-                  ) : !hostedAddress && hostedMailboxAvailable ? (
-                    <button
-                      className="btn btn--ghost btn--sm"
-                      onClick={() => requestHostedAddress.mutate()}
-                      disabled={requestHostedAddress.isPending}
-                    >
-                      <Plus />
-                      {data.org_mailbox_address ? "Also use a YetAnotherDmarcTool-hosted address" : "No mailbox of your own? Use a YetAnotherDmarcTool-hosted address"}
-                    </button>
-                  ) : null}
-                  {hostedAddressError && (
-                    <p className="section-hint" style={{ color: "var(--critical-text)", marginTop: "0.3rem", marginBottom: 0 }}>
-                      {hostedAddressError}
-                    </p>
-                  )}
-                  {authWarning && (
-                    <p className="section-hint" style={{ color: "var(--warning-text)", marginTop: "0.3rem", marginBottom: 0 }}>
-                      This address works, but couldn't be auto-authorized yet: {authWarning}
-                    </p>
-                  )}
-                </div>
-              )}
+              <HostedAddressRow
+                hostedAddress={hostedState.hostedAddress}
+                destination={data.org_mailbox_address}
+                hostedMailboxAvailable={hostedMailboxAvailable}
+                checked={!!hostedState.hostedAddress && selectedRua.includes(hostedState.hostedAddress)}
+                onToggle={(on) => {
+                  const addr = hostedState.hostedAddress;
+                  if (addr) setSelectedRua((prev) => (on ? [...prev, addr] : prev.filter((a) => a !== addr)));
+                }}
+                canRemove={data.has_own_mailbox}
+                onRemove={() => hostedState.remove.mutate()}
+                removePending={hostedState.remove.isPending}
+                onRequest={() => hostedState.request.mutate()}
+                requestPending={hostedState.request.isPending}
+                error={hostedState.error}
+                authWarning={hostedState.authWarning}
+              />
             </div>
 
             {currentHasPct && (

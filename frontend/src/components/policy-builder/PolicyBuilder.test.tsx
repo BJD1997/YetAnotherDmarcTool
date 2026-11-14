@@ -1,5 +1,5 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../../api/client";
@@ -232,6 +232,25 @@ describe("PolicyBuilder report destination", () => {
     await renderBuilder(builderData({ org_mailbox_address: "dmarc@example.com", hosted_report_address: null }));
 
     expect(screen.getByRole("button", { name: /Also use a YetAnotherDmarcTool-hosted address/ })).toBeInTheDocument();
+  });
+
+  it("removes a published hosted address from the record and the form", async () => {
+    vi.mocked(api.delete).mockResolvedValue(undefined);
+    await renderBuilder(
+      builderData({
+        org_mailbox_address: "reports@example.com",
+        hosted_report_address: "reports+abc@hosted.example",
+        has_own_mailbox: true,
+        rua_destination: { status: "correct", current_targets: ["reports@example.com", "reports+abc@hosted.example"] },
+      }),
+    );
+    expect(screen.getByTestId("generated-record").textContent).toContain("reports+abc@hosted.example");
+
+    fireEvent.click(screen.getByRole("button", { name: /Remove hosted address/ }));
+
+    await waitFor(() => expect(screen.queryByText("reports+abc@hosted.example")).not.toBeInTheDocument());
+    expect(api.delete).toHaveBeenCalledWith("/domains/domain-1/hosted-report-address");
+    expect(screen.getByTestId("generated-record").textContent).not.toContain("reports+abc");
   });
 
   it("offers no hosted address when the server cannot host one", async () => {
