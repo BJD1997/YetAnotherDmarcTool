@@ -30,6 +30,7 @@ from app.services.notifications.sources import detected_domain_items
 from app.services.overview.posture import compute_posture
 from app.services.rating.domain_rating import compute_domain_rating, domain_policy_readiness, policy_stability_days
 from app.services.rating.policy_recommendation import build_policy_recommendation
+from app.services.report_destination import report_destination
 from app.services.source_identification.service_identifier import identify_many
 
 router = APIRouter(tags=["dmarc-reports"])
@@ -688,18 +689,15 @@ async def dmarc_policy_builder(
     domain_id: uuid.UUID, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
 ) -> dict:
     """Bundles everything the policy-builder UI needs in one call: the live
-    current record, whether rua= actually reaches the connected mailbox,
+    current record, whether rua= actually reaches the report destination,
     and a recommended next record — built entirely from data this app
     already computes elsewhere (compute_domain_rating, domain_policy_readiness,
     service_breakdown+sender_reviews), not new analysis."""
     domain = await get_owned_domain(db, domain_id, user.organization_id)
 
     connection = await get_org_mailbox_connection(db, user.organization_id)
-    # A domain with its own hosted address (see POST
-    # /domains/{id}/hosted-report-address) is using that as its dedicated
-    # report destination — prefer it over the org's shared MailboxConnection,
-    # which local-auth orgs never have at all.
-    mailbox_address = domain.hosted_report_address or (connection.mailbox_address if connection is not None else None)
+    # Which address rua= should name: see app/services/report_destination.py.
+    destination = report_destination(domain, connection)
 
     lookup_error = False
     current: DmarcRecordInfo | None
@@ -709,8 +707,8 @@ async def dmarc_policy_builder(
         current = None
         lookup_error = True
 
-    if mailbox_address is not None:
-        rua_result = await check_rua_destination(domain.name, mailbox_address)
+    if destination is not None:
+        rua_result = await check_rua_destination(domain.name, destination)
         rua_destination = {"status": rua_result.status, "current_targets": rua_result.current_targets}
     else:
         rua_destination = {"status": "no_mailbox", "current_targets": []}
@@ -732,8 +730,9 @@ async def dmarc_policy_builder(
         "current_record": {"raw": current.raw, "tags": current.tags} if current is not None else None,
         "current_record_lookup_error": lookup_error,
         "rua_destination": rua_destination,
-        "org_mailbox_address": mailbox_address,
+        "org_mailbox_address": destination.address if destination else None,
         "hosted_report_address": domain.hosted_report_address,
+        "has_own_mailbox": connection is not None,
         "policy_stability_days": stability_days,
         "recommendation": recommendation,
     }

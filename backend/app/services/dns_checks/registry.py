@@ -7,6 +7,7 @@ from app.models.enums import CheckType, DomainMailProfile, SpfAllQualifierMode
 from app.services.dns_checks import dane, dkim, dmarc, dmarcbis, mta_sts, mx, spf, starttls, tls_rpt_check
 from app.services.dns_checks.base import Finding
 from app.services.dns_checks.dmarc_record import resolve_effective_policy
+from app.services.report_destination import ReportDestination
 
 
 async def run_all(
@@ -15,7 +16,7 @@ async def run_all(
     mail_profile: DomainMailProfile = DomainMailProfile.sends_mail,
     spf_all_qualifier_mode: SpfAllQualifierMode = SpfAllQualifierMode.strict,
     parent_domain_name: str | None = None,
-    mailbox_address: str | None = None,
+    destination: ReportDestination | None = None,
 ) -> dict[CheckType, list[Finding]]:
     # Fetched once here (rather than inside spf.py itself) since spf.py is a
     # pure structural linter with no DNS calls of its own beyond the SPF
@@ -31,12 +32,12 @@ async def run_all(
     return {
         CheckType.spf: await spf.check(domain_name, mail_profile, dmarc_policy, spf_all_qualifier_mode),
         CheckType.dkim: await dkim.check(domain_name, dkim_selectors, mail_profile),
-        CheckType.dmarc: await dmarc.check(domain_name, parent_domain_name, mailbox_address),
+        CheckType.dmarc: await dmarc.check(domain_name, parent_domain_name, destination),
         CheckType.dmarcbis: await dmarcbis.check(domain_name),
         CheckType.mx: await mx.check(domain_name),
         CheckType.mta_sts: await mta_sts.check(domain_name),
         CheckType.dane: await dane.check(domain_name),
-        CheckType.tls_rpt: await tls_rpt_check.check(domain_name, mailbox_address),
+        CheckType.tls_rpt: await tls_rpt_check.check(domain_name, destination),
         # Only the port-25 probe runs here. Where port 25 is blocked (Azure,
         # most clouds) it would fail for every domain; "tls_rpt" mode reads
         # TLS-RPT reports instead, in run_and_persist_checks, which has a DB

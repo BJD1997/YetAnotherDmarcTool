@@ -1,7 +1,7 @@
 """DMARC (RFC 7489) best-practice checker: presence/uniqueness, policy
 strength, pct rollout, rua/ruf presence, the RFC 7489 §7.1 external
 destination verification for report addresses on a different domain, and
-— given an optional mailbox_address — whether rua=/ruf= actually include
+— given an optional destination — whether rua=/ruf= actually include
 this org's own configured mailbox (warn if not; ruf= only checked when
 it's configured at all, since it's optional and its absence alone isn't
 flagged). Same comparison the DMARC Policy Builder already surfaces for
@@ -23,6 +23,7 @@ from app.services.dns_checks.dmarc_record import (
     parse_mailto_targets,
 )
 from app.services.dns_checks.resolver import DnsLookupError, resolve_txt_strict
+from app.services.report_destination import ReportDestination
 
 
 async def _check_external_destination(record_domain: str, report_email: str, tag_name: str) -> Finding | None:
@@ -131,7 +132,7 @@ async def _check_inherited_policy(domain: str, parent_domain: str, name: str) ->
     ]
 
 
-async def check(domain: str, parent_domain: str | None = None, mailbox_address: str | None = None) -> list[Finding]:
+async def check(domain: str, parent_domain: str | None = None, destination: ReportDestination | None = None) -> list[Finding]:
     name = f"_dmarc.{domain}"
     try:
         records = await resolve_txt_strict(name)
@@ -206,11 +207,11 @@ async def check(domain: str, parent_domain: str | None = None, mailbox_address: 
         # reach THIS org's own mailbox — same gap tls_rpt_check.py's check()
         # flags directly rather than leaving it to the policy builder alone
         # (see that module's docstring). ruf= gets the identical check below.
-        if mailbox_address and mailbox_address.lower() not in (t.lower() for t in rua_targets):
+        if destination and not destination.reached_by(rua_targets):
             findings.append(
                 Finding(
                     status="warn",
-                    summary=f"rua= doesn't include your configured mailbox ({mailbox_address}) — aggregate reports won't reach it",
+                    summary=f"rua= doesn't include your configured mailbox ({destination.address}) — aggregate reports won't reach it",
                     details={"recommendation": "Use the policy builder to update rua= to include your mailbox."},
                 )
             )
@@ -223,11 +224,11 @@ async def check(domain: str, parent_domain: str | None = None, mailbox_address: 
     # ruf= is optional (unlike rua=, its absence isn't flagged at all) —
     # only worth comparing against the org's mailbox when it's actually
     # configured to begin with.
-    if ruf_targets and mailbox_address and mailbox_address.lower() not in (t.lower() for t in ruf_targets):
+    if ruf_targets and destination and not destination.reached_by(ruf_targets):
         findings.append(
             Finding(
                 status="warn",
-                summary=f"ruf= doesn't include your configured mailbox ({mailbox_address}) — forensic reports won't reach it",
+                summary=f"ruf= doesn't include your configured mailbox ({destination.address}) — forensic reports won't reach it",
                 details={"recommendation": "Use the policy builder to update ruf= to include your mailbox."},
             )
         )

@@ -10,6 +10,7 @@ import pytest
 
 from app.services.dns_checks import dmarc
 from app.services.dns_checks.resolver import DnsLookupError
+from app.services.report_destination import ReportDestination
 
 
 def _txt(records_by_name: dict[str, list[str]]):
@@ -132,7 +133,7 @@ async def test_parent_lookup_error_is_error_not_fail():
 
 async def test_rua_mismatch_is_a_warn():
     with _txt({"_dmarc.example.com": ["v=DMARC1; p=reject; rua=mailto:old-vendor@example.com;"]}):
-        findings = await dmarc.check("example.com", mailbox_address="reports@example.com")
+        findings = await dmarc.check("example.com", destination=ReportDestination.single("reports@example.com"))
     assert any(f.status == "warn" and "rua= doesn't include your configured mailbox" in f.summary for f in findings)
     # The existing presence finding is untouched — additional, not replaced.
     assert any(f.status == "pass" and "Aggregate reports (rua) configured" in f.summary for f in findings)
@@ -140,11 +141,23 @@ async def test_rua_mismatch_is_a_warn():
 
 async def test_rua_match_has_no_mismatch_finding():
     with _txt({"_dmarc.example.com": ["v=DMARC1; p=reject; rua=mailto:reports@example.com;"]}):
-        findings = await dmarc.check("example.com", mailbox_address="reports@example.com")
+        findings = await dmarc.check("example.com", destination=ReportDestination.single("reports@example.com"))
     assert not any("doesn't include your configured mailbox" in f.summary for f in findings)
 
 
-async def test_no_mailbox_address_given_means_no_mismatch_finding():
+async def test_no_mismatch_finding_when_rua_points_at_the_hosted_address():
+    dest = ReportDestination(address="reports@example.com", accepted=("reports@example.com", "reports+abc@hosted.example"))
+    records = {
+        "_dmarc.example.com": ["v=DMARC1; p=reject; rua=mailto:reports+abc@hosted.example;"],
+        # RFC 7489 §7.1 authorization for the report address on another domain.
+        "example.com._report._dmarc.hosted.example": ["v=DMARC1"],
+    }
+    with _txt(records):
+        findings = await dmarc.check("example.com", destination=dest)
+    assert not any("doesn't include your configured mailbox" in f.summary for f in findings)
+
+
+async def test_no_destination_given_means_no_mismatch_finding():
     with _txt({"_dmarc.example.com": ["v=DMARC1; p=reject; rua=mailto:old-vendor@example.com;"]}):
         findings = await dmarc.check("example.com")
     assert not any("doesn't include your configured mailbox" in f.summary for f in findings)
@@ -155,7 +168,7 @@ async def test_ruf_mismatch_is_a_warn():
     # unrelated RFC 7489 §7.1 external-authorization lookup — that's
     # covered by its own tests, not what's under test here.
     with _txt({"_dmarc.example.com": ["v=DMARC1; p=reject; rua=mailto:reports@example.com; ruf=mailto:forensics@example.com;"]}):
-        findings = await dmarc.check("example.com", mailbox_address="reports@example.com")
+        findings = await dmarc.check("example.com", destination=ReportDestination.single("reports@example.com"))
     assert any(f.status == "warn" and "ruf= doesn't include your configured mailbox" in f.summary for f in findings)
 
 
@@ -163,5 +176,5 @@ async def test_ruf_not_configured_means_no_mismatch_finding():
     # ruf= is optional and its absence isn't flagged at all — nothing to
     # compare a mailbox against when it was never configured.
     with _txt({"_dmarc.example.com": ["v=DMARC1; p=reject; rua=mailto:reports@example.com;"]}):
-        findings = await dmarc.check("example.com", mailbox_address="reports@example.com")
+        findings = await dmarc.check("example.com", destination=ReportDestination.single("reports@example.com"))
     assert not any("ruf=" in f.summary and "doesn't include" in f.summary for f in findings)

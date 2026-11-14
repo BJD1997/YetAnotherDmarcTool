@@ -4,7 +4,7 @@ failure reports. This is a DNS-publication check only — actually parsing
 inbound TLS-RPT reports that arrive in the mailbox is a separate concern
 handled by report_writer.write_smtp_tls_report.
 
-check() takes an optional mailbox_address and, when given one, also flags
+check() takes an optional destination and, when given one, also flags
 (warn) a syntactically valid record whose rua= doesn't include it — unlike
 dmarc.py's own rua= check, which deliberately only covers presence/external
 authorization and leaves "is it MY mailbox" to the DMARC Policy Builder
@@ -23,6 +23,7 @@ import re
 
 from app.services.dns_checks.base import Finding, is_null_mx
 from app.services.dns_checks.resolver import DnsLookupError, resolve_mx, resolve_txt_strict
+from app.services.report_destination import ReportDestination
 
 _TLSRPT_PREFIX_RE = re.compile(r"(?i)^v=TLSRPTv1(;|\s|$)")
 
@@ -71,7 +72,7 @@ class TlsRptRuaDestinationCheck:
     current_targets: list[str]
 
 
-async def check_tls_rpt_rua_destination(domain: str, mailbox_address: str) -> TlsRptRuaDestinationCheck:
+async def check_tls_rpt_rua_destination(domain: str, destination: ReportDestination) -> TlsRptRuaDestinationCheck:
     """Does this domain's published TLS-RPT rua= actually include the org's
     report destination? Same question dmarc_record.check_rua_destination
     answers for DMARC, applied to _smtp._tls.<domain> instead."""
@@ -84,12 +85,12 @@ async def check_tls_rpt_rua_destination(domain: str, mailbox_address: str) -> Tl
     targets = _parse_mailto_targets(record.tags.get("rua", ""))
     if not targets:
         return TlsRptRuaDestinationCheck(status="no_rua", current_targets=[])
-    if mailbox_address.lower() in (t.lower() for t in targets):
+    if destination.reached_by(targets):
         return TlsRptRuaDestinationCheck(status="correct", current_targets=targets)
     return TlsRptRuaDestinationCheck(status="points_elsewhere", current_targets=targets)
 
 
-async def check(domain: str, mailbox_address: str | None = None) -> list[Finding]:
+async def check(domain: str, destination: ReportDestination | None = None) -> list[Finding]:
     try:
         mx_records = await resolve_mx(domain)
     except DnsLookupError as exc:
@@ -152,13 +153,13 @@ async def check(domain: str, mailbox_address: str | None = None) -> list[Finding
     # an https:-only rua= is a legitimate RFC 8460 config, but it still
     # means reports will never reach this app's own mailbox for this
     # domain, same practical gap as a mailto: pointed elsewhere.
-    if mailbox_address and valid:
+    if destination and valid:
         mailto_targets = _parse_mailto_targets(tags.get("rua", ""))
-        if mailbox_address.lower() not in (t.lower() for t in mailto_targets):
+        if not destination.reached_by(mailto_targets):
             findings.append(
                 Finding(
                     status="warn",
-                    summary=f"TLS-RPT rua= doesn't include your configured mailbox ({mailbox_address}) — reports won't reach it",
+                    summary=f"TLS-RPT rua= doesn't include your configured mailbox ({destination.address}) — reports won't reach it",
                     details={"recommendation": "Use the TLS-RPT record builder to update rua= to include your mailbox."},
                 )
             )

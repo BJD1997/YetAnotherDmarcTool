@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.repositories.dmarc_reports import tls_rpt_session_totals_for_domain
 from app.services.dns_checks.base import Finding
 from app.services.dns_checks.tls_rpt_check import check_tls_rpt_rua_destination
+from app.services.report_destination import ReportDestination
 
 WINDOW_DAYS = 14
 MAX_FAILURE_RATE = 0.02
@@ -65,10 +66,10 @@ def evaluate(rua_status: str, success: int, failure: int, failure_details: list[
     ]
 
 
-async def check(db: AsyncSession, domain_id: uuid.UUID, domain_name: str, mailbox_address: str | None) -> list[Finding]:
-    if not mailbox_address:
+async def check(db: AsyncSession, domain_id: uuid.UUID, domain_name: str, destination: ReportDestination | None) -> list[Finding]:
+    if destination is None:
         return []
-    rua_status = (await check_tls_rpt_rua_destination(domain_name, mailbox_address)).status
+    rua_status = (await check_tls_rpt_rua_destination(domain_name, destination)).status
     if rua_status != "correct":
         return []
     since = datetime.now(timezone.utc) - timedelta(days=WINDOW_DAYS)

@@ -44,6 +44,7 @@ from app.services.rating.domain_rating import (
     latest_findings_by_type,
 )
 from app.services.rating.score import worst_status
+from app.services.report_destination import ReportDestination
 
 UNKNOWN_SENDER_VOLUME_THRESHOLD = 50
 STALE_MAILBOX_DAYS = 10
@@ -471,7 +472,7 @@ async def spf_lookup_limit_risk(db: AsyncSession, domain: Domain) -> list[Action
     return items
 
 
-async def rua_destination_broken(db: AsyncSession, domain: Domain, mailbox_address: str | None) -> list[ActionItem]:
+async def rua_destination_broken(db: AsyncSession, domain: Domain, destination: ReportDestination | None) -> list[ActionItem]:
     """Catches the trap this whole onboarding/reporting area is meant to
     prevent: a domain can be verified, pass every DNS check, and still
     never send this product a single report if rua= isn't (or no longer
@@ -479,9 +480,9 @@ async def rua_destination_broken(db: AsyncSession, domain: Domain, mailbox_addre
     DMARC record at all" (dmarc.py's checker + low_compliance_domain
     already cover that loudly) and on a transient lookup_error — this rule
     is specifically about a record that exists but doesn't report here."""
-    if mailbox_address is None or domain.verification_status != DomainVerificationStatus.verified:
+    if destination is None or domain.verification_status != DomainVerificationStatus.verified:
         return []
-    result = await check_rua_destination(domain.name, mailbox_address)
+    result = await check_rua_destination(domain.name, destination)
     if result.status in ("correct", "not_configured", "lookup_error"):
         return []
     title = (

@@ -24,6 +24,7 @@ from app.services.dns_checks.domain_verification import apply_domain_verificatio
 from app.services.domain_setup import add_detected_domain, add_domain, attribute_reports
 from app.services.rating.domain_rating import compute_domain_rating, domain_policy_readiness, latest_findings_by_type
 from app.services.rating.score import tally_worst_status
+from app.services.report_destination import report_destination
 
 router = APIRouter(prefix="/domains", tags=["domains"])
 
@@ -130,7 +131,6 @@ async def ranked_domains(db: AsyncSession = Depends(get_db), user: User = Depend
     # Fetched once, not per-domain — only actually used below for domains
     # that turn out to have no report data yet (see the no-data signals).
     connection = await get_org_mailbox_connection(db, user.organization_id)
-    mailbox_address = connection.mailbox_address if connection is not None else None
 
     items = []
     for domain in domains:
@@ -179,8 +179,9 @@ async def ranked_domains(db: AsyncSession = Depends(get_db), user: User = Depend
                 elif findings_by_type:
                     last_dns_check_at = next(iter(findings_by_type.values()))[0].checked_at
 
-                if mailbox_address is not None:
-                    rua_result = await check_rua_destination(domain.name, mailbox_address)
+                destination = report_destination(domain, connection)
+                if destination is not None:
+                    rua_result = await check_rua_destination(domain.name, destination)
                     rua_status = rua_result.status
 
         last_report_at = await last_report_received_at_for_domain(db, domain.id)

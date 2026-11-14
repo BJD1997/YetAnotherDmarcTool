@@ -26,6 +26,7 @@ from app.repositories.selectors import list_selectors_for_domain
 from app.services.dns_checks import starttls_tls_rpt
 from app.services.dns_checks.registry import run_all
 from app.services.jobs.advisory_lock import try_advisory_lock
+from app.services.report_destination import report_destination
 
 logger = logging.getLogger(__name__)
 
@@ -54,13 +55,9 @@ async def run_and_persist_checks(db: AsyncSession, domain: Domain, org: Organiza
         if parent is not None:
             parent_domain_name = parent.name
 
-    # Same resolution as the DMARC/TLS-RPT policy builders' own
-    # org_mailbox_address (app/routers/dns_checks.py) — a domain's own
-    # hosted address takes priority over the org's shared connected
-    # mailbox. Passed through to tls_rpt_check.check() so the scored check
-    # can flag a rua= that doesn't include it, not just the builder.
+    # One rule for every place that needs it: see app/services/report_destination.py.
     connection = await get_org_mailbox_connection(db, domain.organization_id)
-    mailbox_address = domain.hosted_report_address or (connection.mailbox_address if connection is not None else None)
+    destination = report_destination(domain, connection)
 
     findings_by_type = await run_all(
         domain.name,
@@ -68,12 +65,12 @@ async def run_and_persist_checks(db: AsyncSession, domain: Domain, org: Organiza
         domain.mail_profile,
         org.spf_all_qualifier_mode,
         parent_domain_name,
-        mailbox_address,
+        destination,
     )
     # TLS-RPT mode needs the domain's reports, so it runs here rather than
     # in run_all (which has no DB session).
     if settings.effective_starttls_mode == "tls_rpt":
-        findings_by_type[CheckType.starttls] = await starttls_tls_rpt.check(db, domain.id, domain.name, mailbox_address)
+        findings_by_type[CheckType.starttls] = await starttls_tls_rpt.check(db, domain.id, domain.name, destination)
 
     now = datetime.now(timezone.utc)
     rows = [

@@ -32,6 +32,7 @@ from app.services.dns_checks.scheduled_recheck import run_and_persist_checks
 from app.services.dns_checks.spf_providers import SPF_PROVIDERS, provider_for_sender
 from app.services.dns_checks.tls_rpt_check import check_tls_rpt_rua_destination, fetch_current_tls_rpt_record
 from app.services.rating.domain_rating import rating_window_days
+from app.services.report_destination import report_destination
 
 router = APIRouter(tags=["dns-checks"])
 
@@ -319,22 +320,22 @@ async def dmarc_rua_check(
     domain_id: uuid.UUID, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
 ) -> dict:
     """Does this domain's published rua= actually point at its report
-    destination — its own hosted address if one's been generated (see
-    POST /domains/{id}/hosted-report-address), else the org's connected
-    mailbox? A domain can be verified with a clean DNS baseline and still
+    destination — the org's connected mailbox if it has one, else the
+    domain's own hosted address (see POST
+    /domains/{id}/hosted-report-address)? A domain can be verified with a clean DNS baseline and still
     never send this product a single report if rua= was never set (or was
     later changed) to point here — see dmarc_record.py."""
     domain = await get_owned_domain(db, domain_id, user.organization_id)
     connection = await get_org_mailbox_connection(db, user.organization_id)
-    mailbox_address = domain.hosted_report_address or (connection.mailbox_address if connection else None)
-    if mailbox_address is None:
+    destination = report_destination(domain, connection)
+    if destination is None:
         return {"status": "no_mailbox", "current_targets": [], "org_mailbox_address": None}
 
-    result = await check_rua_destination(domain.name, mailbox_address)
+    result = await check_rua_destination(domain.name, destination)
     return {
         "status": result.status,
         "current_targets": result.current_targets,
-        "org_mailbox_address": mailbox_address,
+        "org_mailbox_address": destination.address,
     }
 
 
@@ -438,7 +439,7 @@ async def tls_rpt_builder(
     domain = await get_owned_domain(db, domain_id, user.organization_id)
 
     connection = await get_org_mailbox_connection(db, user.organization_id)
-    mailbox_address = domain.hosted_report_address or (connection.mailbox_address if connection is not None else None)
+    destination = report_destination(domain, connection)
 
     lookup_error = False
     try:
@@ -447,8 +448,8 @@ async def tls_rpt_builder(
         current = None
         lookup_error = True
 
-    if mailbox_address is not None:
-        rua_result = await check_tls_rpt_rua_destination(domain.name, mailbox_address)
+    if destination is not None:
+        rua_result = await check_tls_rpt_rua_destination(domain.name, destination)
         rua_destination = {"status": rua_result.status, "current_targets": rua_result.current_targets}
     else:
         rua_destination = {"status": "no_mailbox", "current_targets": []}
@@ -457,8 +458,9 @@ async def tls_rpt_builder(
         "current_record": {"raw": current.raw, "tags": current.tags} if current is not None else None,
         "current_record_lookup_error": lookup_error,
         "rua_destination": rua_destination,
-        "org_mailbox_address": mailbox_address,
+        "org_mailbox_address": destination.address if destination else None,
         "hosted_report_address": domain.hosted_report_address,
+        "has_own_mailbox": connection is not None,
     }
 
 

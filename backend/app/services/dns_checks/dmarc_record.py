@@ -7,6 +7,7 @@ import dataclasses
 import re
 
 from app.services.dns_checks.resolver import DnsLookupError, resolve_txt_strict
+from app.services.report_destination import ReportDestination
 
 DMARC_PREFIX_RE = re.compile(r"(?i)^v=DMARC1(;|\s|$)")
 
@@ -116,9 +117,9 @@ class RuaDestinationCheck:
     current_targets: list[str]
 
 
-async def check_rua_destination(domain: str, mailbox_address: str) -> RuaDestinationCheck:
+async def check_rua_destination(domain: str, destination: ReportDestination) -> RuaDestinationCheck:
     """Does this domain's published rua= actually include the org's
-    connected mailbox? A domain can be fully "verified" and have a clean
+    report destination? A domain can be fully "verified" and have a clean
     DNS baseline while still never sending this product a single report,
     if rua= was never pointed here (or was later changed) — the kind of
     gap that's easy to miss without an explicit check for it."""
@@ -131,6 +132,6 @@ async def check_rua_destination(domain: str, mailbox_address: str) -> RuaDestina
     targets = parse_mailto_targets(record.tags.get("rua", ""))
     if not targets:
         return RuaDestinationCheck(status="no_rua", current_targets=[])
-    if mailbox_address.lower() in (t.lower() for t in targets):
+    if destination.reached_by(targets):
         return RuaDestinationCheck(status="correct", current_targets=targets)
     return RuaDestinationCheck(status="points_elsewhere", current_targets=targets)
