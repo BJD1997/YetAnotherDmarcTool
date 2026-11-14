@@ -19,6 +19,7 @@ import type { Domain } from "../api/types";
 import type { RankedDomain } from "../api/overview";
 import { noDataRecommendation } from "../api/overview";
 import { useAuth } from "../auth/AuthContext";
+import CopyValue from "../components/CopyValue";
 import { ReportFreshnessValue } from "../components/overview/widgets";
 import { MAIL_PROFILE_LABELS, VerificationBadge } from "../components/domain/shared";
 import { useDeleteDomain, useDomains, useRankedDomains, useUpdateDomain, useVerifyDomain } from "../hooks/useDomains";
@@ -389,10 +390,10 @@ function DomainRow({
               }}
             >
               Add this DNS TXT record, then click "Check now":
-              <br />
-              <strong>{domain.verification_record_name}</strong>
-              <br />
-              TXT value: <strong>{domain.verification_token}</strong>
+              <div style={{ display: "grid", gap: "0.3rem", marginTop: "0.4rem" }}>
+                <CopyValue label="Host/name" value={domain.verification_record_name} />
+                <CopyValue label="TXT value" value={domain.verification_token} />
+              </div>
               {verifyDomain.isSuccess && !verifyDomain.data.verified && (
                 <p style={{ color: "var(--critical-text)", fontFamily: "var(--font-sans)", marginTop: "0.5rem" }}>
                   Not found yet — DNS changes can take a few minutes to propagate.

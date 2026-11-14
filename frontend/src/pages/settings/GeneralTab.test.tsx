@@ -66,3 +66,18 @@ describe("GeneralTab Ask AI", () => {
     );
   });
 });
+
+describe("GeneralTab mailbox and hosted sections", () => {
+  it("asks to verify a domain before showing the mailbox forms", async () => {
+    vi.mocked(api.get).mockImplementation(async (url: string) => (url === "/domains" ? [] : null));
+    renderWithAppProviders(<GeneralTab />);
+    expect(await screen.findByText(/Verify a domain first/)).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("imap.example.com")).not.toBeInTheDocument();
+  });
+
+  it("has no hosted mailbox on/off switch", async () => {
+    renderWithAppProviders(<GeneralTab />);
+    expect(await screen.findByText(/as well as or instead of your own mailbox/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "On" })).not.toBeInTheDocument();
+  });
+});

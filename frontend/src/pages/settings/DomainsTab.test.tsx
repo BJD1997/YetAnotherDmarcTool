@@ -55,3 +55,24 @@ describe("Detected domains", () => {
     );
   });
 });
+
+describe("Pending domains", () => {
+  it("lists a pending domain with its verification record and copy buttons", async () => {
+    getMock.mockImplementation(async (url: string) => {
+      if (url === "/domains")
+        return [
+          {
+            id: "d1", name: "gtest.example", parent_domain_id: null, created_at: "2026-11-14T00:00:00Z",
+            verification_status: "pending", verification_record_name: "_yadt-verify.gtest.example", verification_token: "yadt-verify=abc",
+          },
+        ];
+      return [];
+    });
+    renderWithAppProviders(<DomainsTab />);
+
+    expect(await screen.findByText("_yadt-verify.gtest.example")).toBeInTheDocument();
+    expect(screen.getByText("yadt-verify=abc")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /Copy/ })).toHaveLength(2);
+    expect(screen.getByRole("button", { name: /Verify now/ })).toBeInTheDocument();
+  });
+});

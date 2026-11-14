@@ -1,11 +1,14 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useOutletContext } from "react-router-dom";
+import { Link, useOutletContext } from "react-router-dom";
 import { ApiError } from "../../api/client";
 import type { Organization, RatingWindowDays, ReportSenderCheck, SpfAllQualifierMode } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { ASK_AI_EXPLANATION, AskAiToggle } from "../../components/settings/AskAiToggle";
 import MailboxConnectionSection from "../../components/settings/MailboxConnectionSection";
+import { useDomains } from "../../hooks/useDomains";
+import { useMailboxConnection } from "../../hooks/useMailboxConnection";
+import { useOnboardingStatus } from "../../hooks/useOnboarding";
 import { useUpdateOrganization } from "../../hooks/useOrganization";
 import { useRemoveTrustedReporter, useTrustedReporters } from "../../hooks/useTrustedReporters";
 
@@ -51,6 +54,12 @@ export default function GeneralTab() {
   const org = useOutletContext<Organization>();
   const { user } = useAuth();
   const canManage = user?.role === "org_admin";
+  const { data: domains } = useDomains();
+  const { data: connection } = useMailboxConnection();
+  // An existing connection always stays visible; the hint only replaces the
+  // forms for an org that has neither a verified domain nor a mailbox yet.
+  const hasVerifiedDomain = domains === undefined || (domains ?? []).some((d) => d.verification_status === "verified");
+  const showMailbox = hasVerifiedDomain || !!connection;
 
   return (
     <section>
@@ -59,7 +68,14 @@ export default function GeneralTab() {
           IMAP mailbox. */}
       <h3 className="section-title">Mailbox connection</h3>
       <p className="section-hint">The shared mailbox this organization's DMARC/TLS-RPT reports arrive at.</p>
-      <MailboxConnectionSection canManage={canManage} />
+      {showMailbox ? (
+        <MailboxConnectionSection canManage={canManage} />
+      ) : (
+        <div className="alert alert--warning">
+          Verify a domain first: the report mailbox has to be on one of your verified domains.{" "}
+          <Link to="/settings/domains">Settings → Domains</Link>
+        </div>
+      )}
 
       {canManage && (
         <>
@@ -94,7 +110,7 @@ export default function GeneralTab() {
           <hr className="divider" />
           <h3 className="section-title">Hosted reporting mailbox</h3>
           <p className="section-hint">A YetAnotherDmarcTool-hosted rua= address, for domains with no mailbox of their own to dedicate.</p>
-          <HostedMailboxSection org={org} />
+          <HostedMailboxSection />
         </>
       )}
     </section>
@@ -243,51 +259,15 @@ function SpfModeSection({ org }: { org: Organization }) {
   );
 }
 
-function HostedMailboxSection({ org }: { org: Organization }) {
-  const [error, setError] = useState<string | null>(null);
-
-  const setOptIn = useUpdateOrganization(
-    () => setError(null),
-    (err) => setError(err instanceof ApiError ? err.message : "failed to save"),
-  );
-
-  // Organizations without Microsoft sign-in can always use the hosted
-  // mailbox, so there's nothing to toggle for them (see
-  // _hosted_mailbox_available in app/routers/domains.py).
-  if (!org.entra_tenant_id) {
-    return (
-      <div className="card" style={{ padding: "1rem" }}>
-        <p className="section-hint" style={{ margin: 0 }}>
-          Always available on servers that offer one: each domain can get a YetAnotherDmarcTool-hosted reporting address,
-          as well as or instead of your own mailbox above.
-        </p>
-      </div>
-    );
-  }
-
+function HostedMailboxSection() {
+  const { data: status } = useOnboardingStatus();
   return (
     <div className="card" style={{ padding: "1rem" }}>
-      <div className="chip-row">
-        {[
-          { key: false, label: "Off" },
-          { key: true, label: "On" },
-        ].map((opt) => (
-          <button
-            key={String(opt.key)}
-            className="btn btn--ghost btn--sm"
-            style={org.hosted_mailbox_opt_in === opt.key ? { background: "var(--accent-wash)", color: "var(--accent)" } : undefined}
-            disabled={setOptIn.isPending}
-            onClick={() => setOptIn.mutate({ name: org.name, hosted_mailbox_opt_in: opt.key })}
-          >
-            {opt.label}
-          </button>
-        ))}
-      </div>
-      <p className="section-hint" style={{ marginTop: "0.6rem", marginBottom: 0 }}>
-        Off by default since your organization can connect its own mailbox. Turn on to also allow generating
-        YetAnotherDmarcTool-hosted addresses per domain from the Policy Builder.
+      <p className="section-hint" style={{ margin: 0 }}>
+        {status && !status.hosted_mailbox_ready
+          ? "This server doesn't offer hosted reporting addresses."
+          : "Available on this server: each domain can get a YetAnotherDmarcTool-hosted reporting address, as well as or instead of your own mailbox above. Add one from a domain's DMARC policy builder."}
       </p>
-      {error && <div className="alert alert--critical" style={{ marginTop: "0.5rem" }}>{error}</div>}
     </div>
   );
 }
