@@ -147,9 +147,6 @@ async def test_hosted_poll_skips_poison_and_keeps_going_for_other_orgs(api, monk
 
 
 async def test_org_poll_stops_without_advancing_delta_link_when_microsoft_is_down(api, monkeypatch):
-    """A message that can't be downloaded because Microsoft 365 is down
-    (the 12/13 Nov 2026 outage) must not be skipped: skipping it and saving
-    the new delta link would lose that report for good."""
     from app.models.enums import JobStatus
     from app.models.job_run import JobRun
     from app.services.graph.mailbox_poller import GraphUnavailableError
@@ -161,7 +158,7 @@ async def test_org_poll_stops_without_advancing_delta_link_when_microsoft_is_dow
         db.add(MailboxConnection(organization_id=org.id, mailbox_address="reports@example.com", consent_status=ConsentStatus.granted))
         await db.commit()
     _mock_graph(monkeypatch, mailbox_poll_job, _aggregate("unused"))
-    outage = "Microsoft 365 didn't respond (HTTP 502), also not after 3 automatic retries."
+    outage = "Microsoft 365 didn't respond (HTTP 502) after 3 retries"
 
     async def _down(**_kwargs):
         raise GraphUnavailableError(outage)

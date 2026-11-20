@@ -219,8 +219,7 @@ async def job_runs_summary_stats(db: AsyncSession) -> dict:
         )
     ).scalar_one_or_none()
 
-    # A failure followed by a successful run of the same job (same org and
-    # domain) has recovered: the dashboard card stops being red for it.
+    # Recovered: a later run of the same job (org, domain) succeeded.
     last_failure_recovered = False
     if last_failure is not None:
         last_failure_recovered = (

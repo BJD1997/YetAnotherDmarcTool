@@ -115,5 +115,5 @@ async def test_temporary_gmail_failures_are_retried_then_reported_plainly(google
     assert sleeps == [2.0, 5.0]
 
     google["failures"] = [503, 503, 503, 503]
-    with pytest.raises(gmail.GmailError, match=r"^Gmail didn't respond \(HTTP 503\), also not after 3 automatic retries"):
+    with pytest.raises(gmail.GmailError, match=r"^Gmail didn't respond \(HTTP 503\) after 3 retries$"):
         await _mailbox().inbox_count()

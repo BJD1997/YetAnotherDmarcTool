@@ -81,7 +81,7 @@ describe("AdminJobRuns", () => {
 describe("AdminJobRuns outage handling", () => {
   const failure = (id: string, startedAt: string, org = "org-1") => ({
     id, job_type: "mailbox_poll", organization_id: org, domain_id: null, status: "failure", started_at: startedAt,
-    finished_at: null, error_message: "Microsoft 365 didn't respond (HTTP 502)", stats: null,
+    finished_at: null, error_message: "Microsoft 365 didn't respond (HTTP 502) after 3 retries", stats: null,
   });
 
   it("folds a run of failures into one row that can be expanded", async () => {
@@ -121,6 +121,6 @@ describe("AdminJobRuns outage handling", () => {
     renderWithAppProviders(<AdminJobRuns />);
 
     await waitFor(() => expect(screen.getByText("Last failure (recovered)")).toBeInTheDocument());
-    expect(screen.getByText(/Recovered: a later run succeeded/)).toBeInTheDocument();
+    expect(screen.getByText(/Recovered\./)).toBeInTheDocument();
   });
 });

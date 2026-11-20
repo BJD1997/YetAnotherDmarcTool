@@ -103,8 +103,7 @@ async def _do_poll() -> None:
                     errors += 1
                     continue
                 except GraphUnavailableError:
-                    # Microsoft 365 is down, not this message: stop so the
-                    # delta link isn't moved past it (see mailbox_poll_job).
+                    # Stop without advancing delta_link so the message is retried.
                     raise
                 except Exception:
                     logger.exception("failed to fetch hosted-reports message %s", message_id)

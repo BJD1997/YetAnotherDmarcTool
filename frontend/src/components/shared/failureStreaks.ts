@@ -1,12 +1,6 @@
-/** Folds repeated failures of the same job into one row. During an outage a
- * mailbox poll fails every few minutes (the 12/13 Nov 2026 Microsoft outage
- * gave about 85 identical rows); one "failed 85×" row with the time span
- * says the same thing and keeps the rest of the list readable.
- *
- * `runs` is newest first, as the APIs return it. A failure joins the open
- * streak of the same job (per `jobKey`); a success of that job closes it.
- * Other jobs' runs in between don't break a streak, so this also works on
- * the admin list where many organizations' runs interleave. */
+/** Folds consecutive failures of the same job (per `jobKey`) into one row.
+ * `runs` is newest first; a success of that job ends the streak, other
+ * jobs' runs in between don't. */
 export interface RunRow<T> {
   /** The newest run of the row. */
   run: T;

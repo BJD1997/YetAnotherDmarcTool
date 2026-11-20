@@ -79,7 +79,7 @@ export default function AdminJobRuns() {
           </div>
           {summary.last_failure && (
             <p className="muted" style={{ marginTop: "0.6rem", marginBottom: 0, fontSize: "0.82rem" }}>
-              {summary.last_failure.recovered ? "Recovered: a later run succeeded. " : ""}
+              {summary.last_failure.recovered ? "Recovered. " : ""}
               {summary.last_failure.job_type} for{" "}
               {summary.last_failure.organization_id ? orgNameById.get(summary.last_failure.organization_id) ?? summary.last_failure.organization_id : "—"}
               {summary.last_failure.error_message ? `: ${summary.last_failure.error_message}` : ""}
@@ -173,11 +173,9 @@ function JobRunRow({
 }: {
   run: AdminJobRun;
   orgName: Map<string, string>;
-  /** Every failure folded into this row, newest first (2 or more). */
   streak?: AdminJobRun[];
   open?: boolean;
   onToggle?: () => void;
-  /** One run of an expanded streak, shown under its summary row. */
   nested?: boolean;
 }) {
   const notable = run.status === "failure" || (typeof run.stats?.errors === "number" && run.stats.errors > 0);

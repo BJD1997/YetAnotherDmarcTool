@@ -1,6 +1,4 @@
-"""Graph polling against a fake Microsoft 365: temporary failures are
-retried, and errors people see never contain the request URL (a delta link
-carries the mailbox's sync token)."""
+"""Graph polling against a fake Microsoft 365."""
 
 import httpx
 import pytest
@@ -66,7 +64,7 @@ async def test_an_outage_gives_up_with_a_readable_message_without_the_url(graph)
         await _list()
 
     message = str(exc.value)
-    assert message.startswith("Microsoft 365 didn't respond (HTTP 502), also not after 3 automatic retries.")
+    assert message == "Microsoft 365 didn't respond (HTTP 502) after 3 retries"
     assert "SECRET-TOKEN" not in message and "://" not in message
     assert graph["requests"] == 4
 

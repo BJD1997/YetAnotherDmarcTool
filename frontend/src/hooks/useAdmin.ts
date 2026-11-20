@@ -99,7 +99,6 @@ export interface AdminJobRunsSummary {
     organization_id: string | null;
     started_at: string;
     error_message: string | null;
-    /** A later run of the same job succeeded. */
     recovered: boolean;
   } | null;
   success_rate_pct_24h: number | null;

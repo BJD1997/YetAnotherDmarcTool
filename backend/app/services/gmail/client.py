@@ -23,9 +23,6 @@ GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users"
 AUTHSERV_ID = "mx.google.com"
 UNREAD_QUERY = "is:unread in:inbox"
 MAX_MESSAGES_PER_POLL = 500
-# Waits before each retry of a temporary Gmail failure (throttling, 5xx,
-# network). Same idea as the Microsoft 365 poller: ride out a blip, give up
-# quickly when the outage is real; unread messages are read next poll.
 RETRY_DELAYS = (2.0, 5.0, 15.0)
 _TRANSIENT_STATUSES = {429, 500, 502, 503, 504}
 
@@ -138,10 +135,7 @@ class GmailMailbox:
                     break
                 reason = f"HTTP {response.status_code}"
             if attempt == len(RETRY_DELAYS):
-                raise GmailError(
-                    f"Gmail didn't respond ({reason}), also not after {len(RETRY_DELAYS)} automatic retries. "
-                    "Nothing was skipped: unread reports are read on the next poll."
-                )
+                raise GmailError(f"Gmail didn't respond ({reason}) after {len(RETRY_DELAYS)} retries")
             await asyncio.sleep(RETRY_DELAYS[attempt])
         if response.status_code >= 400:
             message = (_json(response).get("error") or {}).get("message") if isinstance(_json(response).get("error"), dict) else None

@@ -657,8 +657,6 @@ async def test_job_runs_summary_empty(api):
 
 
 async def test_job_runs_summary_marks_last_failure_recovered_after_a_later_success(api):
-    """Regression: after the 12/13 Nov Microsoft outage the "Last failure"
-    card stayed red for a week although every poll since had succeeded."""
     client, owner_factory = api
     await login_as_platform_admin(client, owner_factory)
     org, _user = await seed_org_and_user(owner_factory)
@@ -683,7 +681,6 @@ async def test_job_runs_summary_marks_last_failure_recovered_after_a_later_succe
             await db.commit()
 
     await add(org.id, JobStatus.failure, 5)
-    # A success for a different organization doesn't count as recovery.
     await add(other_org.id, JobStatus.success, 4)
     body = (await client.get("/api/admin/job-runs/summary")).json()
     assert body["last_failure"]["recovered"] is False

@@ -30,19 +30,13 @@ class MessageTooLargeError(Exception):
 
 
 class GraphApiError(Exception):
-    """Graph refused a request. The message is shown to people as is, so it
-    never contains the request URL (a delta link carries a sync token)."""
+    """Graph refused a request. The message is shown in the UI, so no URLs."""
 
 
 class GraphUnavailableError(GraphApiError):
-    """Graph kept failing in a way that usually passes (throttling, 5xx,
-    timeouts) after every retry. A poll stops on it rather than skipping the
-    message, so the delta link isn't moved past anything unread."""
+    """Still throttled, 5xx or timing out after all retries."""
 
 
-# Waits before each retry of a temporary failure. A Microsoft 365 outage
-# (12/13 Nov 2026) showed up as 502s; a few short retries ride out a blip
-# without holding a poll for minutes when the outage is real.
 _RETRY_DELAYS = (2.0, 5.0, 15.0)
 _MAX_RETRY_AFTER = 60.0
 _TRANSIENT_STATUSES = {429, 500, 502, 503, 504}
@@ -67,8 +61,7 @@ def _graph_error_detail(resp: httpx.Response) -> str:
 
 def _unavailable(reason: str) -> GraphUnavailableError:
     return GraphUnavailableError(
-        f"Microsoft 365 didn't respond ({reason}), also not after {len(_RETRY_DELAYS)} automatic retries. "
-        "Nothing was skipped: the next poll continues where this one stopped."
+        f"Microsoft 365 didn't respond ({reason}) after {len(_RETRY_DELAYS)} retries"
     )
 
 
@@ -87,9 +80,7 @@ def _retry_delay(attempt: int, resp: httpx.Response | None) -> float:
 
 
 async def _with_retries(request, url_kind: str):
-    """Runs `request()` (which returns a value or raises) and retries it on
-    throttling, 5xx and network errors. `request` raises _Transient for a
-    retryable answer; any other exception goes straight through."""
+    """Retries `request()` on _Transient and network errors."""
     for attempt in range(len(_RETRY_DELAYS) + 1):
         try:
             return await request()

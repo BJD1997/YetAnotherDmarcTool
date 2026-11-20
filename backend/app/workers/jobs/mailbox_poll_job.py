@@ -148,9 +148,7 @@ async def _do_poll(organization_id: uuid.UUID, tenant_id: str | None) -> None:
                     stats["errors"] += 1
                     continue
                 except GraphUnavailableError:
-                    # Microsoft 365 itself is down, not this message: stop
-                    # the run so delta_link isn't moved past it. Reports
-                    # already committed are skipped next time (idempotent).
+                    # Stop without advancing delta_link so the message is retried.
                     raise
                 except Exception:
                     # A single inaccessible/malformed message shouldn't sink
