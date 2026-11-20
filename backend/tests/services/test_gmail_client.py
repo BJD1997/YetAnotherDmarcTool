@@ -36,6 +36,8 @@ def google(monkeypatch):
                 return httpx.Response(401, json={"error": state["grant"]})
             return httpx.Response(200, json={"access_token": "tok", "expires_in": 3600})
         assert request.headers["Authorization"] == "Bearer tok"
+        if state.get("failures"):
+            return httpx.Response(state["failures"].pop(0))
         path = request.url.path.split("/users/dmarc@acme.example/")[1]
         if path == "labels/INBOX":
             return httpx.Response(200, json={"messagesTotal": 7})
@@ -99,3 +101,19 @@ def test_a_bad_key_is_reported(monkeypatch):
         gmail.load_service_account()
     monkeypatch.setattr(settings, "google_mail_service_account_json", None)
     assert gmail.load_service_account() is None
+
+
+async def test_temporary_gmail_failures_are_retried_then_reported_plainly(google, monkeypatch):
+    sleeps = []
+
+    async def _sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(gmail.asyncio, "sleep", _sleep)
+    google["failures"] = [503, 502]
+    assert await _mailbox().inbox_count() == 7
+    assert sleeps == [2.0, 5.0]
+
+    google["failures"] = [503, 503, 503, 503]
+    with pytest.raises(gmail.GmailError, match=r"^Gmail didn't respond \(HTTP 503\), also not after 3 automatic retries"):
+        await _mailbox().inbox_count()

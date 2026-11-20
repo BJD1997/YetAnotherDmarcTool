@@ -144,3 +144,36 @@ async def test_hosted_poll_skips_poison_and_keeps_going_for_other_orgs(api, monk
     async with owner_factory() as db:
         count = (await db.execute(select(func.count()).select_from(DmarcAggregateReport))).scalar_one()
     assert count == 2
+
+
+async def test_org_poll_stops_without_advancing_delta_link_when_microsoft_is_down(api, monkeypatch):
+    """A message that can't be downloaded because Microsoft 365 is down
+    (the 12/13 Nov 2026 outage) must not be skipped: skipping it and saving
+    the new delta link would lose that report for good."""
+    from app.models.enums import JobStatus
+    from app.models.job_run import JobRun
+    from app.services.graph.mailbox_poller import GraphUnavailableError
+
+    _client, owner_factory = api
+    org, _user = await seed_org_and_user(owner_factory, entra=True)
+    async with owner_factory() as db:
+        db.add(Domain(organization_id=org.id, name="example.com"))
+        db.add(MailboxConnection(organization_id=org.id, mailbox_address="reports@example.com", consent_status=ConsentStatus.granted))
+        await db.commit()
+    _mock_graph(monkeypatch, mailbox_poll_job, _aggregate("unused"))
+    outage = "Microsoft 365 didn't respond (HTTP 502), also not after 3 automatic retries."
+
+    async def _down(**_kwargs):
+        raise GraphUnavailableError(outage)
+
+    monkeypatch.setattr(mailbox_poll_job, "fetch_message_raw_mime", _down)
+
+    await mailbox_poll_job._do_poll(org.id, "tenant-id")
+
+    async with owner_factory() as db:
+        connection = (await db.execute(select(MailboxConnection).where(MailboxConnection.organization_id == org.id))).scalar_one()
+        run = (await db.execute(select(JobRun).where(JobRun.organization_id == org.id))).scalar_one()
+    assert connection.delta_link is None
+    assert connection.last_sync_status == SyncStatus.error
+    assert connection.last_sync_error == outage
+    assert run.status == JobStatus.failure

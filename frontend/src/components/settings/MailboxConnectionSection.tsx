@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Mail, RefreshCw, ChevronDown, ChevronUp, History } from "lucide-react";
 import { ApiError } from "../../api/client";
 import { ReportFreshnessValue } from "../overview/widgets";
+import { groupFailureStreaks } from "../shared/failureStreaks";
 import {
   useMailboxConnection,
   useMailboxJobRuns,
@@ -489,12 +490,19 @@ function RecentSyncs() {
             </tr>
           </thead>
           <tbody>
-            {(data ?? []).map((run) => (
+            {groupFailureStreaks(data ?? [], () => "mailbox").map(({ run, streak }) => (
               <tr key={run.id}>
-                <td>{new Date(run.started_at).toLocaleString()}</td>
                 <td>
+                  {new Date(run.started_at).toLocaleString()}
+                  {streak && (
+                    <div className="muted" style={{ fontSize: "0.78rem" }}>
+                      since {new Date(streak[streak.length - 1].started_at).toLocaleString()}
+                    </div>
+                  )}
+                </td>
+                <td style={{ whiteSpace: "nowrap" }}>
                   <span className={`badge badge--${run.status === "success" ? "good" : run.status === "failure" ? "critical" : "warning"}`}>
-                    {run.status}
+                    {streak ? `${run.status} ×${streak.length}` : run.status}
                   </span>
                 </td>
                 <td className="num">{run.stats?.messages_seen ?? "—"}</td>

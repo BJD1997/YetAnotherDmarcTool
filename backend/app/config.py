@@ -82,7 +82,8 @@ class Settings(BaseSettings):
     hosted_reports_tenant_id: str | None = None
     hosted_reports_mailbox_address: str | None = None
     # How the hosted mailbox is read: Microsoft 365 (HOSTED_REPORTS_TENANT_ID
-    # and the mail app) or IMAP (the HOSTED_REPORTS_IMAP_* settings below).
+    # and the mail app), IMAP (the HOSTED_REPORTS_IMAP_* settings below) or
+    # Google Workspace (the Google service account, see GOOGLE_MAIL_*).
     hosted_reports_source: Literal["microsoft", "imap", "google"] = "microsoft"
     # IMAP: set by the platform admin, so a private address is allowed here.
     hosted_reports_imap_host: str | None = None

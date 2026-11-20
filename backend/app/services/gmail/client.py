@@ -2,6 +2,7 @@
 (domain-wide delegation, scope gmail.modify), with the Gmail REST API. No
 Google libraries: the token request is a JWT signed with PyJWT."""
 
+import asyncio
 import base64
 import dataclasses
 import json
@@ -22,6 +23,11 @@ GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users"
 AUTHSERV_ID = "mx.google.com"
 UNREAD_QUERY = "is:unread in:inbox"
 MAX_MESSAGES_PER_POLL = 500
+# Waits before each retry of a temporary Gmail failure (throttling, 5xx,
+# network). Same idea as the Microsoft 365 poller: ride out a blip, give up
+# quickly when the outage is real; unread messages are read next poll.
+RETRY_DELAYS = (2.0, 5.0, 15.0)
+_TRANSIENT_STATUSES = {429, 500, 502, 503, 504}
 
 client_factory: Callable[[], httpx.AsyncClient] = lambda: httpx.AsyncClient(timeout=20)
 _tokens: dict[str, tuple[float, str]] = {}
@@ -121,11 +127,22 @@ class GmailMailbox:
     async def _call(self, method: str, path: str, **kwargs) -> dict:
         token = await access_token(self._account, self._address)
         url = f"{GMAIL_API}/{quote(self._address, safe='@')}/{path}"
-        try:
-            async with client_factory() as client:
-                response = await client.request(method, url, headers={"Authorization": f"Bearer {token}"}, **kwargs)
-        except httpx.HTTPError as exc:
-            raise GmailError(f"couldn't reach Gmail: {exc.__class__.__name__}") from exc
+        for attempt in range(len(RETRY_DELAYS) + 1):
+            try:
+                async with client_factory() as client:
+                    response = await client.request(method, url, headers={"Authorization": f"Bearer {token}"}, **kwargs)
+            except httpx.HTTPError as exc:
+                reason = exc.__class__.__name__
+            else:
+                if response.status_code not in _TRANSIENT_STATUSES:
+                    break
+                reason = f"HTTP {response.status_code}"
+            if attempt == len(RETRY_DELAYS):
+                raise GmailError(
+                    f"Gmail didn't respond ({reason}), also not after {len(RETRY_DELAYS)} automatic retries. "
+                    "Nothing was skipped: unread reports are read on the next poll."
+                )
+            await asyncio.sleep(RETRY_DELAYS[attempt])
         if response.status_code >= 400:
             message = (_json(response).get("error") or {}).get("message") if isinstance(_json(response).get("error"), dict) else None
             raise GmailError(f"Gmail answered {response.status_code}: {message or 'request refused'}")

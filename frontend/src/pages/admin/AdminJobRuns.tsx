@@ -3,7 +3,8 @@ import { RefreshCw } from "lucide-react";
 import { LoadMoreButton } from "../../components/shared/LoadMoreButton";
 import { DateRangeFilter, EMPTY_DATE_RANGE, setDateRangeParams } from "../../components/shared/DateRangeFilter";
 import { ReportFreshnessValue, RiskTile } from "../../components/overview/widgets";
-import { useAdminJobRuns, useAdminJobRunsSummary, useAdminOrganizationNames } from "../../hooks/useAdmin";
+import { groupFailureStreaks } from "../../components/shared/failureStreaks";
+import { type AdminJobRun, useAdminJobRuns, useAdminJobRunsSummary, useAdminOrganizationNames } from "../../hooks/useAdmin";
 
 const JOB_TYPES = ["mailbox_poll", "dns_check"];
 const STATUSES = ["success", "failure"];
@@ -13,6 +14,7 @@ export default function AdminJobRuns() {
   const [jobTypeFilter, setJobTypeFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [dateRange, setDateRange] = useState(EMPTY_DATE_RANGE);
+  const [openStreaks, setOpenStreaks] = useState<Set<string>>(new Set());
 
   const { data: orgs = [] } = useAdminOrganizationNames();
   const orgNameById = new Map(orgs.map((o) => [o.id, o.name]));
@@ -27,6 +29,14 @@ export default function AdminJobRuns() {
 
   const query = useAdminJobRuns(params.toString());
   const runs = query.data?.pages.flatMap((p) => p.job_runs) ?? [];
+  const rows = groupFailureStreaks(runs, (r) => `${r.job_type}|${r.organization_id ?? ""}|${r.domain_id ?? ""}`);
+  const toggleStreak = (id: string) =>
+    setOpenStreaks((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   return (
     <section>
@@ -62,13 +72,14 @@ export default function AdminJobRuns() {
               <div className="stat-tile-label">Since last mailbox poll</div>
             </div>
             <RiskTile
-              label="Last failure"
+              label={summary.last_failure?.recovered ? "Last failure (recovered)" : "Last failure"}
               value={summary.last_failure ? new Date(summary.last_failure.started_at).toLocaleDateString() : "None recorded"}
-              role={summary.last_failure ? "critical" : "good"}
+              role={!summary.last_failure ? "good" : summary.last_failure.recovered ? undefined : "critical"}
             />
           </div>
           {summary.last_failure && (
             <p className="muted" style={{ marginTop: "0.6rem", marginBottom: 0, fontSize: "0.82rem" }}>
+              {summary.last_failure.recovered ? "Recovered: a later run succeeded. " : ""}
               {summary.last_failure.job_type} for{" "}
               {summary.last_failure.organization_id ? orgNameById.get(summary.last_failure.organization_id) ?? summary.last_failure.organization_id : "—"}
               {summary.last_failure.error_message ? `: ${summary.last_failure.error_message}` : ""}
@@ -127,44 +138,19 @@ export default function AdminJobRuns() {
                 </tr>
               </thead>
               <tbody>
-                {runs.map((run) => {
-                  const notable = run.status === "failure" || (typeof run.stats?.errors === "number" && run.stats.errors > 0);
-                  return (
-                    <tr key={run.id} style={notable ? { background: "var(--critical-wash)" } : undefined}>
-                      <td>{run.job_type}</td>
-                      <td>{run.organization_id ? (orgNameById.get(run.organization_id) ?? run.organization_id) : "—"}</td>
-                      <td>
-                        <span className={`badge ${run.status === "success" ? "badge--good" : "badge--critical"}`}>{run.status}</span>
-                      </td>
-                      <td style={{ whiteSpace: "nowrap" }} className="num">
-                        {new Date(run.started_at).toLocaleString()}
-                      </td>
-                      <td style={{ whiteSpace: "nowrap" }} className="num">
-                        {run.finished_at
-                          ? `${((new Date(run.finished_at).getTime() - new Date(run.started_at).getTime()) / 1000).toFixed(1)}s`
-                          : "—"}
-                      </td>
-                      <td>
-                        {run.status === "failure" && run.error_message && (
-                          <div style={{ color: "var(--critical-text)", marginBottom: run.stats ? "0.25rem" : 0 }}>{run.error_message}</div>
-                        )}
-                        {run.stats && Object.keys(run.stats).length > 0 && (
-                          <div className="chip-row" style={{ fontSize: "0.78rem" }}>
-                            {Object.entries(run.stats).map(([k, v]) => (
-                              <span
-                                key={k}
-                                className="muted"
-                                style={k === "errors" && typeof v === "number" && v > 0 ? { color: "var(--critical-text)" } : undefined}
-                              >
-                                {k}: {String(v)}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                        {!run.error_message && !run.stats && "—"}
-                      </td>
-                    </tr>
-                  );
+                {rows.map(({ run, streak }) => {
+                  const open = streak !== undefined && openStreaks.has(run.id);
+                  return [
+                    <JobRunRow
+                      key={run.id}
+                      run={run}
+                      orgName={orgNameById}
+                      streak={streak}
+                      open={open}
+                      onToggle={() => toggleStreak(run.id)}
+                    />,
+                    ...(open && streak ? streak.map((r) => <JobRunRow key={`${run.id}:${r.id}`} run={r} orgName={orgNameById} nested />) : []),
+                  ];
                 })}
               </tbody>
             </table>
@@ -174,5 +160,71 @@ export default function AdminJobRuns() {
 
       <LoadMoreButton hasNextPage={query.hasNextPage} isFetchingNextPage={query.isFetchingNextPage} onClick={() => query.fetchNextPage()} />
     </section>
+  );
+}
+
+function JobRunRow({
+  run,
+  orgName,
+  streak,
+  open = false,
+  onToggle,
+  nested = false,
+}: {
+  run: AdminJobRun;
+  orgName: Map<string, string>;
+  /** Every failure folded into this row, newest first (2 or more). */
+  streak?: AdminJobRun[];
+  open?: boolean;
+  onToggle?: () => void;
+  /** One run of an expanded streak, shown under its summary row. */
+  nested?: boolean;
+}) {
+  const notable = run.status === "failure" || (typeof run.stats?.errors === "number" && run.stats.errors > 0);
+  const oldest = streak?.[streak.length - 1];
+  return (
+    <tr style={notable ? { background: "var(--critical-wash)", opacity: nested ? 0.85 : undefined } : undefined}>
+      <td style={nested ? { paddingLeft: "1.5rem" } : undefined}>{run.job_type}</td>
+      <td>{run.organization_id ? (orgName.get(run.organization_id) ?? run.organization_id) : "—"}</td>
+      <td style={{ whiteSpace: "nowrap" }}>
+        <span className={`badge ${run.status === "success" ? "badge--good" : "badge--critical"}`}>
+          {streak ? `${run.status} ×${streak.length}` : run.status}
+        </span>
+      </td>
+      <td style={{ whiteSpace: "nowrap" }} className="num">
+        {new Date(run.started_at).toLocaleString()}
+        {oldest && <div className="muted" style={{ fontSize: "0.78rem" }}>since {new Date(oldest.started_at).toLocaleString()}</div>}
+      </td>
+      <td style={{ whiteSpace: "nowrap" }} className="num">
+        {run.finished_at ? `${((new Date(run.finished_at).getTime() - new Date(run.started_at).getTime()) / 1000).toFixed(1)}s` : "—"}
+      </td>
+      <td>
+        {run.status === "failure" && run.error_message && (
+          <div style={{ color: "var(--critical-text)", marginBottom: run.stats ? "0.25rem" : 0 }}>
+            {streak ? "Latest: " : ""}
+            {run.error_message}
+          </div>
+        )}
+        {!streak && run.stats && Object.keys(run.stats).length > 0 && (
+          <div className="chip-row" style={{ fontSize: "0.78rem" }}>
+            {Object.entries(run.stats).map(([k, v]) => (
+              <span
+                key={k}
+                className="muted"
+                style={k === "errors" && typeof v === "number" && v > 0 ? { color: "var(--critical-text)" } : undefined}
+              >
+                {k}: {String(v)}
+              </span>
+            ))}
+          </div>
+        )}
+        {streak && (
+          <button type="button" className="btn btn--secondary btn--sm" style={{ marginTop: "0.35rem" }} onClick={onToggle} aria-expanded={open}>
+            {open ? "Hide the runs" : `Show all ${streak.length} runs`}
+          </button>
+        )}
+        {!run.error_message && !run.stats && !streak && "—"}
+      </td>
+    </tr>
   );
 }

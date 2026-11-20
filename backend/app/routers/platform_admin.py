@@ -953,6 +953,7 @@ async def job_runs_summary(
                 "organization_id": str(last_failure.organization_id) if last_failure.organization_id else None,
                 "started_at": last_failure.started_at.isoformat(),
                 "error_message": last_failure.error_message,
+                "recovered": stats["last_failure_recovered"],
             }
             if last_failure is not None
             else None

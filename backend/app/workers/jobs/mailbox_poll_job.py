@@ -41,7 +41,12 @@ from app.db.session import async_session_factory, engine
 from app.models.enums import ConsentStatus, JobStatus, JobType, MailboxKind, SyncStatus
 from app.models.job_run import JobRun
 from app.repositories.mailbox_connections import get_org_mailbox_connection
-from app.services.graph.mailbox_poller import MessageTooLargeError, fetch_message_raw_mime, fetch_new_message_ids
+from app.services.graph.mailbox_poller import (
+    GraphUnavailableError,
+    MessageTooLargeError,
+    fetch_message_raw_mime,
+    fetch_new_message_ids,
+)
 from app.services.gmail.poll import poll_gmail_mailbox
 from app.services.imap.poll import poll_imap_mailbox
 from app.services.ingestion import report_writer
@@ -142,6 +147,11 @@ async def _do_poll(organization_id: uuid.UUID, tenant_id: str | None) -> None:
                 except UnparseableReportError:
                     stats["errors"] += 1
                     continue
+                except GraphUnavailableError:
+                    # Microsoft 365 itself is down, not this message: stop
+                    # the run so delta_link isn't moved past it. Reports
+                    # already committed are skipped next time (idempotent).
+                    raise
                 except Exception:
                     # A single inaccessible/malformed message shouldn't sink
                     # the rest of the batch — log and move on. If the mailbox

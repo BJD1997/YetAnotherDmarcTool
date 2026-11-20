@@ -656,6 +656,44 @@ async def test_job_runs_summary_empty(api):
     assert body["reports_processed_today"] == 0
 
 
+async def test_job_runs_summary_marks_last_failure_recovered_after_a_later_success(api):
+    """Regression: after the 12/13 Nov Microsoft outage the "Last failure"
+    card stayed red for a week although every poll since had succeeded."""
+    client, owner_factory = api
+    await login_as_platform_admin(client, owner_factory)
+    org, _user = await seed_org_and_user(owner_factory)
+    now = datetime.now(timezone.utc)
+
+    from app.db.rls import set_platform_admin_context
+    from app.models.enums import JobStatus, JobType, OrganizationStatus
+    from app.models.job_run import JobRun
+    from app.models.organization import Organization
+
+    async with owner_factory() as db:
+        other_org = Organization(name="Other Org", status=OrganizationStatus.active)
+        db.add(other_org)
+        await db.commit()
+        await db.refresh(other_org)
+
+    async def add(org_id, status, hours_ago):
+        async with owner_factory() as db:
+            await set_platform_admin_context(db, is_admin=True)
+            db.add(JobRun(organization_id=org_id, job_type=JobType.mailbox_poll, status=status,
+                          started_at=now - timedelta(hours=hours_ago), error_message="down" if status == JobStatus.failure else None))
+            await db.commit()
+
+    await add(org.id, JobStatus.failure, 5)
+    # A success for a different organization doesn't count as recovery.
+    await add(other_org.id, JobStatus.success, 4)
+    body = (await client.get("/api/admin/job-runs/summary")).json()
+    assert body["last_failure"]["recovered"] is False
+
+    await add(org.id, JobStatus.success, 3)
+    body = (await client.get("/api/admin/job-runs/summary")).json()
+    assert body["last_failure"]["organization_id"] == str(org.id)
+    assert body["last_failure"]["recovered"] is True
+
+
 async def test_entra_consent_callback_success():
     """Unauthenticated, no DB fixture needed — this endpoint does no DB
     writes at all (see its own docstring)."""

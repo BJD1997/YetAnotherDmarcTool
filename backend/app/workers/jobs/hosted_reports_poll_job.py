@@ -21,7 +21,12 @@ from app.db.session import async_session_factory, engine
 from app.models.enums import ImapSecurity, SyncStatus
 from app.repositories.domains import list_domains_with_hosted_report_address
 from app.repositories.mailbox_connections import get_or_create_hosted_reports_poll_state
-from app.services.graph.mailbox_poller import MessageTooLargeError, fetch_message_raw_mime, fetch_new_message_ids
+from app.services.graph.mailbox_poller import (
+    GraphUnavailableError,
+    MessageTooLargeError,
+    fetch_message_raw_mime,
+    fetch_new_message_ids,
+)
 from app.services.gmail.client import AUTHSERV_ID as GMAIL_AUTHSERV_ID
 from app.services.gmail.poll import mailbox_for as gmail_mailbox_for
 from app.services.gmail.poll import message_id as gmail_message_id
@@ -97,6 +102,10 @@ async def _do_poll() -> None:
                     logger.warning("skipped hosted-reports message: %s", exc)
                     errors += 1
                     continue
+                except GraphUnavailableError:
+                    # Microsoft 365 is down, not this message: stop so the
+                    # delta link isn't moved past it (see mailbox_poll_job).
+                    raise
                 except Exception:
                     logger.exception("failed to fetch hosted-reports message %s", message_id)
                     errors += 1
