@@ -4,7 +4,7 @@ import type { DmarcPolicy } from "../../api/policyBuilder";
 import { useOnboardingStatus } from "../../hooks/useOnboarding";
 import { useClipboardFeedback } from "../../hooks/useClipboardFeedback";
 import { useDmarcPolicyBuilder } from "../../hooks/usePolicyBuilders";
-import { asPolicy, findRelaxations } from "./dmarcInheritance";
+import { asPolicy, findRelaxations, isRelaxation } from "./dmarcInheritance";
 import HostedAddressRow from "./HostedAddressRow";
 import { sameAddress } from "./sameAddress";
 import { useHostedAddress } from "./useHostedAddress";
@@ -124,7 +124,12 @@ export default function PolicyBuilder({ domainId, domainName, onClose }: { domai
   const generated = data ? buildRecord({ policy, sp, np, adkim, aspf, rua: selectedRua }) : "";
   const ruaInfo = data ? RUA_STATUS_TEXT[data.rua_destination.status] : null;
   const currentHasPct = !!data?.current_record?.tags.pct;
+  const inherited = data?.inherited_policy ?? null;
   const relaxations = data ? findRelaxations(data.current_record?.tags, policy, sp, np) : [];
+  // No record of its own: the parent's policy is what applies today.
+  if (inherited?.policy && isRelaxation(inherited.policy, policy)) {
+    relaxations.push(`${inherited.tag}=${inherited.policy} (from ${inherited.from_domain}) → p=${policy}`);
+  }
   const orgMailbox = data?.org_mailbox_address ?? null;
   const otherTargets = data
     ? data.rua_destination.current_targets.filter((t) => !sameAddress(t, orgMailbox) && !sameAddress(t, data.hosted_report_address))
@@ -160,7 +165,11 @@ export default function PolicyBuilder({ domainId, domainName, onClose }: { domai
               {data.org_mailbox_address ? (
                 <div className="chip-row">
                   <code>{data.org_mailbox_address}</code>
-                  {ruaInfo && <span className={`badge badge--${ruaInfo.role}`}>{ruaInfo.text}</span>}
+                  {inherited && data.rua_destination.status === "not_configured" ? (
+                    <span className="badge badge--neutral">No record of its own yet</span>
+                  ) : (
+                    ruaInfo && <span className={`badge badge--${ruaInfo.role}`}>{ruaInfo.text}</span>
+                  )}
                 </div>
               ) : hostedMailboxAvailable ? (
                 <span className="badge badge--warning">No report destination yet — generate a hosted address below</span>
@@ -206,6 +215,25 @@ export default function PolicyBuilder({ domainId, domainName, onClose }: { domai
                 authWarning={hostedState.authWarning}
               />
             </div>
+
+            {inherited && (
+              <div className="alert alert--neutral">
+                <div style={{ fontWeight: 600 }}>
+                  Covered by {inherited.from_domain}: {inherited.tag}={inherited.policy ?? "not set"}
+                </div>
+                <div style={{ marginTop: "0.25rem" }}>
+                  {domainName} has no DMARC record of its own, so receivers use {inherited.from_domain}'s record.{" "}
+                  {inherited.rua.length > 0 ? (
+                    <>
+                      Its reports go to <code>{inherited.rua.join(", ")}</code>, not to your report address.
+                    </>
+                  ) : (
+                    <>That record has no rua=, so no reports are sent for it.</>
+                  )}{" "}
+                  Publishing the record below gives {domainName} its own policy and sends its reports to you.
+                </div>
+              </div>
+            )}
 
             {currentHasPct && (
               <div className="alert alert--warning">
@@ -265,6 +293,8 @@ export default function PolicyBuilder({ domainId, domainName, onClose }: { domai
               </div>
               <p className="section-hint" style={{ marginTop: 0, marginBottom: "0.4rem" }}>
                 For subdomains that exist but publish no DMARC record of their own.
+                {inherited &&
+                  ` Here that means subdomains of ${domainName}; receivers that follow the older DMARC rules use ${inherited.from_domain}'s policy for them instead.`}
               </p>
               <select className="input" value={sp} onChange={(e) => setSp(e.target.value as DmarcPolicy | "")}>
                 <option value="">Same as main domain</option>

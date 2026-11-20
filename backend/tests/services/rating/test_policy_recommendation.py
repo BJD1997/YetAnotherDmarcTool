@@ -1,5 +1,6 @@
 from app.models.domain import Domain
 from app.models.enums import DomainMailProfile
+from app.services.dns_checks.dmarc_record import InheritedPolicy
 from app.services.rating.domain_rating import PolicyReadiness
 from app.services.rating.policy_recommendation import build_policy_recommendation
 from app.services.rating.score import DomainRating, RatingFactor
@@ -138,3 +139,23 @@ def test_already_at_reject_has_nothing_further_to_recommend():
     assert rec["policy"] == "reject"
     assert "nothing further" in rec["reasoning"]
     assert rec["np"] == "reject"
+
+
+def test_monitor_only_says_it_lowers_what_the_parent_gives_today():
+    inherited = InheritedPolicy(from_domain="example.com", policy="reject", tag="p", rua=[])
+    rec = build_policy_recommendation(
+        domain=_domain(), rating=_rating(insufficient_data=True), total=0, readiness=_readiness(), stability_days=0,
+        blockers=[], inherited=inherited,
+    )
+    assert rec["policy"] == "none"
+    assert "covered by example.com's p=reject" in rec["reasoning"]
+    assert "Move back to p=reject" in rec["reasoning"]
+
+
+def test_no_note_when_the_recommendation_is_as_strong_as_the_parent():
+    inherited = InheritedPolicy(from_domain="example.com", policy="none", tag="p", rua=[])
+    rec = build_policy_recommendation(
+        domain=_domain(), rating=_rating(insufficient_data=True), total=0, readiness=_readiness(), stability_days=0,
+        blockers=[], inherited=inherited,
+    )
+    assert "covered by" not in rec["reasoning"]

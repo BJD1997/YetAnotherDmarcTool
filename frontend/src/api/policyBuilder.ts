@@ -30,6 +30,15 @@ export interface PolicyRecommendation {
   blocking_reason: string | null;
 }
 
+// The policy a domain without a record of its own gets from its parent
+// today — the parent may be outside this organization.
+export interface InheritedPolicy {
+  from_domain: string;
+  policy: DmarcPolicy | null;
+  tag: "p" | "sp";
+  rua: string[];
+}
+
 export interface PolicyBuilderData {
   current_record: DmarcCurrentRecord | null;
   current_record_lookup_error: boolean;
@@ -40,4 +49,5 @@ export interface PolicyBuilderData {
   has_own_mailbox: boolean;
   policy_stability_days: number;
   recommendation: PolicyRecommendation;
+  inherited_policy: InheritedPolicy | null;
 }

@@ -10,6 +10,7 @@ from app.db.rls import set_org_context
 from app.db.session import get_db, get_read_db
 from app.middleware.tenant_context import get_current_user, require_org_admin
 from app.models.dmarc_aggregate import DmarcAggregateReport
+from app.models.domain import Domain
 from app.models.enums import AuthResult, Disposition, DomainMailProfile, DomainVerificationStatus
 from app.models.sender_review import SenderReview
 from app.models.tls_rpt import TlsRptReport
@@ -24,7 +25,13 @@ from app.services.action_queue.rules import reviewed_service_labels, unreviewed_
 from app.services.dmarc_analytics import service_breakdown, service_breakdown_multi
 from app.services.ingestion.sender_auth import SenderAuth, can_be_trusted, decide, left_out_reason
 from app.services.dmarc_narrative import dkim_narratives, spf_narratives
-from app.services.dns_checks.dmarc_record import DmarcRecordInfo, check_rua_destination, fetch_current_dmarc_record
+from app.services.dns_checks.dmarc_record import (
+    DmarcRecordInfo,
+    InheritedPolicy,
+    check_rua_destination,
+    fetch_current_dmarc_record,
+    fetch_inherited_policy,
+)
 from app.services.dns_checks.resolver import DnsLookupError
 from app.services.notifications.sources import detected_domain_items
 from app.services.overview.posture import compute_posture
@@ -707,6 +714,19 @@ async def dmarc_policy_builder(
         current = None
         lookup_error = True
 
+    # No record of its own: receivers use the parent's, which may live
+    # outside this organization (see policy_parent_domain).
+    inherited: InheritedPolicy | None = None
+    if current is None and not lookup_error:
+        parent_name = None
+        if domain.parent_domain_id is not None:
+            parent = await db.get(Domain, domain.parent_domain_id)
+            parent_name = parent.name if parent is not None else None
+        try:
+            inherited = await fetch_inherited_policy(domain.name, parent_name)
+        except DnsLookupError:
+            inherited = None
+
     if destination is not None:
         rua_result = await check_rua_destination(domain.name, destination)
         rua_destination = {"status": rua_result.status, "current_targets": rua_result.current_targets}
@@ -723,7 +743,13 @@ async def dmarc_policy_builder(
     await db.commit()  # persists identify_many's cache upsert from service_breakdown, see its own docstring
 
     recommendation = build_policy_recommendation(
-        domain=domain, rating=rating, total=total, readiness=readiness, stability_days=stability_days, blockers=blockers
+        domain=domain,
+        rating=rating,
+        total=total,
+        readiness=readiness,
+        stability_days=stability_days,
+        blockers=blockers,
+        inherited=inherited,
     )
 
     return {
@@ -735,4 +761,9 @@ async def dmarc_policy_builder(
         "has_own_mailbox": connection is not None,
         "policy_stability_days": stability_days,
         "recommendation": recommendation,
+        "inherited_policy": (
+            {"from_domain": inherited.from_domain, "policy": inherited.policy, "tag": inherited.tag, "rua": inherited.rua}
+            if inherited is not None
+            else None
+        ),
     }

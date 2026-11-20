@@ -6,7 +6,9 @@ library (e.g. tldextract) phones home for updates by default, which
 conflicts with this project's established no-surprise-outbound-calls
 posture (see parsedmarc_adapter.py's offline=True). This is a small,
 hardcoded exception list good enough for a "roughly whose domain" label,
-not a security-relevant boundary."""
+not a security-relevant boundary. Also tells a subdomain's DMARC check
+which parent record covers it (dmarc_record.policy_parent_domain) — same
+"roughly" standard: at worst a check reads the wrong public record."""
 
 _TWO_LABEL_SUFFIXES = {
     "co.uk", "org.uk", "me.uk", "ac.uk", "gov.uk",

@@ -41,6 +41,7 @@ function builderData(overrides: Partial<PolicyBuilderData> = {}): PolicyBuilderD
     has_own_mailbox: true,
     policy_stability_days: 0,
     recommendation: { policy: "none", np: null, reasoning: "No reports yet.", blocked: false, blocking_reason: null },
+    inherited_policy: null,
     ...overrides,
   };
 }
@@ -258,5 +259,28 @@ describe("PolicyBuilder report destination", () => {
 
     expect(screen.queryByRole("button", { name: /hosted address/ })).not.toBeInTheDocument();
     expect(screen.getByText(/No mailbox connected/)).toBeInTheDocument();
+  });
+});
+
+describe("PolicyBuilder for a subdomain covered by its parent", () => {
+  const inherited = { from_domain: "example.com", policy: "reject" as const, tag: "p" as const, rua: ["r@example.com"] };
+
+  it("says which parent policy covers the domain and where its reports go today", async () => {
+    await renderBuilder(builderData({ rua_destination: { status: "not_configured", current_targets: [] }, inherited_policy: inherited }));
+
+    expect(screen.getByText("Covered by example.com: p=reject")).toBeInTheDocument();
+    expect(screen.getByText("r@example.com")).toBeInTheDocument();
+    expect(screen.getByText("No record of its own yet")).toBeInTheDocument();
+    expect(screen.queryByText("No DMARC record published yet")).not.toBeInTheDocument();
+  });
+
+  it("warns that monitor-only lowers what the parent gives today, and not once it matches", async () => {
+    await renderBuilder(builderData({ inherited_policy: inherited }));
+
+    expect(screen.getByText("This weakens your current policy")).toBeInTheDocument();
+    expect(screen.getByText("p=reject (from example.com) → p=none")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+    await waitFor(() => expect(screen.queryByText("This weakens your current policy")).not.toBeInTheDocument());
   });
 });

@@ -6,6 +6,7 @@ this is business logic, same category as score.py's compute_rating."""
 
 from app.models.domain import Domain
 from app.models.enums import DomainMailProfile
+from app.services.dns_checks.dmarc_record import InheritedPolicy
 from app.services.rating.domain_rating import READY_TO_ENFORCE_MIN_PASS_PCT, PolicyReadiness
 from app.services.rating.score import DomainRating
 
@@ -20,6 +21,7 @@ def build_policy_recommendation(
     readiness: PolicyReadiness,
     stability_days: int,
     blockers: list[dict],
+    inherited: InheritedPolicy | None = None,
 ) -> dict:
     """DMARCbis-compliant (RFC 9989 Appendix A.6 removes pct= entirely, so
     this never generates or recommends one) — mirrors the two worked
@@ -39,7 +41,28 @@ def build_policy_recommendation(
         domain=domain, rating=rating, total=total, readiness=readiness, stability_days=stability_days, blockers=blockers
     )
     recommendation["np"] = _recommend_np(recommendation["policy"])
+    _note_inherited(recommendation, inherited)
     return recommendation
+
+
+_STRENGTH = {"none": 0, "quarantine": 1, "reject": 2}
+
+
+def _note_inherited(recommendation: dict, inherited: InheritedPolicy | None) -> None:
+    """A domain without a record of its own is already covered by its
+    parent's policy. The recommendation still starts from this domain's own
+    data (monitor-only while there are no reports, so nothing unexpected
+    gets blocked), but says plainly when publishing it lowers what the
+    parent gives it today."""
+    if inherited is None or inherited.policy is None:
+        return
+    if _STRENGTH[recommendation["policy"]] >= _STRENGTH[inherited.policy]:
+        return
+    recommendation["reasoning"] += (
+        f" Today this domain is covered by {inherited.from_domain}'s {inherited.tag}={inherited.policy}: "
+        f"publishing p={recommendation['policy']} lowers that while reports come in. Move back to "
+        f"p={inherited.policy} once they look clean."
+    )
 
 
 def _recommend_np(recommended_policy: str) -> str | None:

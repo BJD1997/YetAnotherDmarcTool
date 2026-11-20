@@ -7,7 +7,13 @@ only checked the subdomain's own (usually absent) record."""
 
 from unittest.mock import patch
 
-from app.services.dns_checks.dmarc_record import DmarcRecordInfo, resolve_effective_policy
+from app.services.dns_checks.dmarc_record import (
+    DmarcRecordInfo,
+    InheritedPolicy,
+    fetch_inherited_policy,
+    policy_parent_domain,
+    resolve_effective_policy,
+)
 from app.services.dns_checks.resolver import DnsLookupError
 
 
@@ -83,3 +89,40 @@ async def test_lookup_failure_on_parent_yields_none():
     with patch("app.services.dns_checks.dmarc_record.fetch_current_dmarc_record", fake):
         policy = await resolve_effective_policy("sub.example.com", "example.com")
     assert policy is None
+
+
+# --- A parent outside the organization (policy_parent_domain) ---
+
+
+def test_parent_in_the_organization_wins():
+    assert policy_parent_domain("a.b.example.com", "b.example.com") == "b.example.com"
+
+
+def test_subdomain_without_parent_in_the_organization_falls_back_to_its_registered_domain():
+    assert policy_parent_domain("gtest.example.com") == "example.com"
+    assert policy_parent_domain("mail.example.co.uk") == "example.co.uk"
+
+
+def test_registered_domain_has_no_parent():
+    assert policy_parent_domain("example.com") is None
+    assert policy_parent_domain("Example.COM.") is None
+
+
+async def test_inherited_policy_comes_from_the_registered_domain():
+    record = DmarcRecordInfo(raw="v=DMARC1; p=reject; rua=mailto:r@example.com", tags={"p": "reject", "rua": "mailto:r@example.com"})
+    with _fetch({"example.com": record}):
+        inherited = await fetch_inherited_policy("gtest.example.com")
+    assert inherited == InheritedPolicy(from_domain="example.com", policy="reject", tag="p", rua=["r@example.com"])
+
+
+async def test_inherited_policy_prefers_the_parents_sp():
+    with _fetch({"example.com": _record(p="reject", sp="none")}):
+        inherited = await fetch_inherited_policy("gtest.example.com")
+    assert (inherited.policy, inherited.tag) == ("none", "sp")
+
+
+async def test_no_inherited_policy_without_a_parent_record_or_parent():
+    with _fetch({"example.com": None}):
+        assert await fetch_inherited_policy("gtest.example.com") is None
+    with _fetch({}):
+        assert await fetch_inherited_policy("example.com") is None

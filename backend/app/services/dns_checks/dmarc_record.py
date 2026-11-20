@@ -8,6 +8,7 @@ import re
 
 from app.services.dns_checks.resolver import DnsLookupError, resolve_txt_strict
 from app.services.report_destination import ReportDestination
+from app.services.source_identification.registrable_domain import registrable_domain
 
 DMARC_PREFIX_RE = re.compile(r"(?i)^v=DMARC1(;|\s|$)")
 
@@ -79,6 +80,48 @@ async def fetch_current_dmarc_record(domain: str) -> DmarcRecordInfo | None:
     if not dmarc_records:
         return None
     return DmarcRecordInfo(raw=dmarc_records[0], tags=parse_dmarc_tags(dmarc_records[0]))
+
+
+def policy_parent_domain(domain: str, parent_domain: str | None = None) -> str | None:
+    """Where a domain without a DMARC record of its own gets its policy
+    from: the parent added in this organization, else its registered domain
+    (gtest.example.com -> example.com). The second case is a subdomain whose
+    parent lives outside the organization (another organization, or not
+    added at all) — receivers fall back to that domain's record all the
+    same. None for a registered domain itself."""
+    if parent_domain:
+        return parent_domain
+    base = registrable_domain(domain)
+    return base if base != domain.rstrip(".").lower() else None
+
+
+@dataclasses.dataclass(frozen=True)
+class InheritedPolicy:
+    from_domain: str
+    policy: str | None  # the parent's effective sp= — None when missing or invalid
+    tag: str  # "sp" or "p": where the policy came from
+    rua: list[str]  # reports about this domain go to the parent's rua=
+
+
+async def fetch_inherited_policy(domain: str, parent_domain: str | None = None) -> InheritedPolicy | None:
+    """The policy a domain without a record of its own currently gets from
+    its parent (see policy_parent_domain), or None when there's no parent
+    or the parent has no DMARC record either. Raises DnsLookupError like
+    fetch_current_dmarc_record. Only call it for a domain confirmed to have
+    no record of its own."""
+    parent = policy_parent_domain(domain, parent_domain)
+    if parent is None:
+        return None
+    record = await fetch_current_dmarc_record(parent)
+    if record is None:
+        return None
+    sp = effective_policies(record.tags)["sp"]
+    return InheritedPolicy(
+        from_domain=parent,
+        policy=sp.policy,
+        tag="p" if sp.inherited else "sp",
+        rua=parse_mailto_targets(record.tags.get("rua", "")),
+    )
 
 
 async def resolve_effective_policy(domain: str, parent_domain: str | None = None) -> str | None:

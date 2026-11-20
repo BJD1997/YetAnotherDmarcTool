@@ -6,7 +6,7 @@ from app.config import settings
 from app.models.enums import CheckType, DomainMailProfile, SpfAllQualifierMode
 from app.services.dns_checks import dane, dkim, dmarc, dmarcbis, mta_sts, mx, spf, starttls, tls_rpt_check
 from app.services.dns_checks.base import Finding
-from app.services.dns_checks.dmarc_record import resolve_effective_policy
+from app.services.dns_checks.dmarc_record import policy_parent_domain, resolve_effective_policy
 from app.services.report_destination import ReportDestination
 
 
@@ -27,6 +27,9 @@ async def run_all(
     # subdomain never gets credited for its own ~all under conditional
     # mode, since dmarc_policy would silently resolve to None even though
     # its mail really is being enforced under the parent's p=reject.
+    # A subdomain whose parent isn't in this organization still falls back
+    # to that parent's record (see policy_parent_domain).
+    parent_domain_name = policy_parent_domain(domain_name, parent_domain_name)
     dmarc_policy = await resolve_effective_policy(domain_name, parent_domain_name)
 
     return {
