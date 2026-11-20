@@ -49,12 +49,6 @@ async def run_and_persist_checks(db: AsyncSession, domain: Domain, org: Organiza
     selectors = await list_selectors_for_domain(db, domain.id)
     selector_id_by_name = {s.selector: s.id for s in selectors}
 
-    parent_domain_name = None
-    if domain.parent_domain_id is not None:
-        parent = await db.get(Domain, domain.parent_domain_id)
-        if parent is not None:
-            parent_domain_name = parent.name
-
     # One rule for every place that needs it: see app/services/report_destination.py.
     connection = await get_org_mailbox_connection(db, domain.organization_id)
     destination = report_destination(domain, connection)
@@ -64,7 +58,6 @@ async def run_and_persist_checks(db: AsyncSession, domain: Domain, org: Organiza
         [s.selector for s in selectors],
         domain.mail_profile,
         org.spf_all_qualifier_mode,
-        parent_domain_name,
         destination,
     )
     # TLS-RPT mode needs the domain's reports, so it runs here rather than

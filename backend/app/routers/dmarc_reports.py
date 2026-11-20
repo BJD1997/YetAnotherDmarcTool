@@ -10,7 +10,6 @@ from app.db.rls import set_org_context
 from app.db.session import get_db, get_read_db
 from app.middleware.tenant_context import get_current_user, require_org_admin
 from app.models.dmarc_aggregate import DmarcAggregateReport
-from app.models.domain import Domain
 from app.models.enums import AuthResult, Disposition, DomainMailProfile, DomainVerificationStatus
 from app.models.sender_review import SenderReview
 from app.models.tls_rpt import TlsRptReport
@@ -714,16 +713,12 @@ async def dmarc_policy_builder(
         current = None
         lookup_error = True
 
-    # No record of its own: receivers use the parent's, which may live
-    # outside this organization (see policy_parent_domain).
+    # No record of its own: receivers use the first record up the tree,
+    # which may live outside this organization (see fetch_inherited_policy).
     inherited: InheritedPolicy | None = None
     if current is None and not lookup_error:
-        parent_name = None
-        if domain.parent_domain_id is not None:
-            parent = await db.get(Domain, domain.parent_domain_id)
-            parent_name = parent.name if parent is not None else None
         try:
-            inherited = await fetch_inherited_policy(domain.name, parent_name)
+            inherited = await fetch_inherited_policy(domain.name)
         except DnsLookupError:
             inherited = None
 

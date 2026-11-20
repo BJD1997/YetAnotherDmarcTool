@@ -64,18 +64,3 @@ def test_effective_mode(monkeypatch, mode, enabled, expected):
 async def test_tls_rpt_mode_does_not_probe(stubbed_checks, monkeypatch):
     monkeypatch.setattr(settings, "starttls_check_mode", "tls_rpt")
     assert (await registry.run_all("example.com", []))[CheckType.starttls] == []
-
-
-async def test_a_subdomain_whose_parent_is_outside_the_organization_still_inherits(stubbed_checks, monkeypatch):
-    seen = {}
-
-    async def _dmarc(domain, parent_domain=None, destination=None):
-        seen["parent"] = parent_domain
-        return [Finding(status="pass", summary="ok")]
-
-    monkeypatch.setattr(registry.dmarc, "check", _dmarc)
-    monkeypatch.setattr(settings, "starttls_check_enabled", False)
-
-    await registry.run_all("gtest.example.com", [])
-
-    assert seen["parent"] == "example.com"

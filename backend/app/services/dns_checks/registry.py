@@ -6,7 +6,7 @@ from app.config import settings
 from app.models.enums import CheckType, DomainMailProfile, SpfAllQualifierMode
 from app.services.dns_checks import dane, dkim, dmarc, dmarcbis, mta_sts, mx, spf, starttls, tls_rpt_check
 from app.services.dns_checks.base import Finding
-from app.services.dns_checks.dmarc_record import policy_parent_domain, resolve_effective_policy
+from app.services.dns_checks.dmarc_record import resolve_effective_policy
 from app.services.report_destination import ReportDestination
 
 
@@ -15,7 +15,6 @@ async def run_all(
     dkim_selectors: list[str],
     mail_profile: DomainMailProfile = DomainMailProfile.sends_mail,
     spf_all_qualifier_mode: SpfAllQualifierMode = SpfAllQualifierMode.strict,
-    parent_domain_name: str | None = None,
     destination: ReportDestination | None = None,
 ) -> dict[CheckType, list[Finding]]:
     # Fetched once here (rather than inside spf.py itself) since spf.py is a
@@ -27,15 +26,12 @@ async def run_all(
     # subdomain never gets credited for its own ~all under conditional
     # mode, since dmarc_policy would silently resolve to None even though
     # its mail really is being enforced under the parent's p=reject.
-    # A subdomain whose parent isn't in this organization still falls back
-    # to that parent's record (see policy_parent_domain).
-    parent_domain_name = policy_parent_domain(domain_name, parent_domain_name)
-    dmarc_policy = await resolve_effective_policy(domain_name, parent_domain_name)
+    dmarc_policy = await resolve_effective_policy(domain_name)
 
     return {
         CheckType.spf: await spf.check(domain_name, mail_profile, dmarc_policy, spf_all_qualifier_mode),
         CheckType.dkim: await dkim.check(domain_name, dkim_selectors, mail_profile),
-        CheckType.dmarc: await dmarc.check(domain_name, parent_domain_name, destination),
+        CheckType.dmarc: await dmarc.check(domain_name, destination),
         CheckType.dmarcbis: await dmarcbis.check(domain_name),
         CheckType.mx: await mx.check(domain_name),
         CheckType.mta_sts: await mta_sts.check(domain_name),

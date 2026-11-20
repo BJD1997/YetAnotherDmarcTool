@@ -18,7 +18,7 @@ import re
 from app.services.dns_checks.base import Finding
 from app.services.dns_checks.dmarc_record import (
     DMARC_PREFIX_RE,
-    effective_policies,
+    fetch_inherited_policy,
     parse_dmarc_tags,
     parse_mailto_targets,
 )
@@ -63,41 +63,35 @@ async def _check_external_destination(record_domain: str, report_email: str, tag
     return None
 
 
-async def _check_inherited_policy(domain: str, parent_domain: str, name: str) -> list[Finding]:
-    """No _dmarc.<domain> record of its own — per RFC 7489, that's not
-    automatically a gap for a registered subdomain: it inherits the parent's
-    sp= (or p= if sp= is unset) rather than needing an explicit record of
-    its own. Only actually unprotected if the parent has no usable policy
-    either. Deliberately just sp=/p= inheritance, not the full RFC 7489
-    organizational-domain walk — same simpler-and-safer-to-over-flag
-    tradeoff _check_external_destination already documents taking. Only the
-    enforcement-policy question is inherited here — rua=/pct=/alignment are
-    about the subdomain's own reporting setup, which a subdomain with no
-    record of its own simply doesn't have, so those aren't checked against
-    the parent."""
-    parent_name = f"_dmarc.{parent_domain}"
+async def _check_inherited_policy(domain: str, name: str) -> list[Finding]:
+    """No _dmarc.<domain> record of its own — that's not automatically a
+    gap: receivers walk up the tree (RFC 9989 §4.10) and apply the first
+    record's sp= (or p= if sp= is unset), whether or not that domain is in
+    this organization. Only actually unprotected if nothing up the tree has
+    a usable policy either. Only the enforcement-policy question is
+    inherited here — rua=/pct=/alignment are about the domain's own
+    reporting setup, which a domain with no record of its own simply
+    doesn't have, so those aren't checked against the parent."""
     try:
-        parent_records = await resolve_txt_strict(parent_name)
+        inherited = await fetch_inherited_policy(domain)
     except DnsLookupError as exc:
-        return [
-            Finding(
-                status="error",
-                summary=f"No DMARC record at {name}, and couldn't check parent {parent_domain}'s policy: {exc}",
-            )
-        ]
+        return [Finding(status="error", summary=f"No DMARC record at {name}, and couldn't check the parent domains' policy: {exc}")]
 
-    parent_dmarc = [r for r in parent_records if DMARC_PREFIX_RE.match(r.strip())]
-    if not parent_dmarc:
+    if inherited is None:
         return [
             Finding(
                 status="fail",
-                summary=f"No DMARC record found, and parent domain {parent_domain} has none either — nothing protects this subdomain",
-                details={"recommendation": f'Publish a TXT record at {name}, e.g. "v=DMARC1; p=none; rua=mailto:..."'},
+                # Exact text: routers/domains.py matches on it.
+                summary="No DMARC record found",
+                details={
+                    "recommendation": f'Publish a TXT record at {name}, e.g. "v=DMARC1; p=none; rua=mailto:...". '
+                    "No parent domain has one either, so nothing protects this domain."
+                },
             )
         ]
 
-    inherited = effective_policies(parse_dmarc_tags(parent_dmarc[0]))["sp"]
-    source_tag = "p=" if inherited.inherited else "sp="
+    parent_domain = inherited.from_domain
+    source_tag = f"{inherited.tag}="
     policy = inherited.policy
 
     if policy == "reject":
@@ -132,7 +126,7 @@ async def _check_inherited_policy(domain: str, parent_domain: str, name: str) ->
     ]
 
 
-async def check(domain: str, parent_domain: str | None = None, destination: ReportDestination | None = None) -> list[Finding]:
+async def check(domain: str, destination: ReportDestination | None = None) -> list[Finding]:
     name = f"_dmarc.{domain}"
     try:
         records = await resolve_txt_strict(name)
@@ -141,15 +135,7 @@ async def check(domain: str, parent_domain: str | None = None, destination: Repo
 
     dmarc_records = [r for r in records if DMARC_PREFIX_RE.match(r.strip())]
     if not dmarc_records:
-        if parent_domain:
-            return await _check_inherited_policy(domain, parent_domain, name)
-        return [
-            Finding(
-                status="fail",
-                summary="No DMARC record found",
-                details={"recommendation": f'Publish a TXT record at {name}, e.g. "v=DMARC1; p=none; rua=mailto:..."'},
-            )
-        ]
+        return await _check_inherited_policy(domain, name)
 
     findings: list[Finding] = []
     if len(dmarc_records) > 1:

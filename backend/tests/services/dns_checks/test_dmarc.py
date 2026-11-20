@@ -19,7 +19,18 @@ def _txt(records_by_name: dict[str, list[str]]):
             raise AssertionError(f"unexpected lookup: {name}")
         return records_by_name[name]
 
-    return patch("app.services.dns_checks.dmarc.resolve_txt_strict", fake_resolve_txt_strict)
+    return _patch_both(fake_resolve_txt_strict)
+
+
+def _patch_both(fake):
+    """The own-record lookup lives in dmarc.py, the tree walk in
+    dmarc_record.py: both read DNS through the same fake."""
+    from contextlib import ExitStack
+
+    stack = ExitStack()
+    stack.enter_context(patch("app.services.dns_checks.dmarc.resolve_txt_strict", fake))
+    stack.enter_context(patch("app.services.dns_checks.dmarc_record.resolve_txt_strict", fake))
+    return stack
 
 
 def _statuses(findings):
@@ -54,12 +65,12 @@ async def test_no_rua_is_a_warning():
     assert any(f.status == "warn" and "No rua=" in f.summary for f in findings)
 
 
-# --- Subdomain inheritance (RFC 7489) ---
+# --- Inheritance: the DNS tree walk (RFC 9989 §4.10) ---
 
 
 async def test_subdomain_inherits_reject_from_parent():
     with _txt({"_dmarc.sub.example.com": [], "_dmarc.example.com": ["v=DMARC1; p=reject;"]}):
-        findings = await dmarc.check("sub.example.com", parent_domain="example.com")
+        findings = await dmarc.check("sub.example.com")
     assert len(findings) == 1
     assert findings[0].status == "pass"
     assert "inherits p=reject" in findings[0].summary
@@ -67,42 +78,56 @@ async def test_subdomain_inherits_reject_from_parent():
 
 async def test_subdomain_inherits_quarantine_as_warn():
     with _txt({"_dmarc.sub.example.com": [], "_dmarc.example.com": ["v=DMARC1; p=quarantine;"]}):
-        findings = await dmarc.check("sub.example.com", parent_domain="example.com")
+        findings = await dmarc.check("sub.example.com")
     assert findings[0].status == "warn"
     assert "inherits p=quarantine" in findings[0].summary
 
 
 async def test_subdomain_inherits_none_as_warn_monitoring_only():
     with _txt({"_dmarc.sub.example.com": [], "_dmarc.example.com": ["v=DMARC1; p=none;"]}):
-        findings = await dmarc.check("sub.example.com", parent_domain="example.com")
+        findings = await dmarc.check("sub.example.com")
     assert findings[0].status == "warn"
     assert "monitoring only" in findings[0].summary
 
 
 async def test_subdomain_prefers_explicit_sp_over_parent_p():
     with _txt({"_dmarc.sub.example.com": [], "_dmarc.example.com": ["v=DMARC1; p=none; sp=reject;"]}):
-        findings = await dmarc.check("sub.example.com", parent_domain="example.com")
+        findings = await dmarc.check("sub.example.com")
     assert findings[0].status == "pass"
     assert "inherits sp=reject" in findings[0].summary
 
 
 async def test_subdomain_with_no_parent_record_either_is_unprotected():
-    with _txt({"_dmarc.sub.example.com": [], "_dmarc.example.com": []}):
-        findings = await dmarc.check("sub.example.com", parent_domain="example.com")
+    with _txt({"_dmarc.sub.example.com": [], "_dmarc.example.com": [], "_dmarc.com": []}):
+        findings = await dmarc.check("sub.example.com")
     assert findings[0].status == "fail"
-    assert "nothing protects this subdomain" in findings[0].summary
+    assert findings[0].summary == "No DMARC record found"
+    assert "nothing protects this domain" in findings[0].details["recommendation"]
 
 
-async def test_subdomain_with_no_parent_domain_given_is_plain_missing():
-    with _txt({"_dmarc.sub.example.com": []}):
-        findings = await dmarc.check("sub.example.com", parent_domain=None)
+async def test_apex_without_a_record_is_plain_missing():
+    with _txt({"_dmarc.example.com": [], "_dmarc.com": []}):
+        findings = await dmarc.check("example.com")
     assert findings[0].status == "fail"
     assert findings[0].summary == "No DMARC record found"
 
 
+async def test_walks_past_missing_levels_to_the_first_record_without_a_suffix_list():
+    # gtest.example.co.uk: neither the domain nor a parent in the
+    # organization needs to be known; the walk finds example.co.uk.
+    with _txt({
+        "_dmarc.a.gtest.example.co.uk": [],
+        "_dmarc.gtest.example.co.uk": [],
+        "_dmarc.example.co.uk": ["v=DMARC1; p=reject;"],
+    }):
+        findings = await dmarc.check("a.gtest.example.co.uk")
+    assert findings[0].status == "pass"
+    assert "inherits p=reject from example.co.uk" in findings[0].summary
+
+
 async def test_own_record_takes_priority_over_parent_even_when_both_exist():
     with _txt({"_dmarc.sub.example.com": ["v=DMARC1; p=reject; rua=mailto:x@sub.example.com;"], "_dmarc.example.com": ["v=DMARC1; p=none;"]}):
-        findings = await dmarc.check("sub.example.com", parent_domain="example.com")
+        findings = await dmarc.check("sub.example.com")
     # should score its OWN record (reject), never touching the parent lookup
     assert any(f.status == "pass" and f.summary == "Policy is p=reject" for f in findings)
 
@@ -122,10 +147,10 @@ async def test_parent_lookup_error_is_error_not_fail():
             return []
         raise DnsLookupError("timeout")
 
-    with patch("app.services.dns_checks.dmarc.resolve_txt_strict", fake):
-        findings = await dmarc.check("sub.example.com", parent_domain="example.com")
+    with _patch_both(fake):
+        findings = await dmarc.check("sub.example.com")
     assert findings[0].status == "error"
-    assert "couldn't check parent" in findings[0].summary
+    assert "couldn't check the parent domains' policy" in findings[0].summary
 
 
 # --- rua=/ruf= vs. the org's own configured mailbox ---
