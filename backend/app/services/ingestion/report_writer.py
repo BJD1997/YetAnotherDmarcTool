@@ -28,6 +28,7 @@ from app.repositories.dmarc_reports import (
     list_unmatched_aggregate_reports,
     list_unmatched_forensic_reports_for_org,
     list_unmatched_tls_rpt_reports_for_org,
+    trusted_reporter_domains,
     update_record_domain_id_for_header_from,
 )
 from app.services.ingestion.domain_matcher import match_domain
@@ -281,7 +282,7 @@ async def write_report(
     report = parsed_email["report"]
     sender = sender.for_reporter(_claimed_reporter_domains(report_type, report))
     org = await db.get(Organization, organization_id)
-    verified = decide(org.report_sender_check, sender)
+    verified = decide(org.report_sender_check, sender, await trusted_reporter_domains(db, organization_id))
     counts: dict[str, int] = {}
     if report_type == "aggregate":
         counts["aggregate_reports"] = int(

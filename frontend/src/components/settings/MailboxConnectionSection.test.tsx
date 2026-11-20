@@ -55,3 +55,34 @@ describe("MailboxConnectionSection resync", () => {
     await waitFor(() => expect(historyLoads()).toBe(2));
   });
 });
+
+describe("MailboxConnectionSection with IMAP", () => {
+  beforeEach(() => {
+    getMock.mockReset();
+    vi.mocked(api.put).mockReset().mockResolvedValue({});
+    getMock.mockImplementation(async (url: string) => {
+      if (url === "/mailbox-connection")
+        return {
+          ...CONNECTION, kind: "imap", mailbox_address: "dmarc@example.com",
+          imap: {
+            host: "imap.provider.example", port: 993, security: "ssl", username: "someone@provider.example",
+            report_address: "dmarc@example.com", folder: "INBOX", processed_folder: "DMARC processed",
+            authserv_id: null, detected_authserv_id: "mx.provider.example", password_set: true,
+          },
+        };
+      if (url.startsWith("/mailbox-connection/job-runs")) return [];
+      return { name: "Local Org", entra_tenant_id: null };
+    });
+  });
+
+  it("shows the report address, and keeps it when confirming the server ID", async () => {
+    renderWithAppProviders(<MailboxConnectionSection canManage />);
+
+    expect(await screen.findByText("dmarc@example.com")).toBeInTheDocument();
+    expect(screen.getByText(/signed in as someone@provider.example/)).toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Use this" }));
+    await waitFor(() => expect(api.put).toHaveBeenCalled());
+    expect(vi.mocked(api.put).mock.calls[0][1]).toMatchObject({ report_address: "dmarc@example.com", authserv_id: "mx.provider.example" });
+  });
+});

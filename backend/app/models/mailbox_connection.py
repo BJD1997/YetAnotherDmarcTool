@@ -1,14 +1,15 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
-from app.models.enums import ConsentStatus, SyncStatus
+from app.models.enums import ConsentStatus, ImapSecurity, MailboxKind, SyncStatus
 from app.models.mixins import TimestampMixin, UUIDPkMixin
 from app.models.pg_enum import pg_enum
+from app.services.auth.totp_secret import EncryptedSecret
 
 
 class MailboxConnection(UUIDPkMixin, TimestampMixin, Base):
@@ -23,6 +24,28 @@ class MailboxConnection(UUIDPkMixin, TimestampMixin, Base):
     )
 
     mailbox_address: Mapped[str] = mapped_column(String(320), nullable=False)
+
+    # Microsoft 365 (Graph) or any IMAP mailbox: one mailbox per organization.
+    # The Microsoft 365 tenant this mailbox lives in: its own, so the
+    # organization's sign-in can change without breaking report ingestion.
+    ms_tenant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    kind: Mapped[MailboxKind] = mapped_column(
+        pg_enum(MailboxKind, "mailbox_kind"), nullable=False, default=MailboxKind.microsoft, server_default="microsoft"
+    )
+    imap_host: Mapped[str | None] = mapped_column(String(253), nullable=True)
+    imap_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    imap_security: Mapped[ImapSecurity | None] = mapped_column(pg_enum(ImapSecurity, "imap_security"), nullable=True)
+    imap_username: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    # Encrypted with FERNET_KEY; never sent back to the browser.
+    imap_password: Mapped[str | None] = mapped_column(EncryptedSecret(1024), nullable=True)
+    # Where reports are read from, and where they're moved once processed.
+    imap_folder: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    imap_processed_folder: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Only Authentication-Results headers with this ID (the mailbox's own mail
+    # server) count for the report sender check; the detected one is offered
+    # in Settings when it isn't confirmed yet. See sender_auth.
+    imap_authserv_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    imap_detected_authserv_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     consent_status: Mapped[ConsentStatus] = mapped_column(
         pg_enum(ConsentStatus, "consent_status"),

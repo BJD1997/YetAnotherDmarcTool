@@ -77,3 +77,50 @@ describe("AdminJobRuns", () => {
     expect(getMock).toHaveBeenCalledWith(expect.stringContaining("before_id=run-1"));
   });
 });
+
+describe("AdminJobRuns outage handling", () => {
+  const failure = (id: string, startedAt: string, org = "org-1") => ({
+    id, job_type: "mailbox_poll", organization_id: org, domain_id: null, status: "failure", started_at: startedAt,
+    finished_at: null, error_message: "Microsoft 365 didn't respond (HTTP 502) after 3 retries", stats: null,
+  });
+
+  it("folds a run of failures into one row that can be expanded", async () => {
+    getMock.mockImplementation(async (url: string) => {
+      if (url.includes("job-runs/summary")) return { last_failure: null, success_rate_pct_24h: null, latest_mailbox_poll_at: null, reports_processed_today: 0 };
+      if (url.includes("/admin/organizations/names")) return [{ id: "org-1", name: "Acme" }];
+      return {
+        job_runs: [
+          { ...failure("ok", "2026-11-13T09:00:00Z"), status: "success", error_message: null },
+          failure("f3", "2026-11-13T08:00:00Z"),
+          failure("f2", "2026-11-13T07:00:00Z"),
+          failure("f1", "2026-11-13T06:00:00Z"),
+        ],
+        has_more: false,
+      };
+    });
+
+    renderWithAppProviders(<AdminJobRuns />);
+
+    await waitFor(() => expect(screen.getByText("failure ×3")).toBeInTheDocument());
+    expect(screen.getAllByText(/Microsoft 365 didn't respond/)).toHaveLength(1);
+    fireEvent.click(screen.getByText("Show all 3 runs"));
+    expect(screen.getAllByText(/Microsoft 365 didn't respond/)).toHaveLength(4);
+  });
+
+  it("stops showing the last failure as critical once a later run succeeded", async () => {
+    getMock.mockImplementation(async (url: string) => {
+      if (url.includes("job-runs/summary"))
+        return {
+          last_failure: { job_type: "mailbox_poll", organization_id: null, started_at: "2026-11-13T08:00:00Z", error_message: "down", recovered: true },
+          success_rate_pct_24h: 100, latest_mailbox_poll_at: null, reports_processed_today: 0,
+        };
+      if (url.includes("/admin/organizations/names")) return [];
+      return { job_runs: [], has_more: false };
+    });
+
+    renderWithAppProviders(<AdminJobRuns />);
+
+    await waitFor(() => expect(screen.getByText("Last failure (recovered)")).toBeInTheDocument());
+    expect(screen.getByText(/Recovered\./)).toBeInTheDocument();
+  });
+});

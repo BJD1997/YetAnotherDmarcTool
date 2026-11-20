@@ -84,11 +84,41 @@ class RatingFactor:
 
 
 @dataclasses.dataclass
+class PartRating:
+    """One half of the rating: setup (the DNS checks) or delivery (how the
+    domain's mail does at receivers, from DMARC reports)."""
+
+    score: float
+    grade: str
+    factors: list[RatingFactor]
+
+
+@dataclasses.dataclass
 class DomainRating:
     score: float | None
     grade: str | None
     insufficient_data: bool
     factors: list[RatingFactor]
+    # Each is None until it has something to rate: setup until the first
+    # DNS check, delivery until the first report (always, for a domain
+    # that doesn't send mail).
+    setup: PartRating | None = None
+    delivery: PartRating | None = None
+
+
+def _weighted(factors: list[RatingFactor]) -> float:
+    return sum(f.weight * f.score_pct for f in factors) / sum(f.weight for f in factors)
+
+
+def _part(factors: list[RatingFactor]) -> PartRating | None:
+    if not factors:
+        return None
+    score = _weighted(factors)
+    return PartRating(score=round(score, 1), grade=grade_for_score(score), factors=factors)
+
+
+def _pct(count: int, total: int) -> float:
+    return round(count / total * 100, 1)
 
 
 def compute_rating(
@@ -97,6 +127,8 @@ def compute_rating(
     dmarc_pass_count: int,
     total_message_count: int,
     mail_profile: DomainMailProfile = DomainMailProfile.sends_mail,
+    spf_pass_count: int | None = None,
+    dkim_pass_count: int | None = None,
 ) -> DomainRating:
     """`findings_by_type` values are lists of objects with a `.status`
     (CheckStatus) attribute — either Finding instances (registry.run_all's
@@ -149,15 +181,28 @@ def compute_rating(
     else:
         insufficient_data = False
 
+    setup = _part([f for f in factors if f.factor != "dmarc_pass_rate"])
+    delivery = None
+    pass_rate = next((f for f in factors if f.factor == "dmarc_pass_rate"), None)
+    if pass_rate is not None:
+        # Scored on the DMARC pass rate alone; SPF and DKIM are shown as
+        # its detail (DMARC passes when either does).
+        detail = [dataclasses.replace(pass_rate, weight=100, detail=f"{pass_rate.score_pct}% of {total_message_count:,} messages")]
+        for factor, count in (("spf_pass_rate", spf_pass_count), ("dkim_pass_rate", dkim_pass_count)):
+            if count is not None:
+                pct = _pct(count, total_message_count)
+                detail.append(RatingFactor(factor=factor, weight=0, score_pct=pct, detail=f"{pct}%"))
+        delivery = PartRating(score=pass_rate.score_pct, grade=grade_for_score(pass_rate.score_pct), factors=detail)
+
     if insufficient_data or not factors:
-        return DomainRating(score=None, grade=None, insufficient_data=True, factors=factors)
+        return DomainRating(score=None, grade=None, insufficient_data=True, factors=factors, setup=setup, delivery=delivery)
 
-    total_weight = sum(f.weight for f in factors)
-    weighted_score = sum(f.weight * f.score_pct for f in factors) / total_weight
-
+    weighted_score = _weighted(factors)
     return DomainRating(
         score=round(weighted_score, 1),
         grade=grade_for_score(weighted_score),
         insufficient_data=False,
         factors=factors,
+        setup=setup,
+        delivery=delivery,
     )

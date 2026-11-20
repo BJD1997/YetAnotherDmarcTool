@@ -1,5 +1,5 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../../api/client";
@@ -9,7 +9,7 @@ import { makeTestQueryClient } from "../../test/render";
 import PolicyBuilder from "./PolicyBuilder";
 
 vi.mock("../../api/client", () => ({
-  api: { get: vi.fn(), post: vi.fn() },
+  api: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
 }));
 
 const getMock = vi.mocked(api.get);
@@ -19,14 +19,16 @@ const ORG: Organization = {
   name: "Test Org",
   status: "active",
   entra_tenant_id: null,
+  sign_in_provider: "none",
   is_operator: false,
   spf_all_qualifier_mode: "strict",
-  hosted_mailbox_opt_in: false,
   is_demo_read_only: false,
   report_sender_check: "standard",
   rating_window_days: 90,
   ask_ai_enabled: false,
   entra_consent_urls: null,
+  microsoft_mailbox_available: false,
+  google_mailbox: null,
 };
 
 function builderData(overrides: Partial<PolicyBuilderData> = {}): PolicyBuilderData {
@@ -36,16 +38,19 @@ function builderData(overrides: Partial<PolicyBuilderData> = {}): PolicyBuilderD
     rua_destination: { status: "correct", current_targets: [] },
     org_mailbox_address: "reports@example.com",
     hosted_report_address: null,
+    has_own_mailbox: true,
     policy_stability_days: 0,
     recommendation: { policy: "none", np: null, reasoning: "No reports yet.", blocked: false, blocking_reason: null },
+    inherited_policy: null,
     ...overrides,
   };
 }
 
-async function renderBuilder(data: PolicyBuilderData) {
+async function renderBuilder(data: PolicyBuilderData, hostedMailboxReady = true) {
   getMock.mockImplementation(async (url: string) => {
     if (url.includes("/dmarc/policy-builder")) return data;
     if (url.includes("/organizations/current")) return ORG;
+    if (url.includes("/onboarding/status")) return { hosted_mailbox_ready: hostedMailboxReady, has_mailbox: true, has_sign_in_provider: true };
     throw new Error(`unexpected URL in test: ${url}`);
   });
   const queryClient = makeTestQueryClient();
@@ -177,5 +182,105 @@ describe("PolicyBuilder seeding", () => {
     expect(await screen.findByText("p=reject → p=none")).toBeInTheDocument();
     expect(screen.queryByText(/^sp=/)).not.toBeInTheDocument();
     expect(screen.queryByText(/^np=/)).not.toBeInTheDocument();
+  });
+});
+
+describe("PolicyBuilder report destination", () => {
+  it("shows the own mailbox as destination and the hosted address once, unticked, with a remove button", async () => {
+    await renderBuilder(
+      builderData({
+        org_mailbox_address: "reports@gtest.example",
+        hosted_report_address: "reports+421da980d918@hosted.example",
+        has_own_mailbox: true,
+        rua_destination: { status: "not_configured", current_targets: [] },
+      }),
+    );
+
+    expect(screen.getByText("reports@gtest.example")).toBeInTheDocument();
+    expect(screen.getAllByText("reports+421da980d918@hosted.example")).toHaveLength(1);
+    expect(screen.getByRole("checkbox", { name: /reports\+421da980d918/ })).not.toBeChecked();
+    expect(screen.getByRole("button", { name: /Remove hosted address/ })).toBeInTheDocument();
+    expect(screen.getByTestId("generated-record").textContent).toMatch(/rua=mailto:reports@gtest.example(?!,)/);
+  });
+
+  it("shows a hosted-only destination once and offers no remove button", async () => {
+    await renderBuilder(
+      builderData({
+        org_mailbox_address: "reports+abc@hosted.example",
+        hosted_report_address: "reports+abc@hosted.example",
+        has_own_mailbox: false,
+        rua_destination: { status: "not_configured", current_targets: [] },
+      }),
+    );
+
+    expect(screen.getAllByText("reports+abc@hosted.example")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: /Remove hosted address/ })).not.toBeInTheDocument();
+  });
+
+  it("ticks a hosted address that is already published", async () => {
+    await renderBuilder(
+      builderData({
+        org_mailbox_address: "reports@example.com",
+        hosted_report_address: "reports+abc@hosted.example",
+        rua_destination: { status: "correct", current_targets: ["reports@example.com", "reports+abc@hosted.example"] },
+      }),
+    );
+
+    expect(screen.getByRole("checkbox", { name: /reports\+abc/ })).toBeChecked();
+  });
+
+  it("offers a hosted address whenever the server can host one, whatever the sign-in", async () => {
+    await renderBuilder(builderData({ org_mailbox_address: "dmarc@example.com", hosted_report_address: null }));
+
+    expect(screen.getByRole("button", { name: /Also use a YetAnotherDmarcTool-hosted address/ })).toBeInTheDocument();
+  });
+
+  it("removes a published hosted address from the record and the form", async () => {
+    vi.mocked(api.delete).mockResolvedValue(undefined);
+    await renderBuilder(
+      builderData({
+        org_mailbox_address: "reports@example.com",
+        hosted_report_address: "reports+abc@hosted.example",
+        has_own_mailbox: true,
+        rua_destination: { status: "correct", current_targets: ["reports@example.com", "reports+abc@hosted.example"] },
+      }),
+    );
+    expect(screen.getByTestId("generated-record").textContent).toContain("reports+abc@hosted.example");
+
+    fireEvent.click(screen.getByRole("button", { name: /Remove hosted address/ }));
+
+    await waitFor(() => expect(screen.queryByText("reports+abc@hosted.example")).not.toBeInTheDocument());
+    expect(api.delete).toHaveBeenCalledWith("/domains/domain-1/hosted-report-address");
+    expect(screen.getByTestId("generated-record").textContent).not.toContain("reports+abc");
+  });
+
+  it("offers no hosted address when the server cannot host one", async () => {
+    await renderBuilder(builderData({ org_mailbox_address: null, hosted_report_address: null, has_own_mailbox: false }), false);
+
+    expect(screen.queryByRole("button", { name: /hosted address/ })).not.toBeInTheDocument();
+    expect(screen.getByText(/No mailbox connected/)).toBeInTheDocument();
+  });
+});
+
+describe("PolicyBuilder for a subdomain covered by its parent", () => {
+  const inherited = { from_domain: "example.com", policy: "reject" as const, tag: "p" as const, rua: ["r@example.com"] };
+
+  it("says which parent policy covers the domain and where its reports go today", async () => {
+    await renderBuilder(builderData({ rua_destination: { status: "not_configured", current_targets: [] }, inherited_policy: inherited }));
+
+    expect(screen.getByText("Covered by example.com: p=reject")).toBeInTheDocument();
+    expect(screen.getByText("r@example.com")).toBeInTheDocument();
+    expect(screen.getByText("No record of its own yet")).toBeInTheDocument();
+    expect(screen.queryByText("No DMARC record published yet")).not.toBeInTheDocument();
+  });
+
+  it("warns that monitor-only lowers what the parent gives today, and not once it matches", async () => {
+    await renderBuilder(builderData({ inherited_policy: inherited }));
+
+    expect(screen.getByText("This weakens your current policy")).toBeInTheDocument();
+    expect(screen.getByText("p=reject (from example.com) → p=none")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+    await waitFor(() => expect(screen.queryByText("This weakens your current policy")).not.toBeInTheDocument());
   });
 });

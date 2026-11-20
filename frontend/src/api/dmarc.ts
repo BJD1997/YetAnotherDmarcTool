@@ -202,12 +202,22 @@ export interface RatingFactor {
   detail: string;
 }
 
+// One half of the rating: setup (DNS records) or delivery (from reports).
+export interface RatingPart {
+  score: number;
+  grade: string;
+  factors: RatingFactor[];
+}
+
 export interface DomainRating {
   not_verified: boolean;
   insufficient_data: boolean;
   score: number | null;
   grade: string | null;
   factors: RatingFactor[];
+  setup: RatingPart | null;
+  delivery: RatingPart | null;
+  sends_mail: boolean;
 }
 
 export interface MailboxSyncStats {
@@ -218,8 +228,40 @@ export interface MailboxSyncStats {
   errors: number;
 }
 
+export interface ImapSettingsOut {
+  host: string;
+  port: number;
+  security: "ssl" | "starttls";
+  username: string;
+  // The address reports are sent to (the DMARC rua= target).
+  report_address: string;
+  folder: string;
+  processed_folder: string;
+  // The mail server's Authentication-Results ID the sender check trusts;
+  // null until confirmed. detected: what the newest message carried.
+  authserv_id: string | null;
+  detected_authserv_id: string | null;
+  password_set: boolean;
+}
+
+export interface ImapSettingsIn {
+  host: string;
+  port: number;
+  security: "ssl" | "starttls";
+  username: string;
+  // Left out: keep the stored password (same server and user only).
+  password?: string;
+  // Left out: the username is the address reports are sent to.
+  report_address?: string;
+  folder: string;
+  processed_folder: string;
+  authserv_id: string | null;
+}
+
 export interface MailboxConnectionStatus {
   id: string;
+  kind: "microsoft" | "imap" | "google";
+  imap: ImapSettingsOut | null;
   mailbox_address: string;
   consent_status: "pending" | "granted" | "revoked";
   consent_granted_at: string | null;

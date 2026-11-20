@@ -1,7 +1,6 @@
 import type { ReactNode } from "react";
 import type { MailboxConnectionStatus } from "../../api/dmarc";
 import { useOnboardingStatus } from "../../hooks/useOnboarding";
-import { useCurrentOrganization } from "../../hooks/useOrganization";
 
 // Least to most strict, the way towards enforcement.
 const POLICY_RUNGS = ["none", "quarantine", "reject"];
@@ -51,11 +50,8 @@ export function MailboxHealthWidget({
   connection: MailboxConnectionStatus | undefined;
   isLoading?: boolean;
 }) {
-  // Same cached query key used across the app (Settings/PolicyBuilder/
-  // Onboarding) — react-query dedupes this into the existing fetch rather
-  // than adding a new request, so every call site of this widget gets
-  // hosted-mailbox awareness for free without threading org through props.
-  const { data: org } = useCurrentOrganization();
+  // Cached app-wide onboarding status — react-query dedupes this into the
+  // existing fetch, so every call site gets hosted-mailbox awareness for free.
   const { data: onboarding } = useOnboardingStatus();
 
   // Distinct from "not configured": the query hasn't resolved yet, so
@@ -66,15 +62,10 @@ export function MailboxHealthWidget({
     return <span className="badge badge--neutral">Checking mailbox…</span>;
   }
   if (!connection) {
-    // A local-auth org (or an Entra org that's opted in) has no
-    // MailboxConnection at all by design — reports arrive via a hosted
-    // address per domain instead (see Settings), so this isn't a real
-    // problem worth a warning badge.
-    if (org && (!org.entra_tenant_id || org.hosted_mailbox_opt_in)) {
-      if (onboarding && !onboarding.hosted_mailbox_ready) {
-        return <span className="badge badge--critical">No report mailbox on this server</span>;
-      }
-      return <span className="badge badge--good">Using hosted mailbox</span>;
+    // Reports may still arrive at a hosted address on one of the domains.
+    if (onboarding?.has_mailbox) return <span className="badge badge--good">Using hosted mailbox</span>;
+    if (onboarding && !onboarding.hosted_mailbox_ready) {
+      return <span className="badge badge--critical">No report mailbox on this server</span>;
     }
     return <span className="badge badge--warning">Mailbox not configured</span>;
   }

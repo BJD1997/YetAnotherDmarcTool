@@ -66,3 +66,11 @@ async def test_ask_ai_is_unanswered_until_chosen(api):
     assert (await client.get("/api/organizations/current")).json()["ask_ai_enabled"] is False
     await client.patch("/api/organizations/current", json={"name": "Org", "ask_ai_enabled": True})
     assert (await client.get("/api/organizations/current")).json()["ask_ai_enabled"] is True
+
+
+async def test_current_organization_no_longer_exposes_hosted_opt_in(api):
+    client, owner_factory = api
+    _org, user = await seed_org_and_user(owner_factory, entra=True)
+    await login_as(client, owner_factory, user)
+
+    assert "hosted_mailbox_opt_in" not in (await client.get("/api/organizations/current")).json()

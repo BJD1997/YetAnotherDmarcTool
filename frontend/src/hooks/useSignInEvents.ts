@@ -6,7 +6,7 @@ export interface SignInEvent {
   id: string;
   created_at: string;
   result: "success" | "failure" | "account_change";
-  auth_method: "entra" | "local" | "platform_admin";
+  auth_method: "entra" | "local" | "google" | "oidc" | "platform_admin";
   email: string | null;
   failure_reason: string | null;
   actor_email: string | null;

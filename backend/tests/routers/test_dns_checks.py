@@ -488,8 +488,8 @@ async def _recheck_in_tls_rpt_mode(api, monkeypatch, reports: list[dict]) -> lis
     async def _no_dns(*args, **kwargs):
         return {}
 
-    async def _rua_correct(domain, mailbox):
-        return TlsRptRuaDestinationCheck(status="correct", current_targets=[mailbox])
+    async def _rua_correct(domain, destination):
+        return TlsRptRuaDestinationCheck(status="correct", current_targets=[destination.address])
 
     monkeypatch.setattr(settings, "starttls_check_mode", "tls_rpt")
     monkeypatch.setattr(scheduled_recheck, "run_all", _no_dns)

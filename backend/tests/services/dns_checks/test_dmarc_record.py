@@ -7,7 +7,13 @@ only checked the subdomain's own (usually absent) record."""
 
 from unittest.mock import patch
 
-from app.services.dns_checks.dmarc_record import DmarcRecordInfo, resolve_effective_policy
+from app.services.dns_checks.dmarc_record import (
+    DmarcRecordInfo,
+    InheritedPolicy,
+    fetch_inherited_policy,
+    tree_walk_targets,
+    resolve_effective_policy,
+)
 from app.services.dns_checks.resolver import DnsLookupError
 
 
@@ -31,31 +37,25 @@ def _record(p=None, sp=None):
 
 async def test_own_record_used_when_present():
     with _fetch({"sub.example.com": _record(p="quarantine")}):
-        policy = await resolve_effective_policy("sub.example.com", "example.com")
+        policy = await resolve_effective_policy("sub.example.com")
     assert policy == "quarantine"
 
 
 async def test_falls_back_to_parent_p_when_own_record_absent():
     with _fetch({"sub.example.com": None, "example.com": _record(p="reject")}):
-        policy = await resolve_effective_policy("sub.example.com", "example.com")
+        policy = await resolve_effective_policy("sub.example.com")
     assert policy == "reject"
 
 
 async def test_falls_back_to_parent_sp_over_p():
     with _fetch({"sub.example.com": None, "example.com": _record(p="none", sp="reject")}):
-        policy = await resolve_effective_policy("sub.example.com", "example.com")
+        policy = await resolve_effective_policy("sub.example.com")
     assert policy == "reject"
 
 
-async def test_none_when_no_parent_given_and_no_own_record():
-    with _fetch({"sub.example.com": None}):
-        policy = await resolve_effective_policy("sub.example.com", None)
-    assert policy is None
-
-
-async def test_none_when_neither_has_a_record():
-    with _fetch({"sub.example.com": None, "example.com": None}):
-        policy = await resolve_effective_policy("sub.example.com", "example.com")
+async def test_none_when_nothing_up_the_tree_has_a_record():
+    with _fetch({"sub.example.com": None, "example.com": None, "com": None}):
+        policy = await resolve_effective_policy("sub.example.com")
     assert policy is None
 
 
@@ -70,7 +70,7 @@ async def test_lookup_failure_on_own_domain_falls_back_to_parent():
         return _record(p="reject")
 
     with patch("app.services.dns_checks.dmarc_record.fetch_current_dmarc_record", fake):
-        policy = await resolve_effective_policy("sub.example.com", "example.com")
+        policy = await resolve_effective_policy("sub.example.com")
     assert policy == "reject"
 
 
@@ -81,5 +81,39 @@ async def test_lookup_failure_on_parent_yields_none():
         raise DnsLookupError("timeout")
 
     with patch("app.services.dns_checks.dmarc_record.fetch_current_dmarc_record", fake):
-        policy = await resolve_effective_policy("sub.example.com", "example.com")
+        policy = await resolve_effective_policy("sub.example.com")
     assert policy is None
+
+
+# --- The DNS tree walk (RFC 9989 §4.10) ---
+
+
+def test_tree_walk_drops_one_label_at_a_time_up_to_the_top_level_domain():
+    assert tree_walk_targets("gtest.example.co.uk") == ["example.co.uk", "co.uk", "uk"]
+    assert tree_walk_targets("Example.COM.") == ["com"]
+
+
+def test_tree_walk_jumps_a_deep_name_to_its_seven_rightmost_labels():
+    targets = tree_walk_targets("a.b.c.d.e.f.g.h.example.com")
+    assert targets == [
+        "d.e.f.g.h.example.com", "e.f.g.h.example.com", "f.g.h.example.com", "g.h.example.com",
+        "h.example.com", "example.com", "com",
+    ]
+
+
+async def test_inherited_policy_comes_from_the_first_record_up_the_tree():
+    record = DmarcRecordInfo(raw="v=DMARC1; p=reject; rua=mailto:r@example.co.uk", tags={"p": "reject", "rua": "mailto:r@example.co.uk"})
+    with _fetch({"example.co.uk": record}):
+        inherited = await fetch_inherited_policy("gtest.example.co.uk")
+    assert inherited == InheritedPolicy(from_domain="example.co.uk", policy="reject", tag="p", rua=["r@example.co.uk"])
+
+
+async def test_inherited_policy_prefers_the_records_sp():
+    with _fetch({"example.com": _record(p="reject", sp="none")}):
+        inherited = await fetch_inherited_policy("gtest.example.com")
+    assert (inherited.policy, inherited.tag) == ("none", "sp")
+
+
+async def test_no_inherited_policy_when_nothing_up_the_tree_has_a_record():
+    with _fetch({"example.com": None, "com": None}):
+        assert await fetch_inherited_policy("gtest.example.com") is None

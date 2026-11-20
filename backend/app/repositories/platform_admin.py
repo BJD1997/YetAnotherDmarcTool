@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import case, func, select
+from sqlalchemy import case, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.dmarc_aggregate import DmarcAggregateReport
@@ -219,6 +219,23 @@ async def job_runs_summary_stats(db: AsyncSession) -> dict:
         )
     ).scalar_one_or_none()
 
+    # Recovered: a later run of the same job (org, domain) succeeded.
+    last_failure_recovered = False
+    if last_failure is not None:
+        last_failure_recovered = (
+            await db.execute(
+                select(
+                    exists().where(
+                        JobRun.job_type == last_failure.job_type,
+                        JobRun.organization_id.is_not_distinct_from(last_failure.organization_id),
+                        JobRun.domain_id.is_not_distinct_from(last_failure.domain_id),
+                        JobRun.status == JobStatus.success,
+                        JobRun.started_at > last_failure.started_at,
+                    )
+                )
+            )
+        ).scalar_one()
+
     since_24h = datetime.now(timezone.utc) - timedelta(hours=24)
     total_24h, success_24h = (
         await db.execute(
@@ -242,6 +259,7 @@ async def job_runs_summary_stats(db: AsyncSession) -> dict:
 
     return {
         "last_failure": last_failure,
+        "last_failure_recovered": last_failure_recovered,
         "total_24h": total_24h,
         "success_24h": success_24h,
         "latest_mailbox_poll_at": latest_mailbox_poll_at,

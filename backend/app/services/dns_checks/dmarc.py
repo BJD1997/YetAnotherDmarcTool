@@ -1,7 +1,7 @@
 """DMARC (RFC 7489) best-practice checker: presence/uniqueness, policy
 strength, pct rollout, rua/ruf presence, the RFC 7489 §7.1 external
 destination verification for report addresses on a different domain, and
-— given an optional mailbox_address — whether rua=/ruf= actually include
+— given an optional destination — whether rua=/ruf= actually include
 this org's own configured mailbox (warn if not; ruf= only checked when
 it's configured at all, since it's optional and its absence alone isn't
 flagged). Same comparison the DMARC Policy Builder already surfaces for
@@ -18,11 +18,12 @@ import re
 from app.services.dns_checks.base import Finding
 from app.services.dns_checks.dmarc_record import (
     DMARC_PREFIX_RE,
-    effective_policies,
+    fetch_inherited_policy,
     parse_dmarc_tags,
     parse_mailto_targets,
 )
 from app.services.dns_checks.resolver import DnsLookupError, resolve_txt_strict
+from app.services.report_destination import ReportDestination
 
 
 async def _check_external_destination(record_domain: str, report_email: str, tag_name: str) -> Finding | None:
@@ -62,41 +63,35 @@ async def _check_external_destination(record_domain: str, report_email: str, tag
     return None
 
 
-async def _check_inherited_policy(domain: str, parent_domain: str, name: str) -> list[Finding]:
-    """No _dmarc.<domain> record of its own — per RFC 7489, that's not
-    automatically a gap for a registered subdomain: it inherits the parent's
-    sp= (or p= if sp= is unset) rather than needing an explicit record of
-    its own. Only actually unprotected if the parent has no usable policy
-    either. Deliberately just sp=/p= inheritance, not the full RFC 7489
-    organizational-domain walk — same simpler-and-safer-to-over-flag
-    tradeoff _check_external_destination already documents taking. Only the
-    enforcement-policy question is inherited here — rua=/pct=/alignment are
-    about the subdomain's own reporting setup, which a subdomain with no
-    record of its own simply doesn't have, so those aren't checked against
-    the parent."""
-    parent_name = f"_dmarc.{parent_domain}"
+async def _check_inherited_policy(domain: str, name: str) -> list[Finding]:
+    """No _dmarc.<domain> record of its own — that's not automatically a
+    gap: receivers walk up the tree (RFC 9989 §4.10) and apply the first
+    record's sp= (or p= if sp= is unset), whether or not that domain is in
+    this organization. Only actually unprotected if nothing up the tree has
+    a usable policy either. Only the enforcement-policy question is
+    inherited here — rua=/pct=/alignment are about the domain's own
+    reporting setup, which a domain with no record of its own simply
+    doesn't have, so those aren't checked against the parent."""
     try:
-        parent_records = await resolve_txt_strict(parent_name)
+        inherited = await fetch_inherited_policy(domain)
     except DnsLookupError as exc:
-        return [
-            Finding(
-                status="error",
-                summary=f"No DMARC record at {name}, and couldn't check parent {parent_domain}'s policy: {exc}",
-            )
-        ]
+        return [Finding(status="error", summary=f"No DMARC record at {name}, and couldn't check the parent domains' policy: {exc}")]
 
-    parent_dmarc = [r for r in parent_records if DMARC_PREFIX_RE.match(r.strip())]
-    if not parent_dmarc:
+    if inherited is None:
         return [
             Finding(
                 status="fail",
-                summary=f"No DMARC record found, and parent domain {parent_domain} has none either — nothing protects this subdomain",
-                details={"recommendation": f'Publish a TXT record at {name}, e.g. "v=DMARC1; p=none; rua=mailto:..."'},
+                # Exact text: routers/domains.py matches on it.
+                summary="No DMARC record found",
+                details={
+                    "recommendation": f'Publish a TXT record at {name}, e.g. "v=DMARC1; p=none; rua=mailto:...". '
+                    "No parent domain has one either, so nothing protects this domain."
+                },
             )
         ]
 
-    inherited = effective_policies(parse_dmarc_tags(parent_dmarc[0]))["sp"]
-    source_tag = "p=" if inherited.inherited else "sp="
+    parent_domain = inherited.from_domain
+    source_tag = f"{inherited.tag}="
     policy = inherited.policy
 
     if policy == "reject":
@@ -131,7 +126,7 @@ async def _check_inherited_policy(domain: str, parent_domain: str, name: str) ->
     ]
 
 
-async def check(domain: str, parent_domain: str | None = None, mailbox_address: str | None = None) -> list[Finding]:
+async def check(domain: str, destination: ReportDestination | None = None) -> list[Finding]:
     name = f"_dmarc.{domain}"
     try:
         records = await resolve_txt_strict(name)
@@ -140,15 +135,7 @@ async def check(domain: str, parent_domain: str | None = None, mailbox_address: 
 
     dmarc_records = [r for r in records if DMARC_PREFIX_RE.match(r.strip())]
     if not dmarc_records:
-        if parent_domain:
-            return await _check_inherited_policy(domain, parent_domain, name)
-        return [
-            Finding(
-                status="fail",
-                summary="No DMARC record found",
-                details={"recommendation": f'Publish a TXT record at {name}, e.g. "v=DMARC1; p=none; rua=mailto:..."'},
-            )
-        ]
+        return await _check_inherited_policy(domain, name)
 
     findings: list[Finding] = []
     if len(dmarc_records) > 1:
@@ -193,7 +180,7 @@ async def check(domain: str, parent_domain: str | None = None, mailbox_address: 
             Finding(
                 status="warn",
                 summary="No rua= (aggregate reporting) address configured — no visibility into DMARC results",
-                details={"recommendation": "Use the policy builder to add rua= pointing at your connected mailbox."},
+                details={"recommendation": "Use the policy builder to add rua= pointing at your report address."},
             )
         )
     else:
@@ -206,12 +193,12 @@ async def check(domain: str, parent_domain: str | None = None, mailbox_address: 
         # reach THIS org's own mailbox — same gap tls_rpt_check.py's check()
         # flags directly rather than leaving it to the policy builder alone
         # (see that module's docstring). ruf= gets the identical check below.
-        if mailbox_address and mailbox_address.lower() not in (t.lower() for t in rua_targets):
+        if destination and not destination.reached_by(rua_targets):
             findings.append(
                 Finding(
                     status="warn",
-                    summary=f"rua= doesn't include your configured mailbox ({mailbox_address}) — aggregate reports won't reach it",
-                    details={"recommendation": "Use the policy builder to update rua= to include your mailbox."},
+                    summary=f"rua= doesn't include your report address ({destination.address}) — aggregate reports won't reach it",
+                    details={"recommendation": "Use the policy builder to update rua= to include your report address."},
                 )
             )
 
@@ -223,12 +210,12 @@ async def check(domain: str, parent_domain: str | None = None, mailbox_address: 
     # ruf= is optional (unlike rua=, its absence isn't flagged at all) —
     # only worth comparing against the org's mailbox when it's actually
     # configured to begin with.
-    if ruf_targets and mailbox_address and mailbox_address.lower() not in (t.lower() for t in ruf_targets):
+    if ruf_targets and destination and not destination.reached_by(ruf_targets):
         findings.append(
             Finding(
                 status="warn",
-                summary=f"ruf= doesn't include your configured mailbox ({mailbox_address}) — forensic reports won't reach it",
-                details={"recommendation": "Use the policy builder to update ruf= to include your mailbox."},
+                summary=f"ruf= doesn't include your report address ({destination.address}) — forensic reports won't reach it",
+                details={"recommendation": "Use the policy builder to update ruf= to include your report address."},
             )
         )
 

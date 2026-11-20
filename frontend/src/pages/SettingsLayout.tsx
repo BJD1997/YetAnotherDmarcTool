@@ -16,6 +16,7 @@ export default function SettingsLayout() {
     ...(canManage
       ? [
           { to: "domains", label: "Domains" },
+          { to: "sign-in", label: "Sign-in" },
           { to: "sign-in-activity", label: "Sign-in activity" },
         ]
       : []),

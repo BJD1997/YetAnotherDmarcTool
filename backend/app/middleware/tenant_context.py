@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.db.rls import set_org_context, set_platform_admin_context
 from app.db.session import get_db
-from app.models.enums import OrganizationStatus, UserRole, UserStatus
+from app.models.enums import AuthMethod, OrganizationStatus, UserRole, UserStatus
 from app.models.organization import Organization
 from app.models.platform_admin import PlatformAdmin
 from app.models.user import User
@@ -56,6 +56,16 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
 async def require_org_admin(user: User = Depends(get_current_user)) -> User:
     if user.role != UserRole.org_admin:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "org_admin role required")
+    return user
+
+
+async def require_break_glass(user: User = Depends(get_current_user)) -> User:
+    """Only the organization's break-glass account (local, org admin) may
+    change how the organization signs in."""
+    if not user.is_break_glass or user.auth_method != AuthMethod.local or user.role != UserRole.org_admin:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "only your organization's break-glass account can change how it signs in"
+        )
     return user
 
 

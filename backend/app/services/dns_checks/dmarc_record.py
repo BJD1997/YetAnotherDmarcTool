@@ -7,6 +7,7 @@ import dataclasses
 import re
 
 from app.services.dns_checks.resolver import DnsLookupError, resolve_txt_strict
+from app.services.report_destination import ReportDestination
 
 DMARC_PREFIX_RE = re.compile(r"(?i)^v=DMARC1(;|\s|$)")
 
@@ -80,34 +81,71 @@ async def fetch_current_dmarc_record(domain: str) -> DmarcRecordInfo | None:
     return DmarcRecordInfo(raw=dmarc_records[0], tags=parse_dmarc_tags(dmarc_records[0]))
 
 
-async def resolve_effective_policy(domain: str, parent_domain: str | None = None) -> str | None:
+# RFC 9989 §4.10: a name of 8 or more labels jumps straight to its 7
+# rightmost labels, so the walk never takes more than 8 lookups.
+_TREE_WALK_MAX_LABELS = 7
+
+
+def tree_walk_targets(domain: str) -> list[str]:
+    """The names a receiver tries, nearest first, when <domain> has no DMARC
+    record of its own (RFC 9989 §4.10 DNS tree walk): drop one label at a
+    time, up to and including the top-level domain. No Public Suffix List:
+    gtest.example.co.uk walks example.co.uk, co.uk, uk."""
+    labels = domain.rstrip(".").lower().split(".")
+    labels = labels[-_TREE_WALK_MAX_LABELS:] if len(labels) > _TREE_WALK_MAX_LABELS else labels[1:]
+    return [".".join(labels[i:]) for i in range(len(labels))]
+
+
+@dataclasses.dataclass(frozen=True)
+class InheritedPolicy:
+    from_domain: str
+    policy: str | None  # the record's effective sp= — None when missing or invalid
+    tag: str  # "sp" or "p": where the policy came from
+    rua: list[str]  # reports about this domain go to that record's rua=
+
+
+async def fetch_inherited_policy(domain: str) -> InheritedPolicy | None:
+    """The policy a domain without a record of its own gets today: the
+    first DMARC record up the tree (see tree_walk_targets), wherever it
+    lives — the parent may be in another organization or not in this app at
+    all. None when no record is found up to the top-level domain. Raises
+    DnsLookupError like fetch_current_dmarc_record. Only call it for a
+    domain confirmed to have no record of its own."""
+    for target in tree_walk_targets(domain):
+        record = await fetch_current_dmarc_record(target)
+        if record is None:
+            continue
+        sp = effective_policies(record.tags)["sp"]
+        return InheritedPolicy(
+            from_domain=target,
+            policy=sp.policy,
+            tag="p" if sp.inherited else "sp",
+            rua=parse_mailto_targets(record.tags.get("rua", "")),
+        )
+    return None
+
+
+async def resolve_effective_policy(domain: str) -> str | None:
     """The enforcement policy actually covering this domain's mail: its own
     p=, or — if it has no DMARC record of its own, the normal case for a
-    subdomain (RFC 7489 inheritance) — the parent's sp= (preferred) or p=.
+    subdomain — the sp= (preferred) or p= of the first record up the tree.
     Returns None if nothing resolvable either way (including on a lookup
     failure; callers here only need "is DMARC actually enforcing yet",
     where a failed lookup and a confirmed-absent record both mean "can't
     credit enforcement", unlike dmarc.py's own checker which reports those
     two cases differently to the user). Used by registry.py to decide
-    whether SPF's conditional ~all/-all preference applies — kept separate
-    from dmarc.py's _check_inherited_policy, which needs the same walk but
-    produces user-facing Findings with more granular error messages."""
+    whether SPF's conditional ~all/-all preference applies."""
     try:
         record = await fetch_current_dmarc_record(domain)
     except DnsLookupError:
         record = None
     if record is not None:
         return record.tags.get("p", "").lower() or None
-
-    if not parent_domain:
-        return None
     try:
-        parent_record = await fetch_current_dmarc_record(parent_domain)
+        inherited = await fetch_inherited_policy(domain)
     except DnsLookupError:
         return None
-    if parent_record is None:
-        return None
-    return effective_policies(parent_record.tags)["sp"].policy
+    return inherited.policy if inherited is not None else None
 
 
 @dataclasses.dataclass
@@ -116,9 +154,9 @@ class RuaDestinationCheck:
     current_targets: list[str]
 
 
-async def check_rua_destination(domain: str, mailbox_address: str) -> RuaDestinationCheck:
+async def check_rua_destination(domain: str, destination: ReportDestination) -> RuaDestinationCheck:
     """Does this domain's published rua= actually include the org's
-    connected mailbox? A domain can be fully "verified" and have a clean
+    report destination? A domain can be fully "verified" and have a clean
     DNS baseline while still never sending this product a single report,
     if rua= was never pointed here (or was later changed) — the kind of
     gap that's easy to miss without an explicit check for it."""
@@ -131,6 +169,6 @@ async def check_rua_destination(domain: str, mailbox_address: str) -> RuaDestina
     targets = parse_mailto_targets(record.tags.get("rua", ""))
     if not targets:
         return RuaDestinationCheck(status="no_rua", current_targets=[])
-    if mailbox_address.lower() in (t.lower() for t in targets):
+    if destination.reached_by(targets):
         return RuaDestinationCheck(status="correct", current_targets=targets)
     return RuaDestinationCheck(status="points_elsewhere", current_targets=targets)

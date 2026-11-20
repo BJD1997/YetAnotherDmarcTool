@@ -12,6 +12,8 @@ export interface RankedDomain {
   insufficient_data: boolean;
   score: number | null;
   grade: string | null;
+  setup_grade: string | null;
+  delivery_grade: string | null;
   message_volume: number;
   failed_volume: number;
   current_policy: string | null;

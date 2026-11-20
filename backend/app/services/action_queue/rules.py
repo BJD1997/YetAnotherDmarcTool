@@ -44,6 +44,7 @@ from app.services.rating.domain_rating import (
     latest_findings_by_type,
 )
 from app.services.rating.score import worst_status
+from app.services.report_destination import ReportDestination
 
 UNKNOWN_SENDER_VOLUME_THRESHOLD = 50
 STALE_MAILBOX_DAYS = 10
@@ -237,6 +238,8 @@ async def mailbox_stopped_receiving_reports(db: AsyncSession, organization_id: u
     cutoff = datetime.now(timezone.utc) - timedelta(days=STALE_MAILBOX_DAYS)
     if connection.last_sync_at < cutoff:
         return []  # sync itself hasn't run recently either — a scheduling/worker problem, not this rule
+    if connection.consent_granted_at is not None and connection.consent_granted_at >= cutoff:
+        return []  # connected too recently to expect reports yet
 
     latest_report_at = await last_report_received_at_for_org(db, organization_id)
     if latest_report_at is not None and latest_report_at >= cutoff:
@@ -460,32 +463,32 @@ async def spf_lookup_limit_risk(db: AsyncSession, domain: Domain) -> list[Action
                 severity="critical" if lookup_count > limit else "warning",
                 category=CATEGORY_DNS_BLOCKING,
                 title=f"{domain.name}: SPF near lookup limit ({lookup_count}/{limit})",
-                action_hint="Simplify SPF includes",
+                action_hint="Simplify SPF includes — open the SPF record builder",
                 domain_id=str(domain.id),
-                link_path=f"/domains/{domain.id}/dns",
+                link_path=f"/domains/{domain.id}/dns?open=spf-builder",
                 ask_ai={"kind": "dns_check", "subject": "spf"},
             )
         )
     return items
 
 
-async def rua_destination_broken(db: AsyncSession, domain: Domain, mailbox_address: str | None) -> list[ActionItem]:
+async def rua_destination_broken(db: AsyncSession, domain: Domain, destination: ReportDestination | None) -> list[ActionItem]:
     """Catches the trap this whole onboarding/reporting area is meant to
     prevent: a domain can be verified, pass every DNS check, and still
     never send this product a single report if rua= isn't (or no longer
-    is) pointed at the connected mailbox. Deliberately silent on "no
+    is) pointed at the report address (own mailbox or hosted). Deliberately silent on "no
     DMARC record at all" (dmarc.py's checker + low_compliance_domain
     already cover that loudly) and on a transient lookup_error — this rule
     is specifically about a record that exists but doesn't report here."""
-    if mailbox_address is None or domain.verification_status != DomainVerificationStatus.verified:
+    if destination is None or domain.verification_status != DomainVerificationStatus.verified:
         return []
-    result = await check_rua_destination(domain.name, mailbox_address)
+    result = await check_rua_destination(domain.name, destination)
     if result.status in ("correct", "not_configured", "lookup_error"):
         return []
     title = (
         f"{domain.name}: no rua= address configured"
         if result.status == "no_rua"
-        else f"{domain.name}: rua= not reaching this mailbox"
+        else f"{domain.name}: rua= not reaching your report address"
     )
     return [
         ActionItem(

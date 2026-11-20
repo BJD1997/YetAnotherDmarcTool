@@ -23,6 +23,7 @@ from app.routers import (
     ask_ai,
     admin_updates,
     auth,
+    auth_providers,
     dmarc_reports,
     dns_checks,
     domains,
@@ -33,6 +34,7 @@ from app.routers import (
     platform_admin,
     selectors,
     sign_in_events,
+    sign_in_settings,
     users,
 )
 from app.services import setup_checks
@@ -149,6 +151,8 @@ async def health() -> dict[str, str]:
 
 
 api_router.include_router(auth.router)
+api_router.include_router(auth_providers.router)
+api_router.include_router(sign_in_settings.router)
 api_router.include_router(platform_admin.router)
 api_router.include_router(organizations.router)
 api_router.include_router(domains.router)

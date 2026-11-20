@@ -1,32 +1,48 @@
+import pytest
+
 from app.models.domain import Domain
 from app.models.enums import DomainVerificationStatus
+from app.models.mailbox_connection import MailboxConnection
 
 from tests.conftest import login_as, seed_org_and_user
 
 
-async def test_onboarding_status_fresh_org_local_auth(api):
+@pytest.mark.parametrize("entra", [False, True])
+async def test_onboarding_status_fresh_org_has_no_mailbox_whatever_its_sign_in(api, entra):
     client, owner_factory = api
-    _org, user = await seed_org_and_user(owner_factory, entra=False)
+    _org, user = await seed_org_and_user(owner_factory, entra=entra)
     await login_as(client, owner_factory, user)
-
-    response = await client.get("/api/onboarding/status")
-
-    assert response.status_code == 200
-    body = response.json()
+    body = (await client.get("/api/onboarding/status")).json()
     assert body["has_domain"] is False
     assert body["has_verified_domain"] is False
-    assert body["has_mailbox"] is True  # local-auth org: hosted mailbox always available
+    assert body["has_mailbox"] is False
+    assert body["has_sign_in_provider"] is entra
 
 
-async def test_onboarding_status_fresh_org_entra(api):
+async def test_onboarding_status_hosted_address_counts_as_mailbox(api):
     client, owner_factory = api
-    _org, user = await seed_org_and_user(owner_factory, entra=True)
+    org, user = await seed_org_and_user(owner_factory)
+    async with owner_factory() as db:
+        db.add(Domain(
+            organization_id=org.id, name="hosted-only.example",
+            verification_status=DomainVerificationStatus.verified,
+            hosted_report_address="reports+abc123@hosted.example",
+        ))
+        await db.commit()
     await login_as(client, owner_factory, user)
 
-    response = await client.get("/api/onboarding/status")
+    assert (await client.get("/api/onboarding/status")).json()["has_mailbox"] is True
 
-    assert response.status_code == 200
-    assert response.json()["has_mailbox"] is False  # entra org, no MailboxConnection yet
+
+async def test_onboarding_status_own_mailbox_counts_as_mailbox(api):
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    async with owner_factory() as db:
+        db.add(MailboxConnection(organization_id=org.id, mailbox_address="dmarc@example.com"))
+        await db.commit()
+    await login_as(client, owner_factory, user)
+
+    assert (await client.get("/api/onboarding/status")).json()["has_mailbox"] is True
 
 
 async def test_onboarding_status_with_verified_domain(api):

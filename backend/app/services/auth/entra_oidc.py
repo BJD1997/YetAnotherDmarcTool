@@ -35,7 +35,9 @@ async def _get_discovery_document(tenant_id: str) -> dict:
     return doc
 
 
-def build_authorization_url(*, state: str, nonce: str, code_challenge: str, redirect_uri: str) -> str:
+def build_authorization_url(
+    *, state: str, nonce: str, code_challenge: str, redirect_uri: str, login_hint: str | None = None
+) -> str:
     # Multi-tenant entry point ("organizations", not a specific tenant) —
     # we don't know which org a first-time visitor belongs to until the ID
     # token comes back with its `tid` claim.
@@ -51,6 +53,7 @@ def build_authorization_url(*, state: str, nonce: str, code_challenge: str, redi
         "nonce": nonce,
         "code_challenge": code_challenge,
         "code_challenge_method": "S256",
+        **({"login_hint": login_hint} if login_hint else {}),
     }
     return f"{AUTHORIZE_URL}?{urlencode(params)}"
 

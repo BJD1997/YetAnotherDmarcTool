@@ -5,7 +5,8 @@
 [![Docs: Wiki](https://img.shields.io/badge/docs-wiki-blue.svg)](https://github.com/BJD1997/YetAnotherDmarcTool/wiki)
 [![Live Demo](https://img.shields.io/badge/demo-live-brightgreen.svg)](https://demo.yetanotherdmarctool.com)
 
-**Self-hosted, multi-tenant DMARC & TLS-RPT reporting dashboard.** DNS
+**Yet Another DMARC Tool** (YADT) is a **self-hosted, multi-tenant DMARC & TLS-RPT
+reporting dashboard.** DNS
 best-practice checks, a 0–100 domain rating, and a guided path to
 `p=reject` — read-only and advisory toward every domain it watches.
 

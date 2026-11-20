@@ -128,7 +128,52 @@ async def test_compliance_prompt(api):
 
     assert "60.0%" in text and "100 messages" in text
     assert "p=none" in text and "203.0.113.70" in text
+    # DMARC passes through SPF or DKIM, so the SPF record belongs here too.
+    assert "Current SPF record: v=spf1 include:spf.protection.outlook.com include:spf.smtp2go.com -all" in text
+    assert "Too little data" not in text
     _assert_private_left_out(text)
+
+
+async def test_compliance_prompt_says_when_the_app_is_only_waiting_for_data(api, monkeypatch):
+    from app.services.rating.domain_rating import PolicyReadiness
+
+    async def _waiting(db, domain):
+        return PolicyReadiness(True, False, "none", "quarantine", None, 1)
+
+    monkeypatch.setattr(prompts, "domain_policy_readiness", _waiting)
+    _client, owner_factory = api
+    org, domain = await _seed(owner_factory)
+    text = await _build(owner_factory, org, domain, "compliance", None)
+
+    assert "Too little data yet: 1 of the 50 messages the app waits for before it recommends p=quarantine." in text
+    # 40 of the seeded 100 messages fail, so it doesn't claim nothing fails.
+    assert "Nothing is failing" not in text
+
+
+async def test_mail_setup_lists_every_include_named_where_known(monkeypatch):
+    async def _record(kind, domain_name):
+        return "v=spf1 include:spf.protection.outlook.com include:icloud.com include:mail.example.net ~all"
+
+    async def _icloud_mx(domain_name):
+        return ["mx01.mail.icloud.com", "mx02.mail.icloud.com"]
+
+    monkeypatch.setattr(prompts, "current_record", _record)
+    monkeypatch.setattr(prompts, "mx_hosts", _icloud_mx)
+    assert await prompts._mail_setup("example.com") == (
+        "Mail setup: receives mail via iCloud Mail; SPF includes spf.protection.outlook.com (Microsoft 365), "
+        "icloud.com (iCloud Mail), mail.example.net."
+    )
+
+
+async def test_a_failed_lookup_is_not_reported_as_no_record(monkeypatch):
+    from app.services.dns_checks.resolver import DnsLookupError
+
+    async def _failing(kind, domain_name):
+        raise DnsLookupError("timeout")
+
+    monkeypatch.setattr(prompts, "current_record", _failing)
+    assert await prompts._record_line("SPF", "spf", "example.com") == "Current SPF record: couldn't be looked up just now"
+    assert await prompts._mail_setup("example.com") == "Mail setup: receives mail via Microsoft 365."
 
 
 async def test_unknown_kind_and_sender_are_refused(api):
@@ -161,7 +206,10 @@ async def test_prompts_say_the_issue_mail_setup_and_answer_structure(api):
     )
 
     assert 'The issue: example.com sender "203.0.113.70": 0.0% SPF / 0.0% DKIM.' in text
-    assert "Mail setup: receives mail via Microsoft 365; SPF allows Microsoft 365, SMTP2GO." in text
+    assert (
+        "Mail setup: receives mail via Microsoft 365; "
+        "SPF includes spf.protection.outlook.com (Microsoft 365), spf.smtp2go.com (SMTP2GO)." in text
+    )
     for part in ("1. The likely cause", "2. Step-by-step fixes", "3. How to check", "4. Risks"):
         assert part in text
     _assert_private_left_out(text)
@@ -176,7 +224,7 @@ async def test_mail_setup_follows_spf_redirect(monkeypatch):
 
     monkeypatch.setattr(prompts, "current_record", _record)
     monkeypatch.setattr(prompts, "mx_hosts", _no_mx)
-    assert await prompts._mail_setup("example.com") == "Mail setup: SPF allows Google Workspace."
+    assert await prompts._mail_setup("example.com") == "Mail setup: SPF includes _spf.google.com (Google Workspace)."
 
 
 def test_microsofts_newer_mx_names_are_recognized():

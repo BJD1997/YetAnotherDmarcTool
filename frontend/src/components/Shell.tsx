@@ -9,6 +9,7 @@ import { useHealth } from "../hooks/useOverviewResources";
 import AskAiInvite from "./AskAiInvite";
 import NotificationsBell from "./NotificationsBell";
 import ThemeToggle from "./ThemeToggle";
+import UpdatedBanner from "./UpdatedBanner";
 
 export default function Shell({ children }: { children: ReactNode }) {
   const { user } = useAuth();
@@ -112,7 +113,10 @@ export default function Shell({ children }: { children: ReactNode }) {
         </div>
       </aside>
       <main className="app-main">
-        <div className="app-main-inner">{children}</div>
+        <div className="app-main-inner">
+          <UpdatedBanner />
+          {children}
+        </div>
       </main>
       <AskAiInvite />
     </div>

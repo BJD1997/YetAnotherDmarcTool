@@ -19,6 +19,7 @@ import type { Domain } from "../api/types";
 import type { RankedDomain } from "../api/overview";
 import { noDataRecommendation } from "../api/overview";
 import { useAuth } from "../auth/AuthContext";
+import CopyValue from "../components/CopyValue";
 import { ReportFreshnessValue } from "../components/overview/widgets";
 import { MAIL_PROFILE_LABELS, VerificationBadge } from "../components/domain/shared";
 import { useDeleteDomain, useDomains, useRankedDomains, useUpdateDomain, useVerifyDomain } from "../hooks/useDomains";
@@ -73,7 +74,7 @@ export default function Domains() {
             <thead>
               <tr>
                 <th>Domain</th>
-                <th title="Weighted score across DNS checks, policy strength, and DMARC pass rate — not a raw pass rate itself.">
+                <th title="Overall: setup (DNS checks, policy strength) and delivery (DMARC pass rate) together — not a raw pass rate itself. Hover a grade for both parts.">
                   Grade
                 </th>
                 <th>Policy</th>
@@ -252,11 +253,19 @@ function DomainRow({
         </td>
         <td>
           {ranked?.grade && (
-            <span className={`badge badge--${gradeRole(ranked.grade)}`}>
+            <span
+              className={`badge badge--${gradeRole(ranked.grade)}`}
+              title={`Setup ${ranked.setup_grade ?? "–"} · Delivery ${ranked.delivery_grade ?? "–"}`}
+            >
               {ranked.grade} · {ranked.score}/100
             </span>
           )}
-          {!ranked?.grade && <span className="muted">—</span>}
+          {!ranked?.grade && ranked?.setup_grade && (
+            <span className="badge badge--neutral" title="Setup grade; the overall grade follows once reports arrive">
+              Setup {ranked.setup_grade}
+            </span>
+          )}
+          {!ranked?.grade && !ranked?.setup_grade && <span className="muted">—</span>}
         </td>
         <td>
           {ranked?.current_policy ? <span className="badge badge--neutral">p={ranked.current_policy}</span> : <span className="muted">—</span>}
@@ -381,10 +390,10 @@ function DomainRow({
               }}
             >
               Add this DNS TXT record, then click "Check now":
-              <br />
-              <strong>{domain.verification_record_name}</strong>
-              <br />
-              TXT value: <strong>{domain.verification_token}</strong>
+              <div style={{ display: "grid", gap: "0.3rem", marginTop: "0.4rem" }}>
+                <CopyValue label="Host/name" value={domain.verification_record_name} />
+                <CopyValue label="TXT value" value={domain.verification_token} />
+              </div>
               {verifyDomain.isSuccess && !verifyDomain.data.verified && (
                 <p style={{ color: "var(--critical-text)", fontFamily: "var(--font-sans)", marginTop: "0.5rem" }}>
                   Not found yet — DNS changes can take a few minutes to propagate.

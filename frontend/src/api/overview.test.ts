@@ -10,6 +10,8 @@ function domain(overrides: Partial<RankedDomain> = {}): RankedDomain {
     insufficient_data: true,
     score: null,
     grade: null,
+    setup_grade: null,
+    delivery_grade: null,
     message_volume: 0,
     failed_volume: 0,
     current_policy: null,

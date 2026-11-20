@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, X } from "lucide-react";
 import { ApiError } from "../../api/client";
 import AddDomainForm from "../../components/settings/AddDomainForm";
+import PendingDomains from "../../components/settings/PendingDomains";
 import type { DetectedDomain } from "../../api/types";
 import {
   type DetectedDomainAdded,
@@ -17,6 +18,7 @@ export default function DomainsTab() {
       <h3 className="section-title">Add a domain</h3>
       <p className="section-hint">Domains and subdomains to monitor. Manage the full list from the Domains page.</p>
       <AddDomainForm />
+      <PendingDomains />
       <DetectedDomains />
     </section>
   );

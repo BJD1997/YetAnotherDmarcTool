@@ -13,6 +13,7 @@ from app.repositories.domains import get_owned_domain, list_domains_for_org
 from app.repositories.mailbox_connections import get_org_mailbox_connection
 from app.services.dmarc_analytics import service_breakdown_multi
 from app.services.rating.domain_rating import rating_window_days
+from app.services.report_destination import report_destination
 from app.services.action_queue.rules import (
     domain_ready_for_stricter_policy,
     high_volume_failure,
@@ -48,7 +49,6 @@ async def action_queue(
     items = list(await mailbox_stopped_receiving_reports(db, user.organization_id))
 
     connection = await get_org_mailbox_connection(db, user.organization_id)
-    mailbox_address = connection.mailbox_address if connection is not None else None
 
     # Computed once for every domain in one call rather than once per domain
     # in the loop below: service_breakdown's identify_many can burn several
@@ -79,7 +79,7 @@ async def action_queue(
         items += await domain_ready_for_stricter_policy(db, domain)
         items += await low_compliance_domain(db, domain)
         items += await spf_lookup_limit_risk(db, domain)
-        items += await rua_destination_broken(db, domain, mailbox_address)
+        items += await rua_destination_broken(db, domain, report_destination(domain, connection))
         items += await parked_domain_not_locked_down(domain)
 
     # service_breakdown_multi resolves any not-yet-cached source IPs as it

@@ -164,7 +164,10 @@ async def test_domain_rating_not_verified(api):
 
     assert response.status_code == 200
     body = response.json()
-    assert body == {"not_verified": True, "insufficient_data": True, "score": None, "grade": None, "factors": []}
+    assert body == {
+        "not_verified": True, "insufficient_data": True, "score": None, "grade": None, "factors": [],
+        "setup": None, "delivery": None, "sends_mail": True,
+    }
 
 
 async def test_domain_rating_verified_insufficient_data(api):
@@ -901,6 +904,32 @@ async def test_dmarc_policy_builder_insufficient_data_recommends_monitor_only(ap
     body = response.json()
     assert body["current_record_lookup_error"] is True
     assert body["recommendation"]["policy"] == "none"
+
+
+async def test_dmarc_policy_builder_shows_the_policy_a_subdomain_gets_from_a_parent_outside_the_org(api, monkeypatch):
+    """gtest.example.com sits in its own organization without example.com:
+    with no record of its own it is covered by example.com's p=reject, and
+    the builder must say so instead of treating it as unprotected."""
+    from app.services.dns_checks.dmarc_record import DmarcRecordInfo
+
+    async def _fetch(domain_name: str):
+        if domain_name == "example.com":
+            return DmarcRecordInfo(raw="v=DMARC1; p=reject; rua=mailto:r@example.com", tags={"p": "reject", "rua": "mailto:r@example.com"})
+        return None
+
+    monkeypatch.setattr("app.routers.dmarc_reports.fetch_current_dmarc_record", _fetch)
+    monkeypatch.setattr("app.services.dns_checks.dmarc_record.fetch_current_dmarc_record", _fetch)
+
+    client, owner_factory = api
+    org, user = await seed_org_and_user(owner_factory)
+    await login_as(client, owner_factory, user)
+    domain = await _add_domain(owner_factory, org, name="gtest.example.com", verification_status=DomainVerificationStatus.verified)
+
+    body = (await client.get(f"/api/domains/{domain.id}/dmarc/policy-builder")).json()
+
+    assert body["inherited_policy"] == {"from_domain": "example.com", "policy": "reject", "tag": "p", "rua": ["r@example.com"]}
+    assert body["recommendation"]["policy"] == "none"
+    assert "covered by example.com's p=reject" in body["recommendation"]["reasoning"]
 
 
 async def test_detected_subdomains_get_their_top_level_parent_whatever_the_case(api):

@@ -2,26 +2,26 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse, RedirectResponse
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db.rls import set_org_context, set_platform_admin_context
 from app.db.session import get_db
 from app.middleware.tenant_context import get_current_user
-from app.models.enums import AuthMethod, OrganizationStatus, SignInResult, UserRole, UserStatus
+from app.models.enums import AuthMethod, OrganizationStatus, SignInResult, UserStatus
 from app.models.mfa_pending_challenge import MfaPendingChallenge
+from app.models.organization import Organization
 from app.models.user import User
 from app.models.user_recovery_code import UserRecoveryCode
 from app.repositories.auth import (
-    count_users_for_org,
     get_local_user_by_email,
     get_mfa_pending_challenge,
     get_organization_by_entra_tenant_id,
     get_password_setup_token,
     get_unused_recovery_code,
-    get_user_by_org_and_entra_object_id,
 )
 from app.repositories.organizations import get_organization
 from app.schemas.auth import (
@@ -33,11 +33,12 @@ from app.schemas.auth import (
     SetPasswordRequest,
     VerifyOtpRequest,
 )
-from app.services.auth import account_reset, entra_oidc, pkce, session_manager, totp
+from app.services.auth import account_reset, entra_oidc, oauth_cookies, pkce, session_manager, totp
 from app.services.auth.password import dummy_verify, hash_password, verify_password
 from app.services.auth.rate_limit import login_limiter, otp_account_limiter, otp_limiter, rate_limiter
 from app.services.auth.session_manager import cookie_kwargs
 from app.services.auth.sign_in_log import client_network_info, record_sign_in_event
+from app.services.auth.sign_in_flow import complete_sign_in, session_redirect
 from app.services.auth.tokens import hash_token, new_opaque_token
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -49,14 +50,32 @@ _MFA_PENDING_COOKIE = settings.mfa_pending_cookie_name
 
 
 @router.get("/config")
-async def auth_config() -> dict:
+async def auth_config(db: AsyncSession = Depends(get_db)) -> dict:
     """Unauthenticated — the login page calls this before a user exists to
-    decide whether to show the "Sign in with Microsoft" option at all."""
-    return {"entra_sso_enabled": bool(settings.entra_sso_client_id)}
+    decide which sign-in options to show. company_sign_in_enabled: some
+    organization has a provider that works here, so asking for a work
+    email address makes sense."""
+    has_provider = [Organization.oidc_issuer.is_not(None)]
+    if settings.google_sso_client_id:
+        has_provider.append(Organization.google_workspace_domain.is_not(None))
+    if settings.entra_sso_client_id:
+        has_provider.append(Organization.entra_tenant_id.is_not(None))
+    company = (
+        await db.execute(
+            select(Organization.id)
+            .where(Organization.status == OrganizationStatus.active, or_(*has_provider))
+            .limit(1)
+        )
+    ).first()
+    return {
+        "entra_sso_enabled": bool(settings.entra_sso_client_id),
+        "google_sso_enabled": bool(settings.google_sso_client_id),
+        "company_sign_in_enabled": company is not None,
+    }
 
 
 @router.get("/login")
-async def login() -> RedirectResponse:
+async def login(login_hint: str | None = Query(default=None, max_length=320)) -> RedirectResponse:
     if not settings.entra_sso_client_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND)
 
@@ -66,18 +85,29 @@ async def login() -> RedirectResponse:
     challenge = pkce.derive_challenge(verifier)
 
     auth_url = entra_oidc.build_authorization_url(
-        state=state, nonce=nonce, code_challenge=challenge, redirect_uri=settings.entra_sso_redirect_uri
+        state=state, nonce=nonce, code_challenge=challenge, redirect_uri=settings.entra_sso_redirect_uri,
+        login_hint=login_hint,
     )
     response = RedirectResponse(auth_url, status_code=302)
     short_lived = {**cookie_kwargs(), "max_age": 600}
     response.set_cookie(_OAUTH_STATE_COOKIE, state, **short_lived)
     response.set_cookie(_OAUTH_VERIFIER_COOKIE, verifier, **short_lived)
     response.set_cookie(_OAUTH_NONCE_COOKIE, nonce, **short_lived)
+    # A real sign-in, not a leftover Settings test.
+    response.set_cookie(oauth_cookies.MODE, "sign_in", **short_lived)
+    response.delete_cookie(oauth_cookies.ORG, path="/")
     return response
 
 
 @router.get("/callback")
-async def callback(request: Request, db: AsyncSession = Depends(get_db)) -> RedirectResponse:
+async def callback(request: Request, db: AsyncSession = Depends(get_db)) -> Response:
+    if request.cookies.get(oauth_cookies.MODE) == "test":
+        # Settings → Sign-in testing Microsoft before saving it.
+        from app.routers.sign_in_settings import finish_test
+
+        cookies = oauth_cookies.read(request)
+        if cookies is not None and cookies.org_id:
+            return await finish_test(request, db, cookies)
     ip_address, user_agent = client_network_info(request)
 
     if request.query_params.get("error"):
@@ -136,70 +166,11 @@ async def callback(request: Request, db: AsyncSession = Depends(get_db)) -> Redi
         await db.commit()
         return RedirectResponse("/login?error=organization_not_provisioned", status_code=302)
 
-    # Moved up from after the suspended check below, so that branch gets
-    # correct RLS context for free (real org.id already known here).
-    await set_org_context(db, org.id)
-    if org.status == OrganizationStatus.suspended:
-        await record_sign_in_event(
-            db, result=SignInResult.failure, auth_method=AuthMethod.entra,
-            organization_id=org.id, attempted_email=email, failure_reason="organization_suspended",
-            ip_address=ip_address, user_agent=user_agent,
-        )
-        await db.commit()
-        return RedirectResponse("/login?error=organization_suspended", status_code=302)
-
-    user = await get_user_by_org_and_entra_object_id(db, org.id, object_id)
-
-    if user is None:
-        is_first_user = await count_users_for_org(db, org.id) == 0
-        user = User(
-            organization_id=org.id,
-            entra_object_id=object_id,
-            email=email,
-            display_name=display_name,
-            role=UserRole.org_admin if is_first_user else UserRole.member,
-        )
-        db.add(user)
-        await db.flush()
-    else:
-        if user.status != UserStatus.active:
-            await record_sign_in_event(
-                db, result=SignInResult.failure, auth_method=AuthMethod.entra,
-                organization_id=org.id, user_id=user.id, attempted_email=email, failure_reason="user_disabled",
-                ip_address=ip_address, user_agent=user_agent,
-            )
-            await db.commit()
-            return RedirectResponse("/login?error=user_disabled", status_code=302)
-        user.email = email
-        user.display_name = display_name
-
-    user.last_login_at = datetime.now(timezone.utc)
-
-    _, raw_token = await session_manager.create_user_session(
-        db,
-        user_id=user.id,
-        organization_id=org.id,
-        ip_address=ip_address,
-        user_agent=user_agent,
-    )
-    await record_sign_in_event(
-        db, result=SignInResult.success, auth_method=AuthMethod.entra,
-        organization_id=org.id, user_id=user.id, attempted_email=email,
+    outcome = await complete_sign_in(
+        db, org=org, method=AuthMethod.entra, subject=object_id, email=email, display_name=display_name,
         ip_address=ip_address, user_agent=user_agent,
     )
-    await db.commit()
-
-    response = RedirectResponse("/", status_code=302)
-    response.delete_cookie(_OAUTH_STATE_COOKIE, path="/")
-    response.delete_cookie(_OAUTH_VERIFIER_COOKIE, path="/")
-    response.delete_cookie(_OAUTH_NONCE_COOKIE, path="/")
-    response.set_cookie(
-        settings.session_cookie_name,
-        raw_token,
-        max_age=settings.session_idle_timeout_hours * 3600,
-        **cookie_kwargs(),
-    )
-    return response
+    return session_redirect(outcome, clear_cookies=(_OAUTH_STATE_COOKIE, _OAUTH_VERIFIER_COOKIE, _OAUTH_NONCE_COOKIE))
 
 
 @router.post("/logout")
@@ -223,6 +194,7 @@ async def me(user: User = Depends(get_current_user)) -> dict:
         "display_name": user.display_name,
         "role": user.role.value,
         "auth_method": user.auth_method.value,
+        "is_break_glass": user.is_break_glass,
         "organization_id": str(user.organization_id),
     }
 
@@ -572,7 +544,7 @@ async def enroll_otp_confirm(
 # change re-checks the current password so a hijacked session alone can't
 # lock the real owner out, and signs out every other session.
 
-_SSO_MANAGED = "your password and two-factor authentication are managed by your organization's Microsoft sign-in"
+_SSO_MANAGED = "your password and two-factor authentication are managed by your organization's sign-in provider"
 
 
 async def _require_current_password(

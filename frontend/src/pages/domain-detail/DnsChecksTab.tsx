@@ -4,12 +4,14 @@ import AskAiButton from "../../components/shared/AskAiButton";
 import { RefreshCw, Trash2, Plus, Wand2, ChevronDown, ChevronRight, Copy, Check } from "lucide-react";
 import { ApiError } from "../../api/client";
 import type { Domain } from "../../api/types";
-import { CHECK_LABELS, type CheckResult, type CheckStatus, type CheckType } from "../../api/dnsChecks";
+import { CHECK_LABELS, type CheckResult, type CheckStatus, type CheckType, type SpfTerm } from "../../api/dnsChecks";
 import { useAuth } from "../../auth/AuthContext";
 import { StatusBadge } from "../../components/domain/shared";
 import PolicyBuilder from "../../components/policy-builder/PolicyBuilder";
 import MtaStsPolicyBuilder from "../../components/policy-builder/MtaStsPolicyBuilder";
 import TlsRptPolicyBuilder from "../../components/policy-builder/TlsRptPolicyBuilder";
+import SpfRecordBuilder from "../../components/policy-builder/SpfRecordBuilder";
+import { describeSpfTerm, lookupsLabel } from "../../components/policy-builder/spfTerms";
 import { useMailboxConnection } from "../../hooks/useMailboxConnection";
 import { useClipboardFeedback } from "../../hooks/useClipboardFeedback";
 import { useAddDkimSelector, useDeleteDkimSelector, useDetectedDkimSelectors, useDkimSelectors, useDnsChecks, useRecheckDns } from "../../hooks/useDnsChecks";
@@ -31,6 +33,16 @@ const SEVERITY_RANK: Record<CheckStatus, number> = { fail: 0, error: 1, warn: 2,
 function recommendationOf(r: CheckResult): string | null {
   const rec = (r.details as { recommendation?: unknown } | null)?.recommendation;
   return typeof rec === "string" ? rec : null;
+}
+
+// The SPF check keeps the published record and what each part costs on its
+// lookup-count finding (absent on results from before it did).
+function spfRecordOf(results: CheckResult[]): { record: string; terms: SpfTerm[] } | null {
+  for (const r of results) {
+    const d = r.details as { record?: unknown; terms?: unknown } | null;
+    if (typeof d?.record === "string") return { record: d.record, terms: Array.isArray(d.terms) ? (d.terms as SpfTerm[]) : [] };
+  }
+  return null;
 }
 
 function worstStatus(results: CheckResult[]): CheckStatus {
@@ -89,6 +101,7 @@ export default function DnsChecksTab() {
   // DMARC-record-related fix — auto-open instead of making the user find
   // and click the button themselves after landing on the tab.
   const [showPolicyBuilder, setShowPolicyBuilder] = useState(() => params.get("open") === "policy-builder");
+  const [showSpfBuilder, setShowSpfBuilder] = useState(() => params.get("open") === "spf-builder");
   const [showMtaStsBuilder, setShowMtaStsBuilder] = useState(false);
   const [showTlsRptBuilder, setShowTlsRptBuilder] = useState(false);
   // Notifications about a new DKIM selector link here with
@@ -138,6 +151,12 @@ export default function DnsChecksTab() {
             </button>
           )}
           {canManage && (
+            <button className="btn btn--ghost btn--sm" onClick={() => setShowSpfBuilder(true)}>
+              <Wand2 />
+              Build SPF record
+            </button>
+          )}
+          {canManage && (
             <button className="btn btn--ghost btn--sm" onClick={() => setShowMtaStsBuilder(true)}>
               <Wand2 />
               Build MTA-STS policy
@@ -160,6 +179,9 @@ export default function DnsChecksTab() {
 
       {showPolicyBuilder && (
         <PolicyBuilder domainId={domainId} domainName={domain.name} onClose={() => setShowPolicyBuilder(false)} />
+      )}
+      {showSpfBuilder && (
+        <SpfRecordBuilder domainId={domainId} domainName={domain.name} onClose={() => setShowSpfBuilder(false)} />
       )}
       {showMtaStsBuilder && (
         <MtaStsPolicyBuilder domainId={domainId} domainName={domain.name} onClose={() => setShowMtaStsBuilder(false)} />
@@ -289,6 +311,7 @@ function CheckRow({
   const status = worstStatus(results);
   const primary = primaryFinding(results);
   const recommendation = recommendationOf(primary);
+  const spf = checkType === "spf" ? spfRecordOf(results) : null;
   // DKIM's expanded area always holds selector management, and MTA-STS/
   // TLS-RPT's holds the suggested-record block when the record is missing
   // — both need to stay reachable even when the single finding shown as
@@ -321,12 +344,15 @@ function CheckRow({
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: "0.5rem", flexWrap: "wrap" }}>
             <strong style={{ fontSize: "0.88rem" }}>{CHECK_LABELS[checkType]}</strong>
-            <span style={{ fontSize: "0.85rem", color: "var(--ink-secondary)", wordBreak: "break-all" }}>{primary.summary}</span>
+            <span style={{ fontSize: "0.85rem", color: "var(--ink-secondary)", overflowWrap: "anywhere" }}>{primary.summary}</span>
           </div>
           {recommendation && (
-            <div style={{ fontSize: "0.82rem", color: "var(--ink-secondary)", marginTop: "0.2rem", wordBreak: "break-all" }}>
+            <div style={{ fontSize: "0.82rem", color: "var(--ink-secondary)", marginTop: "0.2rem", overflowWrap: "anywhere" }}>
               {recommendation}
             </div>
+          )}
+          {spf?.record && (
+            <code style={{ display: "block", fontSize: "0.78rem", marginTop: "0.3rem", overflowWrap: "anywhere" }}>{spf.record}</code>
           )}
         </div>
         {(status === "warn" || status === "fail" || status === "error") && (
@@ -343,7 +369,7 @@ function CheckRow({
 
       {expanded && (
         <div style={{ marginTop: "0.6rem", paddingTop: "0.6rem", borderTop: "1px solid var(--border)" }}>
-          <ul style={{ margin: 0, padding: "0 0 0 1.1rem", fontSize: "0.82rem", color: "var(--ink-secondary)", wordBreak: "break-all" }}>
+          <ul style={{ margin: 0, padding: "0 0 0 1.1rem", fontSize: "0.82rem", color: "var(--ink-secondary)", overflowWrap: "anywhere" }}>
             {results.map((r) => (
               <li key={r.id} style={{ marginBottom: "0.3rem" }}>
                 <StatusBadge status={r.status} /> {r.subject && <code style={{ marginRight: "0.3rem" }}>{r.subject}</code>}
@@ -351,6 +377,22 @@ function CheckRow({
               </li>
             ))}
           </ul>
+
+          {spf && spf.terms.length > 0 && (
+            <div style={{ marginTop: "0.6rem", paddingTop: "0.6rem", borderTop: "1px solid var(--border)" }}>
+              <div className="stat-tile-label" style={{ marginBottom: "0.3rem" }}>
+                What the record allows
+              </div>
+              <ul style={{ margin: 0, padding: "0 0 0 1.1rem", fontSize: "0.82rem", color: "var(--ink-secondary)", overflowWrap: "anywhere" }}>
+                {spf.terms.map((t) => (
+                  <li key={t.term} style={{ marginBottom: "0.2rem" }}>
+                    <code>{t.term}</code> — {describeSpfTerm(t.term, t.service)}
+                    {t.lookups > 0 && <span className="muted"> ({lookupsLabel(t.lookups)})</span>}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {(checkType === "mta_sts" || checkType === "tls_rpt") && (
             <SuggestedRecord checkType={checkType} domainName={domainName} finding={primary} orgMailboxAddress={orgMailboxAddress} />

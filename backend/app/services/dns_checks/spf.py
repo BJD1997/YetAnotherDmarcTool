@@ -15,40 +15,60 @@ import re
 from app.models.enums import DomainMailProfile, SpfAllQualifierMode
 from app.services.dns_checks.base import Finding
 from app.services.dns_checks.resolver import DnsLookupError, resolve_txt_strict
+from app.services.dns_checks.spf_providers import service_for_host
 
 MAX_LOOKUPS = 10
 MAX_VOID_LOOKUPS = 2
-_SPF_PREFIX_RE = re.compile(r"(?i)^v=spf1(\s|$)")
+SPF_PREFIX_RE = re.compile(r"(?i)^v=spf1(\s|$)")
 _ALL_RE = re.compile(r"(?i)^[+\-~?]?all$")
 
 
+# The builder counts drafts typed by users: past this many lookups it stops
+# following includes, which bounds the DNS work one count can cause. The
+# count is then "over the limit" either way.
+EVALUATE_LOOKUP_CAP = 20
+MAX_RECORD_CHARS = 1024
+MAX_DRAFT_TERMS = 40
+
+
 class _State:
-    def __init__(self) -> None:
+    def __init__(self, max_lookups: int | None = None) -> None:
         self.lookup_count = 0
         self.void_lookup_count = 0
+        self.max_lookups = max_lookups
         self.visited: set[str] = set()
         self.notes: list[tuple[str, str]] = []  # (status, message)
+        self.record: str | None = None  # the domain's own record, as published (or drafted)
+        self.terms: list[dict] = []  # its parts: {"term", "lookups", "service"}
+
+    def capped(self) -> bool:
+        return self.max_lookups is not None and self.lookup_count > self.max_lookups
 
 
 async def _spf_records_for(domain: str) -> list[str]:
     txt_records = await resolve_txt_strict(domain)
-    return [r for r in txt_records if _SPF_PREFIX_RE.match(r.strip())]
+    return [r for r in txt_records if SPF_PREFIX_RE.match(r.strip())]
 
 
-async def _walk(domain: str, state: _State, depth: int) -> list[str] | None:
+async def _walk(domain: str, state: _State, depth: int, record: str | None = None) -> list[str] | None:
     """Returns the mechanism tokens of `domain`'s SPF record, or None if it
     has no SPF record at all. Recursively follows include:/redirect= and
-    tallies lookup/void-lookup counts as it goes."""
+    tallies lookup/void-lookup counts as it goes. `record` stands in for the
+    published one (the builder's draft); at the top level the record and the
+    lookups each of its parts costs are kept on `state`."""
     if depth > 10 or domain in state.visited:
         state.notes.append(("warn", f"possible include/redirect loop involving {domain}"))
         return None
     state.visited.add(domain)
 
-    try:
-        records = await _spf_records_for(domain)
-    except DnsLookupError:
-        state.void_lookup_count += 1
-        return None
+    if record is not None:
+        records = [record]
+    else:
+        try:
+            records = await _spf_records_for(domain)
+        except DnsLookupError:
+            state.void_lookup_count += 1
+            return None
 
     if not records:
         if depth > 0:
@@ -59,11 +79,17 @@ async def _walk(domain: str, state: _State, depth: int) -> list[str] | None:
 
     tokens = records[0].split()[1:]
     redirect_target: str | None = None
+    redirect_token: str | None = None
+    if depth == 0:
+        state.record = " ".join(records[0].split())
 
     for token in tokens:
+        before = state.lookup_count
+        target: str | None = None
         body = token[1:] if token and token[0] in "+-~?" else token
         if body.lower().startswith("redirect="):
             redirect_target = body.split("=", 1)[1]
+            redirect_token = token
             continue
         mech = re.split(r"[:=]", body, maxsplit=1)[0].lower()
         if mech == "ptr":
@@ -73,15 +99,25 @@ async def _walk(domain: str, state: _State, depth: int) -> list[str] | None:
             state.lookup_count += 1
         elif mech == "include":
             state.lookup_count += 1
-            include_target = body.split(":", 1)[1] if ":" in body else None
-            if include_target:
-                await _walk(include_target, state, depth + 1)
+            target = body.split(":", 1)[1] if ":" in body else None
+            if target and not state.capped():
+                await _walk(target, state, depth + 1)
+        if depth == 0:
+            state.terms.append(_term(token, state.lookup_count - before, target))
 
     if redirect_target:
+        before = state.lookup_count
         state.lookup_count += 1
-        await _walk(redirect_target, state, depth + 1)
+        if not state.capped():
+            await _walk(redirect_target, state, depth + 1)
+        if depth == 0:
+            state.terms.append(_term(redirect_token or "", state.lookup_count - before, redirect_target))
 
     return tokens
+
+
+def _term(token: str, lookups: int, target: str | None) -> dict:
+    return {"term": token, "lookups": lookups, "service": service_for_host(target) if target else None}
 
 
 async def check(
@@ -106,13 +142,21 @@ async def check(
         ]
 
     findings = [Finding(status=status, summary=message) for status, message in state.notes]
+    # The record and what each part costs ride along on the lookup-count
+    # finding (always present), for the SPF check card and Ask AI.
+    count_details = {
+        "lookup_count": state.lookup_count,
+        "limit": MAX_LOOKUPS,
+        "record": state.record,
+        "terms": state.terms,
+    }
 
     if state.lookup_count > MAX_LOOKUPS:
         findings.append(
             Finding(
                 status="fail",
                 summary=f"SPF exceeds the RFC 7208 10-lookup limit ({state.lookup_count} lookups)",
-                details={"lookup_count": state.lookup_count, "limit": MAX_LOOKUPS},
+                details=count_details,
             )
         )
     elif state.lookup_count >= MAX_LOOKUPS - 2:
@@ -120,7 +164,7 @@ async def check(
             Finding(
                 status="warn",
                 summary=f"SPF is close to the RFC 7208 10-lookup limit ({state.lookup_count}/{MAX_LOOKUPS})",
-                details={"lookup_count": state.lookup_count, "limit": MAX_LOOKUPS},
+                details=count_details,
             )
         )
     else:
@@ -128,7 +172,7 @@ async def check(
             Finding(
                 status="pass",
                 summary=f"SPF lookup count OK ({state.lookup_count}/{MAX_LOOKUPS})",
-                details={"lookup_count": state.lookup_count, "limit": MAX_LOOKUPS},
+                details=count_details,
             )
         )
 
@@ -201,3 +245,20 @@ async def check(
         )
 
     return findings
+
+
+async def evaluate(domain: str, record: str) -> dict:
+    """Counts a draft record for the SPF record builder as if it were
+    published at `domain`: lookups (the parts and their includes), void
+    lookups, and the loop/'ptr' notes, without the 'all' advice."""
+    state = _State(max_lookups=EVALUATE_LOOKUP_CAP)
+    await _walk(domain, state, 0, record=record)
+    return {
+        "lookup_count": state.lookup_count,
+        "limit": MAX_LOOKUPS,
+        "capped": state.capped(),
+        "void_lookup_count": state.void_lookup_count,
+        "void_limit": MAX_VOID_LOOKUPS,
+        "notes": [{"status": status, "message": message} for status, message in state.notes],
+        "terms": state.terms,
+    }

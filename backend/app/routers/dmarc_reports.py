@@ -10,25 +10,33 @@ from app.db.rls import set_org_context
 from app.db.session import get_db, get_read_db
 from app.middleware.tenant_context import get_current_user, require_org_admin
 from app.models.dmarc_aggregate import DmarcAggregateReport
-from app.models.enums import AuthResult, Disposition, DomainVerificationStatus
+from app.models.enums import AuthResult, Disposition, DomainMailProfile, DomainVerificationStatus
 from app.models.sender_review import SenderReview
 from app.models.tls_rpt import TlsRptReport
 from app.models.user import User
 from app.repositories import dmarc_reports as dmarc_reports_repo
 from app.repositories.domains import get_owned_domain, list_domains_for_org
 from app.repositories.mailbox_connections import get_org_mailbox_connection
+from app.repositories.organizations import get_organization
 from app.repositories.trends import get_trend
 from app.schemas.dmarc_reports import SenderReviewUpdateRequest
 from app.services.action_queue.rules import reviewed_service_labels, unreviewed_high_volume_senders
 from app.services.dmarc_analytics import service_breakdown, service_breakdown_multi
-from app.services.ingestion.sender_auth import SenderAuth, left_out_reason
+from app.services.ingestion.sender_auth import SenderAuth, can_be_trusted, decide, left_out_reason
 from app.services.dmarc_narrative import dkim_narratives, spf_narratives
-from app.services.dns_checks.dmarc_record import DmarcRecordInfo, check_rua_destination, fetch_current_dmarc_record
+from app.services.dns_checks.dmarc_record import (
+    DmarcRecordInfo,
+    InheritedPolicy,
+    check_rua_destination,
+    fetch_current_dmarc_record,
+    fetch_inherited_policy,
+)
 from app.services.dns_checks.resolver import DnsLookupError
 from app.services.notifications.sources import detected_domain_items
 from app.services.overview.posture import compute_posture
 from app.services.rating.domain_rating import compute_domain_rating, domain_policy_readiness, policy_stability_days
 from app.services.rating.policy_recommendation import build_policy_recommendation
+from app.services.report_destination import report_destination
 from app.services.source_identification.service_identifier import identify_many
 
 router = APIRouter(tags=["dmarc-reports"])
@@ -91,11 +99,19 @@ async def left_out_reports(
     """Reports the organization's sender check leaves out of every view, with
     why — so they can be reviewed instead of silently disappearing."""
     await get_owned_domain(db, domain_id, user.organization_id)
+    mode = (await get_organization(db, user.organization_id)).report_sender_check
+    trusted = await dmarc_reports_repo.trusted_reporter_domains(db, user.organization_id)
     out = []
     for report in await dmarc_reports_repo.list_left_out_reports(db, domain_id):
         sender = SenderAuth(
             origin=report.sender_origin, dmarc=report.sender_dmarc, domain=report.sender_domain,
             matches_reporter=report.sender_matches_reporter,
+        )
+        # Whether trusting its sender is all it would take to count it.
+        trustable = (
+            report.sender_domain is not None
+            and can_be_trusted(report.sender_domain)
+            and decide(mode, sender, trusted | {report.sender_domain}) is True
         )
         if isinstance(report, DmarcAggregateReport):
             kind, reporter, received, period = "DMARC", report.org_name, report.received_at, report.date_range_begin
@@ -110,7 +126,8 @@ async def left_out_reports(
             "period_start": period.isoformat(),
             "received_at": received.isoformat(),
             "sender_domain": report.sender_domain,
-            "reason": left_out_reason(sender),
+            "reason": left_out_reason(sender, trusted),
+            "trustable": trustable,
         })
     out.sort(key=lambda r: r["received_at"], reverse=True)
     return out
@@ -143,7 +160,10 @@ async def domain_rating(
     domain = await get_owned_domain(db, domain_id, user.organization_id)
 
     if domain.verification_status != DomainVerificationStatus.verified:
-        return {"not_verified": True, "insufficient_data": True, "score": None, "grade": None, "factors": []}
+        return {
+            "not_verified": True, "insufficient_data": True, "score": None, "grade": None, "factors": [],
+            "setup": None, "delivery": None, "sends_mail": domain.mail_profile == DomainMailProfile.sends_mail,
+        }
 
     rating, _total, _failed = await compute_domain_rating(db, domain)
     return {
@@ -151,10 +171,21 @@ async def domain_rating(
         "insufficient_data": rating.insufficient_data,
         "score": rating.score,
         "grade": rating.grade,
-        "factors": [
-            {"factor": f.factor, "weight": f.weight, "score_pct": f.score_pct, "detail": f.detail} for f in rating.factors
-        ],
+        "factors": _factors_out(rating.factors),
+        "setup": _part_out(rating.setup),
+        "delivery": _part_out(rating.delivery),
+        "sends_mail": domain.mail_profile == DomainMailProfile.sends_mail,
     }
+
+
+def _factors_out(factors) -> list[dict]:
+    return [{"factor": f.factor, "weight": f.weight, "score_pct": f.score_pct, "detail": f.detail} for f in factors]
+
+
+def _part_out(part) -> dict | None:
+    if part is None:
+        return None
+    return {"score": part.score, "grade": part.grade, "factors": _factors_out(part.factors)}
 
 
 @router.get("/domains/{domain_id}/dmarc/sources")
@@ -664,18 +695,15 @@ async def dmarc_policy_builder(
     domain_id: uuid.UUID, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)
 ) -> dict:
     """Bundles everything the policy-builder UI needs in one call: the live
-    current record, whether rua= actually reaches the connected mailbox,
+    current record, whether rua= actually reaches the report destination,
     and a recommended next record — built entirely from data this app
     already computes elsewhere (compute_domain_rating, domain_policy_readiness,
     service_breakdown+sender_reviews), not new analysis."""
     domain = await get_owned_domain(db, domain_id, user.organization_id)
 
     connection = await get_org_mailbox_connection(db, user.organization_id)
-    # A domain with its own hosted address (see POST
-    # /domains/{id}/hosted-report-address) is using that as its dedicated
-    # report destination — prefer it over the org's shared MailboxConnection,
-    # which local-auth orgs never have at all.
-    mailbox_address = domain.hosted_report_address or (connection.mailbox_address if connection is not None else None)
+    # Which address rua= should name: see app/services/report_destination.py.
+    destination = report_destination(domain, connection)
 
     lookup_error = False
     current: DmarcRecordInfo | None
@@ -685,8 +713,17 @@ async def dmarc_policy_builder(
         current = None
         lookup_error = True
 
-    if mailbox_address is not None:
-        rua_result = await check_rua_destination(domain.name, mailbox_address)
+    # No record of its own: receivers use the first record up the tree,
+    # which may live outside this organization (see fetch_inherited_policy).
+    inherited: InheritedPolicy | None = None
+    if current is None and not lookup_error:
+        try:
+            inherited = await fetch_inherited_policy(domain.name)
+        except DnsLookupError:
+            inherited = None
+
+    if destination is not None:
+        rua_result = await check_rua_destination(domain.name, destination)
         rua_destination = {"status": rua_result.status, "current_targets": rua_result.current_targets}
     else:
         rua_destination = {"status": "no_mailbox", "current_targets": []}
@@ -701,15 +738,27 @@ async def dmarc_policy_builder(
     await db.commit()  # persists identify_many's cache upsert from service_breakdown, see its own docstring
 
     recommendation = build_policy_recommendation(
-        domain=domain, rating=rating, total=total, readiness=readiness, stability_days=stability_days, blockers=blockers
+        domain=domain,
+        rating=rating,
+        total=total,
+        readiness=readiness,
+        stability_days=stability_days,
+        blockers=blockers,
+        inherited=inherited,
     )
 
     return {
         "current_record": {"raw": current.raw, "tags": current.tags} if current is not None else None,
         "current_record_lookup_error": lookup_error,
         "rua_destination": rua_destination,
-        "org_mailbox_address": mailbox_address,
+        "org_mailbox_address": destination.address if destination else None,
         "hosted_report_address": domain.hosted_report_address,
+        "has_own_mailbox": connection is not None,
         "policy_stability_days": stability_days,
         "recommendation": recommendation,
+        "inherited_policy": (
+            {"from_domain": inherited.from_domain, "policy": inherited.policy, "tag": inherited.tag, "rua": inherited.rua}
+            if inherited is not None
+            else None
+        ),
     }

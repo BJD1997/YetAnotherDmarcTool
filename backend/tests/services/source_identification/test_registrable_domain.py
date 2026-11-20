@@ -14,6 +14,8 @@ from app.services.source_identification.registrable_domain import registrable_do
         ("com", "com"),
         ("EXAMPLE.COM", "example.com"),
         ("web01.example.com.", "example.com"),
+        ("mail.shop.example.com.mx", "example.com.mx"),
+        ("smtp.example.co.kr", "example.co.kr"),
     ],
 )
 def test_registrable_domain(hostname, expected):
